@@ -18,6 +18,7 @@ Thumbs.db
 
 # Experiment logs
 logs
+log/
 logs_eval
 
 # Isaacsim Converted Files
