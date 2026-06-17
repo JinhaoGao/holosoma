@@ -180,12 +180,7 @@ class InteractionMeshRetargeter:
         if self.foot_lock.windows is None:
             return
         for key, windows in self.foot_lock.windows.items():
-            key_lower = key.lower()
-            side = None
-            if key_lower.startswith("l") or ("left" in key_lower):
-                side = "left"
-            elif key_lower.startswith("r") or ("right" in key_lower):
-                side = "right"
+            side = self._name_side(key)
             if side is None:
                 continue
 
@@ -198,6 +193,16 @@ class InteractionMeshRetargeter:
                     raise ValueError(f"Invalid foot lock window with end < start for {key}: {window}")
                 normalized_windows.append((start, end))
             self._foot_lock_windows[side] = tuple(normalized_windows)
+
+    @staticmethod
+    def _name_side(name: str) -> str | None:
+        """Infer left/right side from common robot or mocap naming conventions."""
+        normalized = name.lower().replace("-", "_")
+        if normalized.startswith("left") or normalized.startswith("l_") or "_left" in normalized:
+            return "left"
+        if normalized.startswith("right") or normalized.startswith("r_") or "_right" in normalized:
+            return "right"
+        return None
 
     def _init_self_collision(self, self_collision: SelfCollisionConfig | None) -> None:
         """Initialize self-collision configuration and precompute geom pairs."""
@@ -638,16 +643,18 @@ class InteractionMeshRetargeter:
                 )
                 left_key = right_key = None
                 for key in foot_sticking:
-                    if key.lower().startswith("l"):
+                    side = self._name_side(key)
+                    if side == "left":
                         left_key = key
-                    elif key.lower().startswith("r"):
+                    elif side == "right":
                         right_key = key
                 if left_key is None or right_key is None:
                     raise ValueError("foot_sticking must include one left* and one right* key")
 
                 for key, J_WF in J_WF_dict.items():
-                    apply_left = ("left" in key) and foot_sticking[left_key]
-                    apply_right = ("right" in key) and foot_sticking[right_key]
+                    side = self._name_side(key)
+                    apply_left = (side == "left") and foot_sticking[left_key]
+                    apply_right = (side == "right") and foot_sticking[right_key]
                     if apply_left or apply_right:
                         p_lb = p_WF_t_last_dict[key] - p_WF_dict[key] - self.foot_sticking_tolerance
                         p_ub = p_lb + 2 * self.foot_sticking_tolerance  # symmetric window
@@ -751,12 +758,7 @@ class InteractionMeshRetargeter:
 
     def _is_foot_locked_in_window(self, foot_link_key: str, frame_idx: int) -> bool:
         """Check whether a foot link is locked by configured frame windows."""
-        key_lower = foot_link_key.lower()
-        side = None
-        if "left" in key_lower:
-            side = "left"
-        elif "right" in key_lower:
-            side = "right"
+        side = self._name_side(foot_link_key)
         if side is None:
             return False
 
