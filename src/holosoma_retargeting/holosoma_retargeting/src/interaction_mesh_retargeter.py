@@ -34,7 +34,12 @@ from utils import (  # type: ignore[import-not-found,no-redef]  # noqa: E402
     transform_points_local_to_world,
     transform_points_world_to_local,
 )
-from viser_utils import create_motion_control_sliders  # type: ignore[import-not-found,no-redef]  # noqa: E402
+from viser_utils import (  # type: ignore[import-not-found,no-redef]  # noqa: E402
+    actuated_joint_names_from_mujoco_xml,
+    build_joint_order_indices,
+    create_motion_control_sliders,
+    register_keyboard_shortcut,
+)
 
 
 class InteractionMeshRetargeter:
@@ -58,6 +63,7 @@ class InteractionMeshRetargeter:
         foot_lock: FootLockConfig | None = None,
         self_collision: SelfCollisionConfig | None = None,
         visualize: bool = False,
+        mesh_opacity: float = 1.0,
         debug: bool = False,
         w_nominal_tracking_init: float = 5.0,
         nominal_tracking_tau: float = 10.0,
@@ -95,10 +101,12 @@ class InteractionMeshRetargeter:
         self.penetration_tolerance = penetration_tolerance
         self.step_size = step_size
         self.visualize = visualize
+        self.mesh_opacity = float(mesh_opacity)
         self.debug = debug
         self.demo_joints = task_constants.DEMO_JOINTS
         self.laplacian_match_links = task_constants.JOINTS_MAPPING
         self.task_constants = task_constants
+        self.qpos_to_viser_joint_indices: np.ndarray | None = None
 
         self.smplh_mapped_joint_indices = [self.demo_joints.index(name) for name in self.laplacian_match_links]
 
@@ -110,20 +118,21 @@ class InteractionMeshRetargeter:
         self._init_foot_lock(foot_lock)
         self._self_collision_config = self_collision
 
-        # Setup visualization if requested
-        if self.visualize:
-            self._setup_visualization()
-
-        # Load Mujoco model
         if self.object_name == "ground":
             robot_xml_path = self.robot_model_path.replace(".urdf", ".xml")
         elif self.object_name == "multi_boxes":
             robot_xml_path = self.task_constants.SCENE_XML_FILE
         else:
             robot_xml_path = self.robot_model_path.replace(".urdf", "_w_" + self.object_name + ".xml")
+        self.robot_xml_path = robot_xml_path
 
-        self.robot_model = mujoco.MjModel.from_xml_path(robot_xml_path)
-        print("Loading robot model from: ", robot_xml_path)
+        # Setup visualization if requested
+        if self.visualize:
+            self._setup_visualization()
+
+        # Load Mujoco model
+        self.robot_model = mujoco.MjModel.from_xml_path(self.robot_xml_path)
+        print("Loading robot model from: ", self.robot_xml_path)
 
         self.robot_data = mujoco.MjData(self.robot_model)
         self._init_self_collision(self._self_collision_config)
@@ -248,6 +257,7 @@ class InteractionMeshRetargeter:
     def _setup_visualization(self):
         """Setup Viser visualization components."""
         self.server = viser.ViserServer()
+        mesh_color_override = self._mesh_color_override()
 
         # 1) Ensure a world frame exists (absolute path!)
         try:
@@ -274,6 +284,7 @@ class InteractionMeshRetargeter:
             self.server,
             urdf_or_path=self.robot_urdf,
             root_node_name="/world/robot",  # This links to the robot_base frame we created
+            mesh_color_override=mesh_color_override,
         )
 
         # Similarly for object
@@ -291,6 +302,7 @@ class InteractionMeshRetargeter:
                 self.server,
                 urdf_or_path=self.object_urdf,
                 root_node_name="/world/object",  # This links to the object_base frame we created
+                mesh_color_override=mesh_color_override,
             )
             print("Viser using object URDF: ", self.object_model_path)
 
@@ -302,6 +314,11 @@ class InteractionMeshRetargeter:
         print("\nRobot joints:")
         print("Number of actuated joints:", len(robot_joint_limits))
         print("Joint names:", list(robot_joint_limits.keys()))
+        mujoco_joint_names = actuated_joint_names_from_mujoco_xml(self.robot_xml_path)
+        viser_joint_names = list(robot_joint_limits.keys())
+        if mujoco_joint_names != viser_joint_names:
+            self.qpos_to_viser_joint_indices = build_joint_order_indices(mujoco_joint_names, viser_joint_names)
+            print("Qpos-to-viser joint order mapping:", self.qpos_to_viser_joint_indices.tolist())
 
         # Initialize robot with this configuration
         robot_initial_config = np.zeros(len(robot_joint_limits))
@@ -314,6 +331,12 @@ class InteractionMeshRetargeter:
             height=8,
             position=(0.0, 0.0, 0.0),
         )
+
+    def _mesh_color_override(self):
+        opacity = float(np.clip(self.mesh_opacity, 0.0, 1.0))
+        if opacity >= 0.999:
+            return None
+        return (0.7, 0.7, 0.7, opacity)
 
     def draw_mesh_from_geom(self, model, data, geom_id, geom_name, name="/mesh", color=(50, 150, 255), opacity=0.5):
         """
@@ -454,6 +477,11 @@ class InteractionMeshRetargeter:
                     obj_kpts_handle_list = self.draw_keypoints(
                         obj_pts, name="object_kpts", rgba=(0, 1, 1, 1)
                     )  # 100 X 3
+                    human_skeleton_handle_list = self.draw_mapped_skeleton(
+                        human_mapped_joints,
+                        name="human_skeleton",
+                        rgba=(0, 0, 1, 1),
+                    )
 
                 # Create adjacency list and calculate target Laplacian coordinates
                 adj_list = get_adjacency_list(source_tetrahedra, len(source_vertices))
@@ -486,6 +514,11 @@ class InteractionMeshRetargeter:
                     robot_kpts_handle_list = self.draw_keypoints(
                         robot_link_positions, name="robot_kpts", rgba=(0, 1, 0, 1)
                     )
+                    robot_skeleton_handle_list = self.draw_mapped_skeleton(
+                        robot_link_positions,
+                        name="robot_skeleton",
+                        rgba=(0, 1, 0, 1),
+                    )
 
                 retargeted_motions.append(q)
                 if self.visualize and self.debug:
@@ -511,6 +544,14 @@ class InteractionMeshRetargeter:
                 handle.remove()
             robot_kpts_handle_list.clear()
 
+            for handle in human_skeleton_handle_list:
+                handle.remove()
+            human_skeleton_handle_list.clear()
+
+            for handle in robot_skeleton_handle_list:
+                handle.remove()
+            robot_skeleton_handle_list.clear()
+
         # Save results
         np.savez(
             dest_res_path,
@@ -523,6 +564,53 @@ class InteractionMeshRetargeter:
 
         if self.visualize:
             robot_dof = len(self.viser_robot.get_actuated_joint_limits())
+            replay_overlay_handles = []
+
+            def _clear_replay_overlay():
+                nonlocal replay_overlay_handles
+                for handle in replay_overlay_handles:
+                    try:
+                        handle.remove()
+                    except Exception:
+                        pass
+                replay_overlay_handles = []
+
+            def _human_mapped_joints_at_frame(frame_float: float) -> np.ndarray:
+                if num_frames == 1:
+                    return human_joint_motions[0, self.smplh_mapped_joint_indices]
+
+                frame_float = float(np.clip(frame_float, 0.0, num_frames - 1))
+                i0 = int(np.floor(frame_float))
+                i1 = min(i0 + 1, num_frames - 1)
+                u = frame_float - i0
+                human_frame = (1.0 - u) * human_joint_motions[i0] + u * human_joint_motions[i1]
+                return human_frame[self.smplh_mapped_joint_indices]
+
+            def _draw_replay_mapped_skeletons(q: np.ndarray, frame_float: float) -> None:
+                if not self.debug:
+                    return
+
+                _clear_replay_overlay()
+                human_mapped_joints = _human_mapped_joints_at_frame(frame_float)
+                robot_link_positions = self._get_robot_link_positions(q, self.laplacian_match_links.values())
+                replay_overlay_handles.extend(self.draw_keypoints(human_mapped_joints, name="replay_human_kpts"))
+                replay_overlay_handles.extend(
+                    self.draw_mapped_skeleton(
+                        human_mapped_joints,
+                        name="replay_human_skeleton",
+                        rgba=(0, 0, 1, 1),
+                    )
+                )
+                replay_overlay_handles.extend(
+                    self.draw_keypoints(robot_link_positions, name="replay_robot_kpts", rgba=(0, 1, 0, 1))
+                )
+                replay_overlay_handles.extend(
+                    self.draw_mapped_skeleton(
+                        robot_link_positions,
+                        name="replay_robot_skeleton",
+                        rgba=(0, 1, 0, 1),
+                    )
+                )
 
             create_motion_control_sliders(
                 server=self.server,
@@ -536,17 +624,37 @@ class InteractionMeshRetargeter:
                 initial_fps=30,
                 initial_interp_mult=2,
                 loop=False,
+                qpos_to_viser_joint_indices=self.qpos_to_viser_joint_indices,
+                on_frame=_draw_replay_mapped_skeletons if self.debug else None,
             )
 
             # 4) optional: visibility toggle
             with self.server.gui.add_folder("Visibility"):
                 show_meshes_cb = self.server.gui.add_checkbox("Show meshes", self.viser_robot.show_visual)
+                updating_mesh_checkbox = {"flag": False}
+
+                def _set_mesh_visibility(visible: bool, *, sync_checkbox: bool = True) -> None:
+                    if sync_checkbox:
+                        updating_mesh_checkbox["flag"] = True
+                        try:
+                            show_meshes_cb.value = bool(visible)
+                        finally:
+                            updating_mesh_checkbox["flag"] = False
+                    self.viser_robot.show_visual = bool(visible)
+                    if self.viser_object is not None:
+                        self.viser_object.show_visual = bool(visible)
 
                 @show_meshes_cb.on_update
                 def _(_):
-                    self.viser_robot.show_visual = show_meshes_cb.value
-                    if self.viser_object is not None:
-                        self.viser_object.show_visual = show_meshes_cb.value
+                    if not updating_mesh_checkbox["flag"]:
+                        _set_mesh_visibility(bool(show_meshes_cb.value), sync_checkbox=False)
+
+                register_keyboard_shortcut(
+                    self.server,
+                    "Display: Toggle Meshes",
+                    hotkey=",",
+                    callback=lambda: _set_mesh_visibility(not bool(show_meshes_cb.value)),
+                )
 
         return (
             np.array(retargeted_motions)[1:],
@@ -893,6 +1001,8 @@ class InteractionMeshRetargeter:
         """Draw a single robot configuration."""
         # Update robot joint configurations
         robot_joint_positions = q[7 : 7 + self.task_constants.ROBOT_DOF]
+        if self.qpos_to_viser_joint_indices is not None:
+            robot_joint_positions = robot_joint_positions[self.qpos_to_viser_joint_indices]
         self.viser_robot.update_cfg(robot_joint_positions)
 
         # Update robot base pose using set_transform
@@ -919,7 +1029,7 @@ class InteractionMeshRetargeter:
     def draw_keypoints(self, p, name="keypoint", rgba=(0, 0, 1, 1)):
         """Draw keypoints in visualization."""
         if not hasattr(self, "server"):
-            return None
+            return []
 
         # Create a sphere mesh using trimesh
         sphere = trimesh.primitives.Sphere(radius=0.02)
@@ -957,6 +1067,71 @@ class InteractionMeshRetargeter:
             kpts_handle_list.append(kpts_handle)
 
         return kpts_handle_list
+
+    def _mapped_skeleton_edges(self) -> list[tuple[int, int]]:
+        """Build skeleton edges in the current JOINTS_MAPPING key order."""
+        joint_names = list(self.laplacian_match_links.keys())
+        joint_idx = {name: idx for idx, name in enumerate(joint_names)}
+        candidate_edges = [
+            ("Pelvis", "L_Hip"),
+            ("L_Hip", "L_Knee"),
+            ("L_Knee", "L_Ankle"),
+            ("L_Ankle", "L_Toe"),
+            ("L_Ankle", "L_Foot"),
+            ("Pelvis", "R_Hip"),
+            ("R_Hip", "R_Knee"),
+            ("R_Knee", "R_Ankle"),
+            ("R_Ankle", "R_Toe"),
+            ("R_Ankle", "R_Foot"),
+            ("Pelvis", "L_Shoulder"),
+            ("L_Shoulder", "L_Elbow"),
+            ("L_Elbow", "L_Wrist"),
+            ("Pelvis", "R_Shoulder"),
+            ("R_Shoulder", "R_Elbow"),
+            ("R_Elbow", "R_Wrist"),
+            ("L_Shoulder", "R_Shoulder"),
+            ("L_Hip", "R_Hip"),
+            ("Spine1", "LeftUpLeg"),
+            ("LeftUpLeg", "LeftLeg"),
+            ("LeftLeg", "LeftFoot"),
+            ("LeftFoot", "LeftToeBase"),
+            ("Spine1", "RightUpLeg"),
+            ("RightUpLeg", "RightLeg"),
+            ("RightLeg", "RightFoot"),
+            ("RightFoot", "RightToeBase"),
+            ("Spine1", "LeftArm"),
+            ("LeftArm", "LeftForeArm"),
+            ("LeftForeArm", "LeftHand"),
+            ("LeftForeArm", "LeftHandMiddle3"),
+            ("Spine1", "RightArm"),
+            ("RightArm", "RightForeArm"),
+            ("RightForeArm", "RightHand"),
+            ("RightForeArm", "RightHandMiddle3"),
+            ("LeftArm", "RightArm"),
+            ("LeftUpLeg", "RightUpLeg"),
+        ]
+        return [(joint_idx[a], joint_idx[b]) for a, b in candidate_edges if a in joint_idx and b in joint_idx]
+
+    def draw_mapped_skeleton(self, p, name="skeleton", rgba=(0, 0, 1, 1), line_width=2.0):
+        """Draw line segments connecting mapped keypoints in skeleton order."""
+        if not hasattr(self, "server"):
+            return []
+
+        points = np.asarray(p, dtype=float)
+        edges = self._mapped_skeleton_edges()
+        if points.ndim != 2 or not edges:
+            return []
+
+        segments = np.asarray([[points[i], points[j]] for i, j in edges], dtype=np.float32)
+        color = np.asarray(rgba[:3], dtype=float)
+        colors = np.tile(color, (segments.shape[0], 2, 1))
+        handle = self.server.scene.add_line_segments(
+            f"/{name}",
+            points=segments,
+            colors=colors,
+            line_width=line_width,
+        )
+        return [handle]
 
     def visualize_motion(
         self,

@@ -79,6 +79,10 @@ class RetargeterConfig:
     visualize: bool = False
     """Whether to visualize the retargeting process."""
 
+    mesh_opacity: float = 1.0
+    """Opacity for robot/object meshes in the retargeting viewer.
+    Values below 1.0 use a neutral translucent mesh color."""
+
     debug: bool = False
     """Whether to enable debug mode."""
 

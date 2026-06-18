@@ -118,6 +118,7 @@ class MotionLoader:
         line_range: tuple[int, int] | None,
         has_dynamic_object: bool,
         use_omniretarget_data: bool,
+        robot_dof: int,
     ):
         self.motion_file = motion_file
         self.input_fps = input_fps
@@ -129,6 +130,7 @@ class MotionLoader:
         self.line_range = line_range
         self.has_dynamic_object = has_dynamic_object
         self.use_omniretarget_data = use_omniretarget_data
+        self.robot_dof = robot_dof
         self._load_motion()
         self._interpolate_motion()
         self._compute_velocities()
@@ -162,7 +164,7 @@ class MotionLoader:
             self.motion_base_poss_input = motion[:, :3]
             self.motion_base_rots_input = motion[:, 3:7]
 
-        self.motion_dof_poss_input = motion[:, 7:36]
+        self.motion_dof_poss_input = motion[:, 7 : 7 + self.robot_dof]
 
         if self.has_dynamic_object:
             if self.use_omniretarget_data:
@@ -356,25 +358,6 @@ def world_body_velocities(model, data):
 def run_simulator(args_cli: DataConversionConfig):
     """Runs the simulation loop."""
     joint_names = args_cli.JOINT_NAMES
-    # Load motion
-    device = torch.device("cpu")
-    has_dynamic_object = args_cli.has_dynamic_object
-    use_omniretarget_data = args_cli.use_omniretarget_data
-    line_range: tuple[int, int] | None = args_cli.line_range
-    motion = MotionLoader(
-        motion_file=args_cli.input_file,
-        input_fps=args_cli.input_fps,
-        output_fps=args_cli.output_fps,
-        device=device,
-        line_range=line_range,
-        has_dynamic_object=has_dynamic_object,
-        use_omniretarget_data=use_omniretarget_data,
-    )
-
-    object_name = args_cli.object_name
-    if object_name is None:
-        object_name = "largebox" if has_dynamic_object else None
-
     if args_cli.robot_config.robot_type != args_cli.robot:
         robot_config = RobotConfig(robot_type=args_cli.robot)
     else:
@@ -390,6 +373,26 @@ def run_simulator(args_cli: DataConversionConfig):
         )
     else:
         motion_config = args_cli.motion_data_config
+
+    # Load motion
+    device = torch.device("cpu")
+    has_dynamic_object = args_cli.has_dynamic_object
+    use_omniretarget_data = args_cli.use_omniretarget_data
+    line_range: tuple[int, int] | None = args_cli.line_range
+    motion = MotionLoader(
+        motion_file=args_cli.input_file,
+        input_fps=args_cli.input_fps,
+        output_fps=args_cli.output_fps,
+        device=device,
+        line_range=line_range,
+        has_dynamic_object=has_dynamic_object,
+        use_omniretarget_data=use_omniretarget_data,
+        robot_dof=robot_config.ROBOT_DOF,
+    )
+
+    object_name = args_cli.object_name
+    if object_name is None:
+        object_name = "largebox" if has_dynamic_object else None
 
     constants = create_task_constants(
         robot_config,

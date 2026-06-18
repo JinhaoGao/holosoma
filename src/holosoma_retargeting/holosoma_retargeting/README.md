@@ -123,12 +123,18 @@ This will convert the AMASS `.npz` files to `.npz` format with global joint posi
 
 ```bash
 python examples/robot_retarget.py --data_path demo_data/amass_smplx_processed --task-type robot_only --task-name HumanEva_S3_Jog_1_stageii --data_format smplx --task-config.ground-range -10 10 --save_dir demo_results/g1/robot_only/amass_smplx --retargeter.debug --retargeter.visualize
+
+# Noetix E1
+python examples/robot_retarget.py --robot e1 --data_path demo_data/amass_smplx_processed --task-type robot_only --task-name HumanEva_S3_Jog_1_stageii --data_format smplx --task-config.ground-range -10 10 --save_dir demo_results/e1/robot_only/amass_smplx --retargeter.debug --retargeter.visualize
 ```
 
 #### Batch Processing for Motion Retargeting on AMASS SMPL-X
 
 ```bash
 python examples/parallel_robot_retarget.py --data-dir demo_data/amass_smplx_processed --task-type robot_only --data_format smplx --save_dir demo_results_parallel/g1/robot_only/amass_smplx --task-config.object-name ground --task-config.ground-range -10 10
+
+# Noetix E1
+python examples/parallel_robot_retarget.py --robot e1 --data-dir demo_data/amass_smplx_processed --task-type robot_only --data_format smplx --save_dir demo_results_parallel/e1/robot_only/amass_smplx --task-config.object-name ground --task-config.ground-range -10 10
 ```
 
 ## Check Visualizations of Saved Retargeting Results
@@ -159,6 +165,10 @@ python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \
 # Visualize AMASS results
 python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \
     --qpos_npz demo_results/g1/robot_only/amass_smplx/HumanEva_S3_Jog_1_stageii.npz
+
+# Visualize AMASS results on Noetix E1
+python viser_player.py --robot_urdf models/e1/e1_23dof.urdf \
+    --qpos_npz demo_results/e1/robot_only/amass_smplx/HumanEva_S3_Jog_1_stageii.npz
 
 # Visualize AMASS results
 python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \

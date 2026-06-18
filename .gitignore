@@ -21,6 +21,9 @@ logs
 log/
 logs_eval
 
+# Retargeting demo datasets
+src/holosoma_retargeting/holosoma_retargeting/demo_data/
+
 # Isaacsim Converted Files
 src/holosoma/holosoma/data/robots/converted/
 src/holosoma/holosoma/data/robots/converted_rank*/

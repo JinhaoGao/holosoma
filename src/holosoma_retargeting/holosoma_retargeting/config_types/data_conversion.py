@@ -38,7 +38,32 @@ _ROBOT_JOINT_NAMES_DEFAULT = {
         "right_wrist_roll_joint",
         "right_wrist_pitch_joint",
         "right_wrist_yaw_joint",
-    ]
+    ],
+    "e1": [
+        "l_leg_hip_yaw_joint",
+        "l_leg_hip_roll_joint",
+        "l_leg_hip_pitch_joint",
+        "l_leg_knee_joint",
+        "l_leg_ankle_pitch_joint",
+        "l_leg_ankle_roll_joint",
+        "r_leg_hip_yaw_joint",
+        "r_leg_hip_roll_joint",
+        "r_leg_hip_pitch_joint",
+        "r_leg_knee_joint",
+        "r_leg_ankle_pitch_joint",
+        "r_leg_ankle_roll_joint",
+        "waist_yaw_joint",
+        "l_arm_shoulder_pitch_joint",
+        "l_arm_shoulder_roll_joint",
+        "l_arm_shoulder_yaw_joint",
+        "l_arm_elbow_pitch_joint",
+        "l_arm_elbow_yaw_joint",
+        "r_arm_shoulder_pitch_joint",
+        "r_arm_shoulder_roll_joint",
+        "r_arm_shoulder_yaw_joint",
+        "r_arm_elbow_pitch_joint",
+        "r_arm_elbow_yaw_joint",
+    ],
 }
 
 

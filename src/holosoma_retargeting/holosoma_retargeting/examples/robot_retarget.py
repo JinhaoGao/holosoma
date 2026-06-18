@@ -474,6 +474,7 @@ def build_retargeter_kwargs_from_config(
         "self_collision": retargeter_config.self_collision,
         "step_size": retargeter_config.step_size,
         "visualize": retargeter_config.visualize,
+        "mesh_opacity": retargeter_config.mesh_opacity,
         "debug": retargeter_config.debug,
         "w_nominal_tracking_init": retargeter_config.w_nominal_tracking_init,
     }

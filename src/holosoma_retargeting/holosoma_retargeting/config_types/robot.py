@@ -18,7 +18,7 @@ class RobotDefaults(TypedDict):
 _ROBOT_DEFAULTS: dict[str, RobotDefaults] = {
     "g1": {"robot_dof": 29, "robot_height": 1.32, "object_name": "ground"},
     "t1": {"robot_dof": 23, "robot_height": 1.2, "object_name": "ground"},
-    "e1": {"robot_dof": 23, "robot_height": 1.39, "object_name": "ground"},
+    "e1": {"robot_dof": 23, "robot_height": 1.50, "object_name": "ground"},
 }
 
 
@@ -111,8 +111,6 @@ class RobotConfig:
         """Get robot name - use override if provided, else compute from robot_type and DOF."""
         if self.robot_name is not None:
             return self.robot_name
-        if self.robot_type == "e1":
-            return f"{self.robot_type}_{self.ROBOT_DOF}dof_sphere"
         return f"{self.robot_type}_{self.ROBOT_DOF}dof"
 
     ROBOT_NAME = property(
