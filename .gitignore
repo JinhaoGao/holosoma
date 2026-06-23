@@ -41,3 +41,7 @@ __pycache__
 .logs/
 holosoma_config.yaml
 wandb-metadata.json
+
+# External cloned repos
+src/holosoma_retargeting/holosoma_retargeting/data_utils/human_body_prior_src/
+src/holosoma_retargeting/holosoma_retargeting/data_utils/ubisoft-laforge-animation-dataset/
