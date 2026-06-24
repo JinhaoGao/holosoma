@@ -44,8 +44,20 @@ class ViserConfig:
     show_meshes: bool = True
     """Whether to show mesh visualizations."""
 
+    show_robot_mesh: bool | None = None
+    """Whether to show robot mesh visualization. If unset, uses show_meshes."""
+
+    show_object_mesh: bool | None = None
+    """Whether to show object mesh visualization. If unset, uses show_meshes."""
+
     mesh_opacity: float = 1.0
-    """Opacity for robot/object meshes. Values below 1.0 use a neutral translucent mesh color."""
+    """Default opacity for robot/object meshes. Values below 1.0 use a neutral translucent mesh color."""
+
+    robot_mesh_opacity: float | None = None
+    """Opacity for robot mesh. If unset, uses mesh_opacity."""
+
+    object_mesh_opacity: float | None = None
+    """Opacity for object mesh. If unset, uses mesh_opacity."""
 
     show_mapped_skeletons: bool = False
     """Whether to show saved human mapped skeleton and retargeted robot mapped skeleton."""

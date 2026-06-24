@@ -39,7 +39,21 @@ def load_npz(npz_path: str):
     qpos = data["qpos"]
     fps = int(data["fps"]) if "fps" in data else 30
     human_joints = data["human_joints"] if "human_joints" in data else None
-    return qpos, fps, human_joints
+    metadata = {
+        "human_joint_names": _npz_string_list(data, "human_joint_names"),
+        "mapped_human_joint_names": _npz_string_list(data, "mapped_human_joint_names"),
+        "mapped_robot_link_names": _npz_string_list(data, "mapped_robot_link_names"),
+    }
+    return qpos, fps, human_joints, metadata
+
+
+def _npz_string_list(data, key: str) -> list[str] | None:
+    if key not in data:
+        return None
+    value = np.asarray(data[key])
+    if value.ndim == 0:
+        return [str(value.item())]
+    return [str(item) for item in value.tolist()]
 
 
 def _build_qpos_to_viser_joint_indices(config: ViserConfig, viser_joint_names: list[str]):
@@ -157,7 +171,17 @@ def _mapped_skeleton_edges(joint_names: list[str]) -> list[tuple[int, int]]:
         ("LeftArm", "RightArm"),
         ("LeftUpLeg", "RightUpLeg"),
     ]
-    return [(joint_idx[a], joint_idx[b]) for a, b in candidate_edges if a in joint_idx and b in joint_idx]
+    edges: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for a, b in candidate_edges:
+        if a not in joint_idx or b not in joint_idx:
+            continue
+        edge = (joint_idx[a], joint_idx[b])
+        if edge in seen:
+            continue
+        edges.append(edge)
+        seen.add(edge)
+    return edges
 
 
 def _interpolate_sequence(sequence: np.ndarray, frame_float: float) -> np.ndarray:
@@ -185,11 +209,12 @@ class MappedSkeletonOverlay:
     ) -> None:
         self.server = server
         self.human_joints = np.asarray(human_joints)
+        self.demo_joints = demo_joints
         self.joints_mapping = joints_mapping
         self.human_joint_names = list(joints_mapping.keys())
         self.robot_link_names = list(joints_mapping.values())
         self.human_joint_indices = [demo_joints.index(name) for name in self.human_joint_names]
-        self.edges = _mapped_skeleton_edges(self.human_joint_names)
+        self.mapped_edges = _mapped_skeleton_edges(self.human_joint_names)
         self.line_width = float(line_width)
         self.visible = True
         self._lock = threading.Lock()
@@ -230,15 +255,23 @@ class MappedSkeletonOverlay:
             robot_points = self._robot_points(q)
             self._handles.extend(
                 [
-                    self._draw_points("/overlays/mapped/human_kpts", human_points, color=(45, 55, 240)),
-                    self._draw_points("/overlays/mapped/robot_kpts", robot_points, color=(120, 220, 70)),
+                    self._draw_points("/overlays/mapped/human_kpts", human_points, color=(0, 0, 255)),
+                    self._draw_points("/overlays/mapped/robot_kpts", robot_points, color=(0, 255, 0)),
                 ]
             )
             human_skeleton = self._draw_skeleton(
-                "/overlays/mapped/human_skeleton", human_points, color=np.array([0.0, 0.0, 1.0])
+                "/overlays/mapped/human_skeleton",
+                human_points,
+                self.mapped_edges,
+                color=np.array([0.0, 0.0, 1.0]),
+                line_width=self.line_width,
             )
             robot_skeleton = self._draw_skeleton(
-                "/overlays/mapped/robot_skeleton", robot_points, color=np.array([0.35, 0.9, 0.1])
+                "/overlays/mapped/robot_skeleton",
+                robot_points,
+                self.mapped_edges,
+                color=np.array([0.0, 1.0, 0.0]),
+                line_width=self.line_width,
             )
             if human_skeleton is not None:
                 self._handles.append(human_skeleton)
@@ -280,19 +313,27 @@ class MappedSkeletonOverlay:
             opacity=1.0,
         )
 
-    def _draw_skeleton(self, name: str, points: np.ndarray, color: np.ndarray):
-        if not self.edges:
+    def _draw_skeleton(
+        self,
+        name: str,
+        points: np.ndarray,
+        edges: list[tuple[int, int]],
+        color: np.ndarray,
+        line_width: float,
+    ):
+        if not edges:
             return None
 
-        segments = np.asarray([[points[i], points[j]] for i, j in self.edges], dtype=np.float32)
+        segments = np.asarray([[points[i], points[j]] for i, j in edges], dtype=np.float32)
         colors = np.tile(color.reshape(1, 1, 3), (segments.shape[0], 2, 1))
-        return self.server.scene.add_line_segments(name, points=segments, colors=colors, line_width=self.line_width)
+        return self.server.scene.add_line_segments(name, points=segments, colors=colors, line_width=line_width)
 
 
 def _build_mapped_skeleton_overlay(
     config: ViserConfig,
     server: viser.ViserServer,
     human_joints: np.ndarray | None,
+    npz_metadata: dict[str, list[str] | None],
 ) -> MappedSkeletonOverlay | None:
     if not config.show_mapped_skeletons:
         return None
@@ -306,23 +347,46 @@ def _build_mapped_skeleton_overlay(
         return None
 
     robot_type = _resolve_robot_type(config)
-    data_format = _resolve_data_format(config, human_joints, robot_type)
-    if data_format is None:
-        return None
+    saved_demo_joints = npz_metadata.get("human_joint_names")
+    saved_mapped_human_joint_names = npz_metadata.get("mapped_human_joint_names")
+    saved_mapped_robot_link_names = npz_metadata.get("mapped_robot_link_names")
 
-    motion_data_config = MotionDataConfig(data_format=data_format, robot_type=robot_type)
+    if saved_demo_joints is not None and len(saved_demo_joints) == human_joints.shape[1]:
+        demo_joints = saved_demo_joints
+        data_format = config.data_format or "saved"
+    else:
+        data_format = _resolve_data_format(config, human_joints, robot_type)
+        if data_format is None:
+            return None
+        motion_data_config = MotionDataConfig(data_format=data_format, robot_type=robot_type)
+        demo_joints = motion_data_config.resolved_demo_joints
+
+    if (
+        saved_mapped_human_joint_names is not None
+        and saved_mapped_robot_link_names is not None
+        and len(saved_mapped_human_joint_names) == len(saved_mapped_robot_link_names)
+    ):
+        joints_mapping = dict(zip(saved_mapped_human_joint_names, saved_mapped_robot_link_names))
+    else:
+        if data_format == "saved":
+            data_format = _resolve_data_format(config, human_joints, robot_type)
+            if data_format is None:
+                return None
+        motion_data_config = MotionDataConfig(data_format=data_format, robot_type=robot_type)
+        joints_mapping = motion_data_config.resolved_joints_mapping
+
     overlay = MappedSkeletonOverlay(
         server=server,
         human_joints=human_joints,
-        demo_joints=motion_data_config.resolved_demo_joints,
-        joints_mapping=motion_data_config.resolved_joints_mapping,
+        demo_joints=demo_joints,
+        joints_mapping=joints_mapping,
         robot_xml_path=robot_xml_path,
         point_radius=config.skeleton_point_radius,
         line_width=config.skeleton_line_width,
     )
     print(
         "[viser_player] Mapped skeleton overlay enabled | "
-        f"data_format={data_format}, robot_type={robot_type}, links={len(motion_data_config.resolved_joints_mapping)}"
+        f"data_format={data_format}, robot_type={robot_type}, links={len(joints_mapping)}"
     )
     return overlay
 
@@ -332,6 +396,7 @@ def make_player(
     qpos: np.ndarray,
     human_joints: np.ndarray | None = None,
     fps: int | None = None,
+    npz_metadata: dict[str, list[str] | None] | None = None,
 ):
     """
     qpos layout (MuJoCo order):
@@ -350,13 +415,16 @@ def make_player(
     object_root = server.scene.add_frame("/object", show_axes=False)
 
     # URDFs (using yourdfpy so meshes show up)
-    mesh_color_override = _mesh_color_override(config.mesh_opacity)
+    robot_mesh_opacity = config.mesh_opacity if config.robot_mesh_opacity is None else config.robot_mesh_opacity
+    object_mesh_opacity = config.mesh_opacity if config.object_mesh_opacity is None else config.object_mesh_opacity
+    robot_mesh_color_override = _mesh_color_override(robot_mesh_opacity)
+    object_mesh_color_override = _mesh_color_override(object_mesh_opacity)
     robot_urdf_y = yourdfpy.URDF.load(config.robot_urdf, load_meshes=True, build_scene_graph=True)
     vr = ViserUrdf(
         server,
         urdf_or_path=robot_urdf_y,
         root_node_name="/robot",
-        mesh_color_override=mesh_color_override,
+        mesh_color_override=robot_mesh_color_override,
     )
 
     vo = None
@@ -366,13 +434,13 @@ def make_player(
             server,
             urdf_or_path=object_urdf_y,
             root_node_name="/object",
-            mesh_color_override=mesh_color_override,
+            mesh_color_override=object_mesh_color_override,
         )
 
     # A tiny grid
     server.scene.add_grid("/grid", width=config.grid_width, height=config.grid_height, position=(0.0, 0.0, 0.0))
 
-    mapped_skeleton_overlay = _build_mapped_skeleton_overlay(config, server, human_joints)
+    mapped_skeleton_overlay = _build_mapped_skeleton_overlay(config, server, human_joints, npz_metadata or {})
 
     # Figure robot DOF from actuated limits in ViserUrdf
     joint_limits = vr.get_actuated_joint_limits()
@@ -382,46 +450,77 @@ def make_player(
     # Use fps from config if not provided, otherwise use the one from npz file
     actual_fps = fps if fps is not None else config.fps
 
-    # Set initial mesh visibility
-    vr.show_visual = config.show_meshes
+    # Set initial mesh visibility. show_meshes remains a backward-compatible default.
+    show_robot_mesh = config.show_meshes if config.show_robot_mesh is None else config.show_robot_mesh
+    show_object_mesh = config.show_meshes if config.show_object_mesh is None else config.show_object_mesh
+    vr.show_visual = bool(show_robot_mesh)
     if vo is not None:
-        vo.show_visual = config.show_meshes
+        vo.show_visual = bool(show_object_mesh)
 
     # ---------- Additional GUI controls (mesh visibility) ----------
     with server.gui.add_folder("Display"):
-        show_meshes_cb = server.gui.add_checkbox("Show meshes", initial_value=config.show_meshes)
+        show_robot_mesh_cb = server.gui.add_checkbox("Show robot mesh", initial_value=bool(show_robot_mesh))
+        show_object_mesh_cb = (
+            server.gui.add_checkbox("Show object mesh", initial_value=bool(show_object_mesh)) if vo is not None else None
+        )
         show_mapped_skeletons_cb = (
             server.gui.add_checkbox("Show mapped skeletons", initial_value=True)
             if mapped_skeleton_overlay is not None
             else None
         )
 
-    updating_mesh_checkbox = {"flag": False}
+    updating_robot_mesh_checkbox = {"flag": False}
+    updating_object_mesh_checkbox = {"flag": False}
     updating_skeleton_checkbox = {"flag": False}
     last_rendered_frame: dict[str, np.ndarray | float | None] = {"q": None, "frame": None}
 
-    def _set_mesh_visibility(visible: bool, *, sync_checkbox: bool = True) -> None:
+    def _set_robot_mesh_visibility(visible: bool, *, sync_checkbox: bool = True) -> None:
         if sync_checkbox:
-            updating_mesh_checkbox["flag"] = True
+            updating_robot_mesh_checkbox["flag"] = True
             try:
-                show_meshes_cb.value = bool(visible)
+                show_robot_mesh_cb.value = bool(visible)
             finally:
-                updating_mesh_checkbox["flag"] = False
+                updating_robot_mesh_checkbox["flag"] = False
         vr.show_visual = bool(visible)
-        if vo is not None:
+
+    def _set_object_mesh_visibility(visible: bool, *, sync_checkbox: bool = True) -> None:
+        if vo is None or show_object_mesh_cb is None:
+            return
+        if sync_checkbox:
+            updating_object_mesh_checkbox["flag"] = True
+            try:
+                show_object_mesh_cb.value = bool(visible)
+            finally:
+                updating_object_mesh_checkbox["flag"] = False
+            vo.show_visual = bool(visible)
+        else:
             vo.show_visual = bool(visible)
 
-    @show_meshes_cb.on_update
+    @show_robot_mesh_cb.on_update
     def _(_):
-        if not updating_mesh_checkbox["flag"]:
-            _set_mesh_visibility(bool(show_meshes_cb.value), sync_checkbox=False)
+        if not updating_robot_mesh_checkbox["flag"]:
+            _set_robot_mesh_visibility(bool(show_robot_mesh_cb.value), sync_checkbox=False)
+
+    if show_object_mesh_cb is not None:
+
+        @show_object_mesh_cb.on_update
+        def _(_):
+            if not updating_object_mesh_checkbox["flag"]:
+                _set_object_mesh_visibility(bool(show_object_mesh_cb.value), sync_checkbox=False)
 
     register_keyboard_shortcut(
         server,
-        "Display: Toggle Meshes",
+        "Display: Toggle Robot Mesh",
         hotkey=",",
-        callback=lambda: _set_mesh_visibility(not bool(show_meshes_cb.value)),
+        callback=lambda: _set_robot_mesh_visibility(not bool(show_robot_mesh_cb.value)),
     )
+    if show_object_mesh_cb is not None:
+        register_keyboard_shortcut(
+            server,
+            "Display: Toggle Object Mesh",
+            hotkey="o",
+            callback=lambda: _set_object_mesh_visibility(not bool(show_object_mesh_cb.value)),
+        )
 
     if show_mapped_skeletons_cb is not None:
 
@@ -484,12 +583,13 @@ def make_player(
 
 def main(cfg: ViserConfig) -> None:
     """Main function for viser player."""
-    qpos, fps, human_joints = load_npz(cfg.qpos_npz)
+    qpos, fps, human_joints, npz_metadata = load_npz(cfg.qpos_npz)
     make_player(
         config=cfg,
         qpos=qpos,
         human_joints=human_joints,
         fps=fps,
+        npz_metadata=npz_metadata,
     )
 
     # keep process alive

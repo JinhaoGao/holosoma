@@ -553,10 +553,15 @@ class InteractionMeshRetargeter:
             robot_skeleton_handle_list.clear()
 
         # Save results
+        mapped_human_joint_names = list(self.laplacian_match_links.keys())
         np.savez(
             dest_res_path,
             qpos=np.array(retargeted_motions)[1:],
             human_joints=human_joint_motions,
+            human_joint_names=np.asarray(self.demo_joints, dtype=str),
+            mapped_human_joints=human_joint_motions[:, self.smplh_mapped_joint_indices],
+            mapped_human_joint_names=np.asarray(mapped_human_joint_names, dtype=str),
+            mapped_robot_link_names=np.asarray(list(self.laplacian_match_links.values()), dtype=str),
             fps=30,
             cost=cost,
         )
