@@ -158,7 +158,7 @@ def process_single_task(args):
         robot_config,
         motion_data_config,
         task_config,
-        retargeter,
+        retargeter_config,
         augmentation,
     ) = args
 
@@ -226,7 +226,9 @@ def process_single_task(args):
             )
 
         # Create retargeter
-        retargeter_kwargs = build_retargeter_kwargs_from_config(retargeter, constants, object_urdf_path, task_type)
+        retargeter_kwargs = build_retargeter_kwargs_from_config(
+            retargeter_config, constants, object_urdf_path, task_type
+        )
         retargeter = InteractionMeshRetargeter(**retargeter_kwargs)
 
         # Preprocess motion data
