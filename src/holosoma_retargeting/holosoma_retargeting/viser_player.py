@@ -24,6 +24,7 @@ from holosoma_retargeting.config_types.data_type import (  # noqa: E402
     MotionDataConfig,
 )
 from holosoma_retargeting.config_types.viser import ViserConfig  # noqa: E402
+from holosoma_retargeting.src.utils import interaction_mesh_edges_from_tetrahedra  # noqa: E402
 from holosoma_retargeting.src.viser_utils import (  # noqa: E402
     actuated_joint_names_from_mujoco_xml,
     build_joint_order_indices,
@@ -44,7 +45,28 @@ def load_npz(npz_path: str):
         "mapped_human_joint_names": _npz_string_list(data, "mapped_human_joint_names"),
         "mapped_robot_link_names": _npz_string_list(data, "mapped_robot_link_names"),
     }
-    return qpos, fps, human_joints, metadata
+    interaction_mesh = _load_interaction_mesh_npz(data)
+    return qpos, fps, human_joints, metadata, interaction_mesh
+
+
+def _load_interaction_mesh_npz(data) -> dict[str, np.ndarray | int] | None:
+    required_keys = (
+        "interaction_source_vertices_w",
+        "interaction_target_vertices_w",
+        "interaction_tetrahedra",
+        "interaction_tetrahedra_counts",
+        "interaction_num_human_vertices",
+    )
+    if not all(key in data for key in required_keys):
+        return None
+
+    return {
+        "source_vertices": np.asarray(data["interaction_source_vertices_w"], dtype=np.float32),
+        "target_vertices": np.asarray(data["interaction_target_vertices_w"], dtype=np.float32),
+        "tetrahedra": np.asarray(data["interaction_tetrahedra"], dtype=np.int32),
+        "tetrahedra_counts": np.asarray(data["interaction_tetrahedra_counts"], dtype=np.int32),
+        "num_human_vertices": int(np.asarray(data["interaction_num_human_vertices"]).item()),
+    }
 
 
 def _npz_string_list(data, key: str) -> list[str] | None:
@@ -103,7 +125,10 @@ def _resolve_data_format(config: ViserConfig, human_joints: np.ndarray, robot_ty
         return path_hint
 
     if len(candidates) == 1:
-        print(f"[viser_player] Inferred data_format={candidates[0]} from human_joints shape and robot_type={robot_type}")
+        print(
+            f"[viser_player] Inferred data_format={candidates[0]} "
+            f"from human_joints shape and robot_type={robot_type}"
+        )
         return candidates[0]
     if len(candidates) > 1:
         print(
@@ -329,6 +354,97 @@ class MappedSkeletonOverlay:
         return self.server.scene.add_line_segments(name, points=segments, colors=colors, line_width=line_width)
 
 
+class InteractionMeshOverlay:
+    def __init__(
+        self,
+        server: viser.ViserServer,
+        mesh_data: dict[str, np.ndarray | int],
+        mode: str,
+        edge_mode: str,
+        line_width: float,
+    ) -> None:
+        self.server = server
+        self.source_vertices = np.asarray(mesh_data["source_vertices"], dtype=np.float32)
+        self.target_vertices = np.asarray(mesh_data["target_vertices"], dtype=np.float32)
+        self.tetrahedra = np.asarray(mesh_data["tetrahedra"], dtype=np.int32)
+        self.tetrahedra_counts = np.asarray(mesh_data["tetrahedra_counts"], dtype=np.int32)
+        self.num_human_vertices = int(mesh_data["num_human_vertices"])
+        self.mode = mode
+        self.edge_mode = edge_mode
+        self.line_width = float(line_width)
+        self.visible = True
+        self._lock = threading.Lock()
+        self._handles: list[object] = []
+
+        if self.source_vertices.ndim != 3 or self.target_vertices.ndim != 3:
+            raise ValueError("Saved interaction mesh vertices must have shape (frames, vertices, 3).")
+        if self.tetrahedra.ndim != 3 or self.tetrahedra.shape[-1] != 4:
+            raise ValueError("Saved interaction tetrahedra must have shape (frames, tetrahedra, 4).")
+        if self.source_vertices.shape[0] != self.tetrahedra.shape[0]:
+            raise ValueError("Saved interaction mesh frame count does not match tetrahedra frame count.")
+
+    def set_visible(self, visible: bool) -> None:
+        with self._lock:
+            self.visible = bool(visible)
+            if not self.visible:
+                self._clear_locked()
+
+    def draw(self, frame_float: float) -> None:
+        with self._lock:
+            if not self.visible:
+                return
+
+            self._clear_locked()
+            frame_idx = int(np.clip(round(float(frame_float)), 0, self.source_vertices.shape[0] - 1))
+            tet_count = int(self.tetrahedra_counts[frame_idx])
+            frame_tetrahedra = self.tetrahedra[frame_idx, :tet_count]
+            if self.mode in {"source", "both"}:
+                self._handles.extend(
+                    self._draw_mesh(
+                        "/overlays/interaction_mesh/source",
+                        self.source_vertices[frame_idx],
+                        frame_tetrahedra,
+                        color=np.array([1.0, 0.55, 0.0], dtype=np.float32),
+                    )
+                )
+            if self.mode in {"target", "both"}:
+                self._handles.extend(
+                    self._draw_mesh(
+                        "/overlays/interaction_mesh/target",
+                        self.target_vertices[frame_idx],
+                        frame_tetrahedra,
+                        color=np.array([0.0, 0.9, 1.0], dtype=np.float32),
+                    )
+                )
+
+    def _clear_locked(self) -> None:
+        for handle in self._handles:
+            try:
+                handle.remove()
+            except Exception:
+                pass
+        self._handles.clear()
+
+    def _draw_mesh(self, name: str, vertices: np.ndarray, tetrahedra: np.ndarray, color: np.ndarray) -> list[object]:
+        edges = interaction_mesh_edges_from_tetrahedra(
+            tetrahedra,
+            num_anchor_vertices=self.num_human_vertices,
+            edge_mode=self.edge_mode,
+        )
+        if edges.size == 0:
+            return []
+
+        segments = np.asarray(vertices, dtype=np.float32)[edges]
+        colors = np.tile(color.reshape(1, 1, 3), (segments.shape[0], 2, 1))
+        handle = self.server.scene.add_line_segments(
+            name,
+            points=segments,
+            colors=colors,
+            line_width=self.line_width,
+        )
+        return [handle]
+
+
 def _build_mapped_skeleton_overlay(
     config: ViserConfig,
     server: viser.ViserServer,
@@ -391,12 +507,43 @@ def _build_mapped_skeleton_overlay(
     return overlay
 
 
+def _build_interaction_mesh_overlay(
+    config: ViserConfig,
+    server: viser.ViserServer,
+    interaction_mesh: dict[str, np.ndarray | int] | None,
+) -> InteractionMeshOverlay | None:
+    if not config.show_interaction_mesh:
+        return None
+    if interaction_mesh is None:
+        print(
+            "[viser_player] --show-interaction-mesh requested, but qpos npz does not contain saved "
+            "interaction mesh data. "
+            "Re-run retargeting with --retargeter.save-interaction-mesh."
+        )
+        return None
+
+    overlay = InteractionMeshOverlay(
+        server=server,
+        mesh_data=interaction_mesh,
+        mode=config.interaction_mesh_mode,
+        edge_mode=config.interaction_mesh_edges,
+        line_width=config.interaction_mesh_line_width,
+    )
+    print(
+        "[viser_player] Interaction mesh overlay enabled | "
+        f"mode={config.interaction_mesh_mode}, edges={config.interaction_mesh_edges}, "
+        f"frames={overlay.source_vertices.shape[0]}"
+    )
+    return overlay
+
+
 def make_player(
     config: ViserConfig,
     qpos: np.ndarray,
     human_joints: np.ndarray | None = None,
     fps: int | None = None,
     npz_metadata: dict[str, list[str] | None] | None = None,
+    interaction_mesh: dict[str, np.ndarray | int] | None = None,
 ):
     """
     qpos layout (MuJoCo order):
@@ -441,6 +588,7 @@ def make_player(
     server.scene.add_grid("/grid", width=config.grid_width, height=config.grid_height, position=(0.0, 0.0, 0.0))
 
     mapped_skeleton_overlay = _build_mapped_skeleton_overlay(config, server, human_joints, npz_metadata or {})
+    interaction_mesh_overlay = _build_interaction_mesh_overlay(config, server, interaction_mesh)
 
     # Figure robot DOF from actuated limits in ViserUrdf
     joint_limits = vr.get_actuated_joint_limits()
@@ -461,17 +609,25 @@ def make_player(
     with server.gui.add_folder("Display"):
         show_robot_mesh_cb = server.gui.add_checkbox("Show robot mesh", initial_value=bool(show_robot_mesh))
         show_object_mesh_cb = (
-            server.gui.add_checkbox("Show object mesh", initial_value=bool(show_object_mesh)) if vo is not None else None
+            server.gui.add_checkbox("Show object mesh", initial_value=bool(show_object_mesh))
+            if vo is not None
+            else None
         )
         show_mapped_skeletons_cb = (
             server.gui.add_checkbox("Show mapped skeletons", initial_value=True)
             if mapped_skeleton_overlay is not None
             else None
         )
+        show_interaction_mesh_cb = (
+            server.gui.add_checkbox("Show interaction mesh", initial_value=True)
+            if interaction_mesh_overlay is not None
+            else None
+        )
 
     updating_robot_mesh_checkbox = {"flag": False}
     updating_object_mesh_checkbox = {"flag": False}
     updating_skeleton_checkbox = {"flag": False}
+    updating_interaction_mesh_checkbox = {"flag": False}
     last_rendered_frame: dict[str, np.ndarray | float | None] = {"q": None, "frame": None}
 
     def _set_robot_mesh_visibility(visible: bool, *, sync_checkbox: bool = True) -> None:
@@ -550,11 +706,38 @@ def make_player(
             callback=lambda: _set_mapped_skeleton_visibility(not bool(show_mapped_skeletons_cb.value)),
         )
 
+    if show_interaction_mesh_cb is not None:
+
+        def _set_interaction_mesh_visibility(visible: bool, *, sync_checkbox: bool = True) -> None:
+            if sync_checkbox:
+                updating_interaction_mesh_checkbox["flag"] = True
+                try:
+                    show_interaction_mesh_cb.value = bool(visible)
+                finally:
+                    updating_interaction_mesh_checkbox["flag"] = False
+            interaction_mesh_overlay.set_visible(bool(visible))
+            if visible and last_rendered_frame["frame"] is not None:
+                interaction_mesh_overlay.draw(float(last_rendered_frame["frame"]))
+
+        @show_interaction_mesh_cb.on_update
+        def _(_):
+            if not updating_interaction_mesh_checkbox["flag"]:
+                _set_interaction_mesh_visibility(bool(show_interaction_mesh_cb.value), sync_checkbox=False)
+
+        register_keyboard_shortcut(
+            server,
+            "Display: Toggle Interaction Mesh",
+            hotkey="m",
+            callback=lambda: _set_interaction_mesh_visibility(not bool(show_interaction_mesh_cb.value)),
+        )
+
     def _draw_frame_overlay(q: np.ndarray, frame_float: float) -> None:
         last_rendered_frame["q"] = np.asarray(q).copy()
         last_rendered_frame["frame"] = float(frame_float)
         if mapped_skeleton_overlay is not None:
             mapped_skeleton_overlay.draw(q, frame_float)
+        if interaction_mesh_overlay is not None:
+            interaction_mesh_overlay.draw(frame_float)
 
     # ---------- Use reusable motion control sliders from viser_utils ----------
     create_motion_control_sliders(
@@ -570,7 +753,11 @@ def make_player(
         initial_interp_mult=config.visual_fps_multiplier,
         loop=config.loop,
         qpos_to_viser_joint_indices=qpos_to_viser_joint_indices,
-        on_frame=_draw_frame_overlay if mapped_skeleton_overlay is not None else None,
+        on_frame=(
+            _draw_frame_overlay
+            if (mapped_skeleton_overlay is not None or interaction_mesh_overlay is not None)
+            else None
+        ),
     )
     n_frames = int(qpos.shape[0])
     print(
@@ -583,13 +770,14 @@ def make_player(
 
 def main(cfg: ViserConfig) -> None:
     """Main function for viser player."""
-    qpos, fps, human_joints, npz_metadata = load_npz(cfg.qpos_npz)
+    qpos, fps, human_joints, npz_metadata, interaction_mesh = load_npz(cfg.qpos_npz)
     make_player(
         config=cfg,
         qpos=qpos,
         human_joints=human_joints,
         fps=fps,
         npz_metadata=npz_metadata,
+        interaction_mesh=interaction_mesh,
     )
 
     # keep process alive

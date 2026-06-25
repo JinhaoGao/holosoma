@@ -405,6 +405,36 @@ def create_interaction_mesh(vertices: np.ndarray):
     return vertices, tri.simplices
 
 
+def interaction_mesh_edges_from_tetrahedra(
+    tetrahedra: np.ndarray,
+    num_anchor_vertices: int,
+    edge_mode: str = "all",
+) -> np.ndarray:
+    """Return unique interaction-mesh edges from tetrahedra.
+
+    ``edge_mode="cross"`` keeps only edges connecting the mapped human/robot
+    vertices to object vertices, which is useful for object-interaction debug
+    views where object-object Delaunay edges can dominate the scene.
+    """
+    if edge_mode not in {"all", "cross"}:
+        raise ValueError(f"Unknown interaction mesh edge mode: {edge_mode}")
+
+    edges: set[tuple[int, int]] = set()
+    for tet in np.asarray(tetrahedra, dtype=np.int64):
+        if np.any(tet < 0):
+            continue
+        for i in range(4):
+            for j in range(i + 1, 4):
+                u, v = sorted((int(tet[i]), int(tet[j])))
+                if edge_mode == "cross" and ((u < num_anchor_vertices) == (v < num_anchor_vertices)):
+                    continue
+                edges.add((u, v))
+
+    if not edges:
+        return np.empty((0, 2), dtype=np.int32)
+    return np.asarray(sorted(edges), dtype=np.int32)
+
+
 def transform_points_local_to_world(quat, trans, points_local):
     """Transform points from local frame to world frame."""
     transform_matrix = trimesh.transformations.quaternion_matrix(quat)

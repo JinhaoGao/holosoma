@@ -31,6 +31,7 @@ from utils import (  # type: ignore[import-not-found,no-redef]  # noqa: E402
     calculate_laplacian_matrix,
     create_interaction_mesh,
     get_adjacency_list,
+    interaction_mesh_edges_from_tetrahedra,
     transform_points_local_to_world,
     transform_points_world_to_local,
 )
@@ -65,6 +66,11 @@ class InteractionMeshRetargeter:
         visualize: bool = False,
         mesh_opacity: float = 1.0,
         debug: bool = False,
+        show_interaction_mesh: bool = False,
+        save_interaction_mesh: bool = False,
+        interaction_mesh_mode: str = "both",
+        interaction_mesh_edges: str = "cross",
+        interaction_mesh_line_width: float = 1.0,
         w_nominal_tracking_init: float = 5.0,
         nominal_tracking_tau: float = 10.0,
     ):
@@ -103,6 +109,15 @@ class InteractionMeshRetargeter:
         self.visualize = visualize
         self.mesh_opacity = float(mesh_opacity)
         self.debug = debug
+        self.show_interaction_mesh = show_interaction_mesh
+        self.save_interaction_mesh = save_interaction_mesh
+        self.interaction_mesh_mode = interaction_mesh_mode
+        self.interaction_mesh_edges = interaction_mesh_edges
+        self.interaction_mesh_line_width = float(interaction_mesh_line_width)
+        if self.interaction_mesh_mode not in {"source", "target", "both"}:
+            raise ValueError(f"Unknown interaction_mesh_mode: {self.interaction_mesh_mode}")
+        if self.interaction_mesh_edges not in {"all", "cross"}:
+            raise ValueError(f"Unknown interaction_mesh_edges: {self.interaction_mesh_edges}")
         self.demo_joints = task_constants.DEMO_JOINTS
         self.laplacian_match_links = task_constants.JOINTS_MAPPING
         self.task_constants = task_constants
@@ -392,6 +407,80 @@ class InteractionMeshRetargeter:
             self.draw_keypoints(q, name=f"{group_name}_q", rgba=(0.0, 1.0, 0.0, 1.0))
             self.draw_keypoints(c, name=f"{group_name}_c", rgba=(1.0, 0.0, 0.0, 1.0))
 
+    @staticmethod
+    def _pack_interaction_tetrahedra(tetrahedra_list: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+        """Pack variable-length per-frame tetrahedra into a padded int array."""
+        counts = np.asarray([len(tets) for tets in tetrahedra_list], dtype=np.int32)
+        if counts.size == 0:
+            return np.empty((0, 0, 4), dtype=np.int32), counts
+
+        max_count = int(np.max(counts))
+        packed = np.full((len(tetrahedra_list), max_count, 4), -1, dtype=np.int32)
+        for frame_idx, tets in enumerate(tetrahedra_list):
+            frame_tets = np.asarray(tets, dtype=np.int32)
+            packed[frame_idx, : frame_tets.shape[0], :] = frame_tets
+        return packed, counts
+
+    def draw_interaction_mesh(
+        self,
+        vertices: np.ndarray,
+        tetrahedra: np.ndarray,
+        name: str,
+        color: tuple[float, float, float] = (1.0, 0.55, 0.0),
+        edge_mode: str | None = None,
+    ) -> list[object]:
+        """Draw interaction mesh edges as a Viser line-segment overlay."""
+        if not hasattr(self, "server"):
+            return []
+
+        edges = interaction_mesh_edges_from_tetrahedra(
+            tetrahedra,
+            num_anchor_vertices=len(self.laplacian_match_links),
+            edge_mode=edge_mode or self.interaction_mesh_edges,
+        )
+        if edges.size == 0:
+            return []
+
+        vertices = np.asarray(vertices, dtype=np.float32)
+        segments = vertices[edges]
+        colors = np.tile(np.asarray(color, dtype=np.float32).reshape(1, 1, 3), (segments.shape[0], 2, 1))
+        handle = self.server.scene.add_line_segments(
+            f"/{name}",
+            points=segments,
+            colors=colors,
+            line_width=self.interaction_mesh_line_width,
+        )
+        return [handle]
+
+    def draw_interaction_meshes(
+        self,
+        source_vertices: np.ndarray,
+        target_vertices: np.ndarray,
+        tetrahedra: np.ndarray,
+        name_prefix: str = "interaction_mesh",
+    ) -> list[object]:
+        """Draw configured source/target interaction mesh overlays."""
+        handles: list[object] = []
+        if self.interaction_mesh_mode in {"source", "both"}:
+            handles.extend(
+                self.draw_interaction_mesh(
+                    source_vertices,
+                    tetrahedra,
+                    name=f"{name_prefix}/source",
+                    color=(1.0, 0.55, 0.0),
+                )
+            )
+        if self.interaction_mesh_mode in {"target", "both"}:
+            handles.extend(
+                self.draw_interaction_mesh(
+                    target_vertices,
+                    tetrahedra,
+                    name=f"{name_prefix}/target",
+                    color=(0.0, 0.9, 1.0),
+                )
+            )
+        return handles
+
     def retarget_motion(
         self,
         human_joint_motions,
@@ -435,6 +524,18 @@ class InteractionMeshRetargeter:
         tetrahedra = []
         obj_pts_demo_list = []  # scaled object pts
         obj_pts_list = []  # original size object pts
+        interaction_source_vertices_w_list = []
+        interaction_target_vertices_w_list = []
+        collect_interaction_mesh = self.save_interaction_mesh or (self.visualize and self.show_interaction_mesh)
+        interaction_mesh_handle_list: list[object] = []
+
+        def _clear_interaction_mesh_handles() -> None:
+            for handle in interaction_mesh_handle_list:
+                try:
+                    handle.remove()
+                except Exception:
+                    pass
+            interaction_mesh_handle_list.clear()
 
         print(f"\nStarting motion retargeting for {num_frames} frames...")
 
@@ -459,15 +560,21 @@ class InteractionMeshRetargeter:
                 )
                 tetrahedra.append(source_tetrahedra)
 
-                if self.debug:
-                    # Only for visualization
+                source_vertices_w = None
+                target_vertices_w = None
+                materialize_object_points = self.debug or collect_interaction_mesh
+                if materialize_object_points:
                     object_quat = object_poses_augmented[i, 3:]
                     object_trans = object_poses_augmented[i, :3]
                     obj_pts_demo = transform_points_local_to_world(
                         object_quat_demo, object_trans_demo, object_points_local_demo
                     )
                     obj_pts = transform_points_local_to_world(object_quat, object_trans, object_points_local)
+                    if collect_interaction_mesh:
+                        source_vertices_w = np.vstack([human_mapped_joints, obj_pts_demo])
 
+                if self.debug:
+                    # Only for visualization
                     obj_pts_demo_list.append(obj_pts_demo)
                     obj_pts_list.append(obj_pts)
                     human_kpts_handle_list = self.draw_keypoints(human_mapped_joints, name="human_kpts")  # 15 X 3
@@ -507,10 +614,29 @@ class InteractionMeshRetargeter:
                     n_iter=50 if i == 0 else 10,
                     frame_idx=i,
                 )
-                if self.debug:
+                if self.debug or collect_interaction_mesh:
                     robot_link_positions = self._get_robot_link_positions(
                         q, self.laplacian_match_links.values()
                     )  # 15 X 3
+                if collect_interaction_mesh:
+                    if source_vertices_w is None:
+                        raise RuntimeError("Expected source interaction mesh vertices to be materialized")
+                    target_vertices_w = np.vstack([robot_link_positions, obj_pts])
+                    if self.save_interaction_mesh:
+                        interaction_source_vertices_w_list.append(source_vertices_w)
+                        interaction_target_vertices_w_list.append(target_vertices_w)
+                    if self.visualize and self.show_interaction_mesh:
+                        _clear_interaction_mesh_handles()
+                        interaction_mesh_handle_list.extend(
+                            self.draw_interaction_meshes(
+                                source_vertices_w,
+                                target_vertices_w,
+                                source_tetrahedra,
+                                name_prefix="world/interaction_mesh",
+                            )
+                        )
+
+                if self.debug:
                     robot_kpts_handle_list = self.draw_keypoints(
                         robot_link_positions, name="robot_kpts", rgba=(0, 1, 0, 1)
                     )
@@ -521,7 +647,7 @@ class InteractionMeshRetargeter:
                     )
 
                 retargeted_motions.append(q)
-                if self.visualize and self.debug:
+                if self.visualize and (self.debug or self.show_interaction_mesh):
                     self.draw_q(q)
 
                 pbar.set_postfix(cost=cost)
@@ -551,20 +677,34 @@ class InteractionMeshRetargeter:
             for handle in robot_skeleton_handle_list:
                 handle.remove()
             robot_skeleton_handle_list.clear()
+        _clear_interaction_mesh_handles()
 
         # Save results
         mapped_human_joint_names = list(self.laplacian_match_links.keys())
-        np.savez(
-            dest_res_path,
-            qpos=np.array(retargeted_motions)[1:],
-            human_joints=human_joint_motions,
-            human_joint_names=np.asarray(self.demo_joints, dtype=str),
-            mapped_human_joints=human_joint_motions[:, self.smplh_mapped_joint_indices],
-            mapped_human_joint_names=np.asarray(mapped_human_joint_names, dtype=str),
-            mapped_robot_link_names=np.asarray(list(self.laplacian_match_links.values()), dtype=str),
-            fps=30,
-            cost=cost,
-        )
+        save_payload = {
+            "qpos": np.array(retargeted_motions)[1:],
+            "human_joints": human_joint_motions,
+            "human_joint_names": np.asarray(self.demo_joints, dtype=str),
+            "mapped_human_joints": human_joint_motions[:, self.smplh_mapped_joint_indices],
+            "mapped_human_joint_names": np.asarray(mapped_human_joint_names, dtype=str),
+            "mapped_robot_link_names": np.asarray(list(self.laplacian_match_links.values()), dtype=str),
+            "fps": 30,
+            "cost": cost,
+        }
+        if self.save_interaction_mesh:
+            packed_tetrahedra, tetrahedra_counts = self._pack_interaction_tetrahedra(tetrahedra)
+            save_payload.update(
+                {
+                    "interaction_source_vertices_w": np.asarray(interaction_source_vertices_w_list, dtype=np.float32),
+                    "interaction_target_vertices_w": np.asarray(interaction_target_vertices_w_list, dtype=np.float32),
+                    "interaction_tetrahedra": packed_tetrahedra,
+                    "interaction_tetrahedra_counts": tetrahedra_counts,
+                    "interaction_num_human_vertices": len(self.laplacian_match_links),
+                    "interaction_num_object_vertices": len(object_points_local),
+                    "interaction_mesh_edges_default": self.interaction_mesh_edges,
+                }
+            )
+        np.savez(dest_res_path, **save_payload)
         print("Saving results to path:", dest_res_path)
 
         if self.visualize:
@@ -591,31 +731,48 @@ class InteractionMeshRetargeter:
                 human_frame = (1.0 - u) * human_joint_motions[i0] + u * human_joint_motions[i1]
                 return human_frame[self.smplh_mapped_joint_indices]
 
-            def _draw_replay_mapped_skeletons(q: np.ndarray, frame_float: float) -> None:
-                if not self.debug:
-                    return
+            def _interaction_mesh_frame_index(frame_float: float) -> int:
+                return int(np.clip(round(float(frame_float)), 0, num_frames - 1))
 
+            def _draw_replay_overlays(q: np.ndarray, frame_float: float) -> None:
                 _clear_replay_overlay()
-                human_mapped_joints = _human_mapped_joints_at_frame(frame_float)
-                robot_link_positions = self._get_robot_link_positions(q, self.laplacian_match_links.values())
-                replay_overlay_handles.extend(self.draw_keypoints(human_mapped_joints, name="replay_human_kpts"))
-                replay_overlay_handles.extend(
-                    self.draw_mapped_skeleton(
-                        human_mapped_joints,
-                        name="replay_human_skeleton",
-                        rgba=(0, 0, 1, 1),
+
+                if self.debug:
+                    human_mapped_joints = _human_mapped_joints_at_frame(frame_float)
+                    robot_link_positions = self._get_robot_link_positions(q, self.laplacian_match_links.values())
+                    replay_overlay_handles.extend(self.draw_keypoints(human_mapped_joints, name="replay_human_kpts"))
+                    replay_overlay_handles.extend(
+                        self.draw_mapped_skeleton(
+                            human_mapped_joints,
+                            name="replay_human_skeleton",
+                            rgba=(0, 0, 1, 1),
+                        )
                     )
-                )
-                replay_overlay_handles.extend(
-                    self.draw_keypoints(robot_link_positions, name="replay_robot_kpts", rgba=(0, 1, 0, 1))
-                )
-                replay_overlay_handles.extend(
-                    self.draw_mapped_skeleton(
-                        robot_link_positions,
-                        name="replay_robot_skeleton",
-                        rgba=(0, 1, 0, 1),
+                    replay_overlay_handles.extend(
+                        self.draw_keypoints(robot_link_positions, name="replay_robot_kpts", rgba=(0, 1, 0, 1))
                     )
-                )
+                    replay_overlay_handles.extend(
+                        self.draw_mapped_skeleton(
+                            robot_link_positions,
+                            name="replay_robot_skeleton",
+                            rgba=(0, 1, 0, 1),
+                        )
+                    )
+
+                if (
+                    self.show_interaction_mesh
+                    and interaction_source_vertices_w_list
+                    and interaction_target_vertices_w_list
+                ):
+                    mesh_frame_idx = _interaction_mesh_frame_index(frame_float)
+                    replay_overlay_handles.extend(
+                        self.draw_interaction_meshes(
+                            interaction_source_vertices_w_list[mesh_frame_idx],
+                            interaction_target_vertices_w_list[mesh_frame_idx],
+                            tetrahedra[mesh_frame_idx],
+                            name_prefix="world/replay_interaction_mesh",
+                        )
+                    )
 
             create_motion_control_sliders(
                 server=self.server,
@@ -630,7 +787,7 @@ class InteractionMeshRetargeter:
                 initial_interp_mult=2,
                 loop=False,
                 qpos_to_viser_joint_indices=self.qpos_to_viser_joint_indices,
-                on_frame=_draw_replay_mapped_skeletons if self.debug else None,
+                on_frame=_draw_replay_overlays if (self.debug or self.show_interaction_mesh) else None,
             )
 
             # 4) optional: visibility toggle
@@ -1180,31 +1337,16 @@ class InteractionMeshRetargeter:
             else:
                 time.sleep(dt)
 
-    def visualize_tetrahedra(self, vertices, tetrahedra, name="tetrahedra", color=(0, 0, 0, 1)):
-        # Convert color to 0-255 range
-        color_255 = np.array(color[:3]) * 255
-
-        # Prepare points and colors for all edges
-        points = []
-        colors = []
-
-        for tet in tetrahedra:
-            for i in range(4):
-                for j in range(i + 1, 4):
-                    u, v = tet[i], tet[j]
-                    points.extend([vertices[u], vertices[v]])
-                    colors.extend([color_255, color_255])
-
-        # Convert to numpy arrays
-        points = np.array(points)
-        colors = np.array(colors)
-
-        # Add line segments for all edges at once
-        self.server.scene.add_line_segments(
-            f"/{name}",
-            points=points,
-            colors=colors,
-            line_width=0.01,
+    def visualize_tetrahedra(self, vertices, tetrahedra, name="tetrahedra", color=(0, 0, 0, 1), rgba=None):
+        """Compatibility wrapper for older manual tetrahedra visualization calls."""
+        if rgba is not None:
+            color = rgba
+        return self.draw_interaction_mesh(
+            vertices,
+            tetrahedra,
+            name=name,
+            color=tuple(color[:3]),
+            edge_mode="all",
         )
 
     def _compute_jacobian_for_contact_relative(self, geom1, geom2, geom1_name, geom2_name, fromto, dist):

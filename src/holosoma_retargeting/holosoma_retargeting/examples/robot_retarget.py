@@ -476,6 +476,11 @@ def build_retargeter_kwargs_from_config(
         "visualize": retargeter_config.visualize,
         "mesh_opacity": retargeter_config.mesh_opacity,
         "debug": retargeter_config.debug,
+        "show_interaction_mesh": retargeter_config.show_interaction_mesh,
+        "save_interaction_mesh": retargeter_config.save_interaction_mesh,
+        "interaction_mesh_mode": retargeter_config.interaction_mesh_mode,
+        "interaction_mesh_edges": retargeter_config.interaction_mesh_edges,
+        "interaction_mesh_line_width": retargeter_config.interaction_mesh_line_width,
         "w_nominal_tracking_init": retargeter_config.w_nominal_tracking_init,
     }
     if task_type == "climbing":

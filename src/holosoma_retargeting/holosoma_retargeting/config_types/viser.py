@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,18 @@ class ViserConfig:
 
     show_mapped_skeletons: bool = False
     """Whether to show saved human mapped skeleton and retargeted robot mapped skeleton."""
+
+    show_interaction_mesh: bool = False
+    """Whether to show saved source/target interaction mesh overlays."""
+
+    interaction_mesh_mode: Literal["source", "target", "both"] = "both"
+    """Which saved interaction mesh to show: source human-object, target robot-object, or both."""
+
+    interaction_mesh_edges: Literal["all", "cross"] = "cross"
+    """Which saved interaction mesh edges to draw. 'cross' keeps only human/robot-to-object edges."""
+
+    interaction_mesh_line_width: float = 1.0
+    """Line width for saved interaction mesh edges."""
 
     grid_width: float = 8.0
     """Grid width for visualization."""

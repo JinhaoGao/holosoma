@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,21 @@ class RetargeterConfig:
 
     debug: bool = False
     """Whether to enable debug mode."""
+
+    show_interaction_mesh: bool = False
+    """Whether to show the solver interaction mesh in the retargeting viewer."""
+
+    save_interaction_mesh: bool = False
+    """Whether to save interaction mesh vertices and tetrahedra into the output .npz."""
+
+    interaction_mesh_mode: Literal["source", "target", "both"] = "both"
+    """Which interaction mesh to visualize: source human-object, target robot-object, or both."""
+
+    interaction_mesh_edges: Literal["all", "cross"] = "cross"
+    """Which interaction mesh edges to draw. 'cross' keeps only human/robot-to-object edges."""
+
+    interaction_mesh_line_width: float = 1.0
+    """Line width for interaction mesh edges."""
 
     self_collision: SelfCollisionConfig = field(default_factory=SelfCollisionConfig)
     """Configuration for self-collision avoidance."""

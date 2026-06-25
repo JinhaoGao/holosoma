@@ -175,6 +175,45 @@ python viser_player.py --robot_urdf models/g1/g1_29dof.urdf \
     --qpos_npz demo_results_parallel/g1/robot_only/amass_smplx/HumanEva_S1_Box_1_stageii_original.npz
 ```
 
+### Visualize Interaction Meshes
+
+The interaction mesh is the Delaunay tetrahedral graph built during retargeting from mapped human/robot points
+and sampled object or ground points. It is independent from the mapped skeleton overlay.
+
+```bash
+# Show the interaction mesh during a single retargeting run.
+python examples/robot_retarget.py \
+    --data_path demo_data/OMOMO_new \
+    --task-type object_interaction \
+    --task-name sub3_largebox_003 \
+    --data_format smplh \
+    --retargeter.visualize \
+    --retargeter.show-interaction-mesh \
+    --retargeter.interaction-mesh-mode both \
+    --retargeter.interaction-mesh-edges cross
+
+# Save interaction mesh data into the output .npz for later replay.
+python examples/robot_retarget.py \
+    --data_path demo_data/OMOMO_new \
+    --task-type object_interaction \
+    --task-name sub3_largebox_003 \
+    --data_format smplh \
+    --retargeter.save-interaction-mesh
+
+# Replay saved source/target interaction meshes without enabling skeleton overlays.
+python viser_player.py \
+    --robot_urdf models/g1/g1_29dof.urdf \
+    --object_urdf models/largebox/largebox.urdf \
+    --qpos_npz demo_results/g1/object_interaction/omomo/sub3_largebox_003_original.npz \
+    --show-interaction-mesh \
+    --interaction-mesh-mode both \
+    --interaction-mesh-edges cross
+```
+
+Use `--retargeter.interaction-mesh-edges all` or `--interaction-mesh-edges all` to draw the full tetrahedral
+edge set. The default `cross` mode draws only human/robot-to-object edges, which is usually easier to inspect for
+box interaction.
+
 ## Quantitative Evaluation
 
 ```bash
