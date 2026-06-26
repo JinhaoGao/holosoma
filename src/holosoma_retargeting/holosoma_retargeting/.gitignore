@@ -13,6 +13,7 @@ results_single/
 experiments/
 *scaled*.urdf
 *scaled*.xml
+models/*/generated/
 nightly_data/
 nightly_results/
 demo_results/

@@ -133,7 +133,10 @@ class InteractionMeshRetargeter:
         self._init_foot_lock(foot_lock)
         self._self_collision_config = self_collision
 
-        if self.object_name == "ground":
+        scene_xml_file = getattr(self.task_constants, "SCENE_XML_FILE", "")
+        if scene_xml_file:
+            robot_xml_path = scene_xml_file
+        elif self.object_name == "ground":
             robot_xml_path = self.robot_model_path.replace(".urdf", ".xml")
         elif self.object_name == "multi_boxes":
             robot_xml_path = self.task_constants.SCENE_XML_FILE
@@ -164,18 +167,23 @@ class InteractionMeshRetargeter:
 
         self.nq_a = len(self.q_a_indices)
 
-        # Create complete limits with floating base (-inf, inf) and actuated joint limits
-        n_floating_base = 7
-        joint_names = [self.robot_model.joint(i).name for i in range(self.robot_model.njnt)]
-        actuated_joints = [(i, name) for i, name in enumerate(joint_names) if name]  # Filter out None names
-
+        # Align scalar joint limits by MuJoCo qpos address. Named free joints must not
+        # shift the actuated joint limits.
         large_number = 1e6
-        complete_lower_limits = np.concatenate(
-            [-large_number * np.ones(n_floating_base), self.robot_model.jnt_range[[i for i, _ in actuated_joints], 0]]
-        )
-        complete_upper_limits = np.concatenate(
-            [large_number * np.ones(n_floating_base), self.robot_model.jnt_range[[i for i, _ in actuated_joints], 1]]
-        )
+        complete_lower_limits = -large_number * np.ones(self.nq)
+        complete_upper_limits = large_number * np.ones(self.nq)
+        scalar_joint_types = {
+            int(mujoco.mjtJoint.mjJNT_SLIDE),
+            int(mujoco.mjtJoint.mjJNT_HINGE),
+        }
+        for joint_idx in range(self.robot_model.njnt):
+            if int(self.robot_model.jnt_type[joint_idx]) not in scalar_joint_types:
+                continue
+            if not self.robot_model.jnt_limited[joint_idx]:
+                continue
+            qpos_addr = int(self.robot_model.jnt_qposadr[joint_idx])
+            complete_lower_limits[qpos_addr] = self.robot_model.jnt_range[joint_idx, 0]
+            complete_upper_limits[qpos_addr] = self.robot_model.jnt_range[joint_idx, 1]
 
         self.q_a_lb = complete_lower_limits[self.q_a_indices]
         self.q_a_ub = complete_upper_limits[self.q_a_indices]

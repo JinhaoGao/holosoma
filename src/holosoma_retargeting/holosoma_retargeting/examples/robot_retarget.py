@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from typing import Literal
 
 import numpy as np
+import trimesh
 import tyro
 
 src_root = Path(__file__).resolve().parents[2]
@@ -33,6 +34,8 @@ from holosoma_retargeting.src.utils import (  # noqa: E402
     augment_object_poses,
     calculate_scale_factor,
     create_new_scene_xml_file,
+    create_scaled_object_mesh_and_urdf,
+    create_scaled_object_scene_xml,
     create_scaled_multi_boxes_urdf,
     create_scaled_multi_boxes_xml,
     estimate_human_orientation,
@@ -119,6 +122,7 @@ def create_task_constants(
         task_constants.OBJECT_URDF_FILE = f"models/{obj_name}/{obj_name}.urdf"
         task_constants.OBJECT_MESH_FILE = f"models/{obj_name}/{obj_name}.obj"
         task_constants.OBJECT_URDF_TEMPLATE = f"models/templates/{obj_name}.urdf.jinja"
+        task_constants.SCENE_XML_FILE = ""
     elif task_type == "climbing":
         obj_name = task_config.object_name or "multi_boxes"
         task_constants.OBJECT_NAME = obj_name
@@ -323,7 +327,30 @@ def setup_object_data(
         object_local_pts, object_local_pts_demo = load_object_data(
             constants.OBJECT_MESH_FILE, smpl_scale=smpl_scale, sample_count=100
         )
-        return object_local_pts, object_local_pts_demo, constants.OBJECT_URDF_FILE
+        object_scale = np.asarray(task_config.object_scale, dtype=float)
+        if object_scale.shape != (3,) or np.any(object_scale <= 0):
+            raise ValueError(f"object_scale must contain three positive values, got {task_config.object_scale}")
+
+        constants.SCENE_XML_FILE = ""
+        object_urdf_file = constants.OBJECT_URDF_FILE
+        object_local_pts = object_local_pts * object_scale
+        if not np.allclose(object_scale, np.ones(3)):
+            scale_factors = tuple(float(value) for value in object_scale)
+            mesh = trimesh.load(constants.OBJECT_MESH_FILE, force="mesh")
+            generated_dir = Path(constants.OBJECT_MESH_FILE).parent / "generated"
+            object_urdf_file = create_scaled_object_mesh_and_urdf(
+                scale_factors,
+                np.asarray(mesh.vertices),
+                np.asarray(mesh.faces),
+                np.eye(3),
+                constants.OBJECT_URDF_TEMPLATE,
+                save_dir=str(generated_dir),
+            )
+
+            scene_xml_file = constants.ROBOT_URDF_FILE.replace(".urdf", f"_w_{constants.OBJECT_NAME}.xml")
+            constants.SCENE_XML_FILE = create_scaled_object_scene_xml(scene_xml_file, scale_factors)
+
+        return object_local_pts, object_local_pts_demo, object_urdf_file
 
     if task_type == "climbing":
         if object_dir is None:

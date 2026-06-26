@@ -640,6 +640,38 @@ def create_scaled_object_mesh_and_urdf(
     return urdf_file_name
 
 
+def create_scaled_object_scene_xml(
+    ori_scene_xml_path: str,
+    scale_factors: tuple[float, float, float],
+    mesh_name: str = "largebox_mesh",
+    output_path: str | None = None,
+) -> str:
+    """Create a scene XML with the target object's MuJoCo mesh scaled."""
+    sx, sy, sz = scale_factors
+    if output_path is None:
+        output_path = ori_scene_xml_path.replace(".xml", f"_scaled_{sx:.2f}_{sy:.2f}_{sz:.2f}.xml")
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+    with open(ori_scene_xml_path) as f:
+        content = f.read()
+
+    scale_value = f"{sx:g} {sy:g} {sz:g}"
+    mesh_name_pattern = re.escape(mesh_name)
+    pattern = rf'(<mesh\b[^>]*\bname="{mesh_name_pattern}"[^>]*\bscale=")[^"]*(")'
+    content, count = re.subn(pattern, rf"\g<1>{scale_value}\2", content, count=1)
+    if count == 0:
+        pattern = rf'(<mesh\b[^>]*\bname="{mesh_name_pattern}"[^>]*)(/?>)'
+        content, count = re.subn(pattern, rf'\1 scale="{scale_value}"\2', content, count=1)
+    if count == 0:
+        raise ValueError(f"Could not find mesh '{mesh_name}' in {ori_scene_xml_path}")
+
+    with open(output_path, "w") as f:
+        f.write(content)
+
+    return output_path
+
+
 def create_scaled_multi_boxes_urdf(
     urdf_path: str,
     new_scale: tuple,

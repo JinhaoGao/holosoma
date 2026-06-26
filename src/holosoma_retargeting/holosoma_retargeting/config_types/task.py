@@ -18,6 +18,8 @@ class TaskConfig:
     # Auto-determined based on task_type if None: "largebox" for object_interaction,
     # "multi_boxes" for climbing, "ground" for robot_only
     object_name: str | None = None
+    object_scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    """Target object scale in x, y, z for object_interaction tasks."""
 
     # Ground meshgrid (robot_only task)
     ground_size: int = 15
