@@ -77,6 +77,7 @@ _AUGMENTATION_TRANSLATION = np.array([0.2, 0.0, 0.0])
 # Type aliases
 TaskType = Literal["robot_only", "object_interaction", "climbing"]
 # DataFormat is imported from config_types.data_type
+BVH_LIKE_FORMATS = {"lafan", "noetix_lafan"}
 
 
 # ----------------------------- Helper Functions -----------------------------
@@ -236,6 +237,17 @@ def load_motion_data(
 
             default_human_height = motion_data_config.default_human_height or 1.78
             smpl_scale = constants.ROBOT_HEIGHT / default_human_height
+        elif data_format == "noetix_lafan":
+            npz_file = data_path / f"{task_name}.npz"
+            if not npz_file.exists():
+                raise FileNotFoundError(f"Noetix LAFAN data file not found: {npz_file}")
+
+            human_data = np.load(str(npz_file))
+            human_joints = human_data["global_joint_positions"].copy()
+            spine_joint_idx = constants.DEMO_JOINTS.index("Spine1")
+            human_joints[:, spine_joint_idx, -1] -= 0.06
+            human_height = float(human_data["height"])
+            smpl_scale = constants.ROBOT_HEIGHT / human_height
         elif data_format == "smplx":
             npz_file = data_path / f"{task_name}.npz"
 
@@ -421,12 +433,12 @@ def _compute_q_init_base(
         q_init_base in MuJoCo order: [0:3] position, [3:7] quaternion, [7:] joints
     """
     if task_type == "robot_only":
-        if data_format == "lafan":
-            spine_joint_idx = constants.DEMO_JOINTS.index("Spine1")
+        if data_format in BVH_LIKE_FORMATS:
+            base_joint_idx = constants.DEMO_JOINTS.index("Spine1")
             human_quat_init = estimate_human_orientation(human_joints, constants.DEMO_JOINTS)
             # MuJoCo order: pos first, then quat
             q_init_base = np.concatenate(
-                [human_joints[0, spine_joint_idx, :3], human_quat_init, np.zeros(constants.ROBOT_DOF)]
+                [human_joints[0, base_joint_idx, :3], human_quat_init, np.zeros(constants.ROBOT_DOF)]
             )
         else:  # smplh
             _, human_quat_init = transform_from_human_to_world(

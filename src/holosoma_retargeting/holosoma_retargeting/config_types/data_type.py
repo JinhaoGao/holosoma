@@ -37,6 +37,8 @@ LAFAN_DEMO_JOINTS = [
     "LeftHand",
 ]
 
+NOETIX_LAFAN_DEMO_JOINTS = LAFAN_DEMO_JOINTS.copy()
+
 SMPLH_DEMO_JOINTS = [
     "Pelvis",
     "L_Hip",
@@ -192,6 +194,23 @@ JOINTS_MAPPINGS = {
         "LeftHand": "left_rubber_hand_link",
         "RightHand": "right_rubber_hand_link",
     },
+    ("noetix_lafan", "g1"): {
+        "Spine1": "pelvis_contour_link",
+        "LeftUpLeg": "left_hip_pitch_link",
+        "RightUpLeg": "right_hip_pitch_link",
+        "LeftLeg": "left_knee_link",
+        "RightLeg": "right_knee_link",
+        "LeftArm": "left_shoulder_roll_link",
+        "RightArm": "right_shoulder_roll_link",
+        "LeftForeArm": "left_elbow_link",
+        "RightForeArm": "right_elbow_link",
+        "LeftFoot": "left_ankle_intermediate_1_link",
+        "RightFoot": "right_ankle_intermediate_1_link",
+        "LeftToeBase": "left_ankle_roll_sphere_5_link",
+        "RightToeBase": "right_ankle_roll_sphere_5_link",
+        "LeftHand": "left_rubber_hand_link",
+        "RightHand": "right_rubber_hand_link",
+    },
     ("lafan", "t1"): {
         "Spine1": "Trunk",
         "LeftUpLeg": "Hip_Pitch_Left",
@@ -294,6 +313,23 @@ JOINTS_MAPPINGS = {
         "L_Wrist": "l_hand_sphere_link",
         "R_Wrist": "r_hand_sphere_link",
     },
+    ("noetix_lafan", "e1"): {
+        "Spine1": "base_link",
+        "LeftUpLeg": "l_leg_hip_pitch_link",
+        "RightUpLeg": "r_leg_hip_pitch_link",
+        "LeftLeg": "l_leg_knee_link",
+        "RightLeg": "r_leg_knee_link",
+        "LeftArm": "l_arm_shoulder_roll_link",
+        "RightArm": "r_arm_shoulder_roll_link",
+        "LeftForeArm": "l_arm_elbow_pitch_link",
+        "RightForeArm": "r_arm_elbow_pitch_link",
+        "LeftFoot": "l_leg_ankle_intermediate_1_link",
+        "RightFoot": "r_leg_ankle_intermediate_1_link",
+        "LeftToeBase": "l_foot_sphere_5_link",
+        "RightToeBase": "r_foot_sphere_5_link",
+        "LeftHand": "l_hand_sphere_link",
+        "RightHand": "r_hand_sphere_link",
+    },
     ("mocap", "g1"): {
         "Spine1": "pelvis_contour_link",
         "LeftUpLeg": "left_hip_pitch_link",
@@ -328,11 +364,29 @@ JOINTS_MAPPINGS = {
         "LeftFoot": "Ankle_Cross_Left",
         "RightFoot": "Ankle_Cross_Right",
     },
+    ("mocap", "e1"): {
+        "Spine1": "base_link",
+        "LeftUpLeg": "l_leg_hip_pitch_link",
+        "LeftLeg": "l_leg_knee_link",
+        "LeftToeBase": "l_foot_sphere_5_link",
+        "RightUpLeg": "r_leg_hip_pitch_link",
+        "RightLeg": "r_leg_knee_link",
+        "RightToeBase": "r_foot_sphere_5_link",
+        "LeftArm": "l_arm_shoulder_roll_link",
+        "LeftForeArm": "l_arm_elbow_pitch_link",
+        "LeftHandMiddle3": "l_hand_sphere_link",
+        "RightArm": "r_arm_shoulder_roll_link",
+        "RightForeArm": "r_arm_elbow_pitch_link",
+        "RightHandMiddle3": "r_hand_sphere_link",
+        "LeftFoot": "l_leg_ankle_intermediate_1_link",
+        "RightFoot": "r_leg_ankle_intermediate_1_link",
+    },
 }
 
 # Data format specific constants
 TOE_NAMES_BY_FORMAT = {
     "lafan": ["LeftToeBase", "RightToeBase"],
+    "noetix_lafan": ["LeftToeBase", "RightToeBase"],
     "smplh": ["L_Toe", "R_Toe"],
     "mocap": ["LeftToeBase", "RightToeBase"],
     "smplx": ["L_Foot", "R_Foot"],
@@ -359,6 +413,7 @@ DATA_FORMAT_CONSTANTS: dict[str, FormatConstants] = {
 # No need to update any Literal types - DataFormat is now str with runtime validation
 DEMO_JOINTS_REGISTRY: dict[str, list[str]] = {
     "lafan": LAFAN_DEMO_JOINTS,
+    "noetix_lafan": NOETIX_LAFAN_DEMO_JOINTS,
     "smplh": SMPLH_DEMO_JOINTS,
     "mocap": MOCAP_DEMO_JOINTS,
     "smplx": SMPLX_DEMO_JOINTS,
