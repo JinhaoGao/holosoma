@@ -74,12 +74,18 @@ This will convert the BVH files to `.npy` format with global joint positions.
 
 ```bash
 python examples/robot_retarget.py --data_path demo_data/lafan --task-type robot_only --task-name dance2_subject1 --data_format lafan --task-config.ground-range -10 10 --save_dir demo_results/g1/robot_only/lafan --retargeter.debug --retargeter.visualize --retargeter.foot-sticking-tolerance 0.02
+
+# Noetix E1
+python examples/robot_retarget.py --robot e1 --data_path demo_data/lafan --task-type robot_only --task-name dance2_subject1 --data_format lafan --task-config.ground-range -10 10 --save_dir demo_results/e1/robot_only/lafan --retargeter.debug --retargeter.visualize --retargeter.foot-sticking-tolerance 0.02
 ```
 
 #### Batch Processing for Motion Retargeting on LAFAN
 
 ```bash
 python examples/parallel_robot_retarget.py --data-dir demo_data/lafan --task-type robot_only --data_format lafan --save_dir demo_results_parallel/g1/robot_only/lafan --task-config.object-name ground --task-config.ground-range -10 10 --retargeter.foot-sticking-tolerance 0.02
+
+# Noetix E1
+python examples/parallel_robot_retarget.py --robot e1 --data-dir demo_data/lafan --task-type robot_only --data_format lafan --save_dir demo_results_parallel/e1/robot_only/lafan --task-config.object-name ground --task-config.ground-range -10 10 --retargeter.foot-sticking-tolerance 0.02
 ```
 
 ### AMASS SMPL-X
