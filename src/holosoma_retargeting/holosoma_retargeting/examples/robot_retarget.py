@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
@@ -39,6 +40,7 @@ from holosoma_retargeting.src.utils import (  # noqa: E402
     create_scaled_multi_boxes_urdf,
     create_scaled_multi_boxes_xml,
     estimate_human_orientation,
+    estimate_mocap_foot_orientation,
     extract_foot_sticking_sequence_velocity,
     extract_object_first_moving_frame,
     load_intermimic_data,
@@ -455,9 +457,12 @@ def _compute_q_init_base(
     elif task_type == "climbing":
         if retargeter is None:
             raise ValueError("retargeter is required for climbing task")
-        _, human_quat_init = transform_from_human_to_world(
-            human_joints[0, 0, :], object_poses[0], np.array([0.0, 0.0, 0.0])
-        )
+        if data_format == "mocap":
+            human_quat_init = estimate_mocap_foot_orientation(human_joints, retargeter.demo_joints)
+        else:
+            _, human_quat_init = transform_from_human_to_world(
+                human_joints[0, 0, :], object_poses[0], np.array([0.0, 0.0, 0.0])
+            )
         spine_joint_idx = retargeter.demo_joints.index("Spine1")
         # MuJoCo order: pos first, then quat
         q_init_base = np.concatenate(
@@ -669,12 +674,10 @@ def main(cfg: RetargetingConfig) -> None:
         cfg.robot_config = RobotConfig(robot_type=robot)
 
     if cfg.motion_data_config.robot_type != robot or cfg.motion_data_config.data_format != data_format:
-        cfg.motion_data_config = MotionDataConfig(data_format=data_format, robot_type=robot)
+        cfg.motion_data_config = replace(cfg.motion_data_config, data_format=data_format, robot_type=robot)
 
     # Task-specific object setup: set default object_dir for climbing if not provided
     if task_type == "climbing" and cfg.task_config.object_dir is None:
-        from dataclasses import replace
-
         cfg.task_config = replace(cfg.task_config, object_dir=data_path / task_name)
 
     constants = create_task_constants(

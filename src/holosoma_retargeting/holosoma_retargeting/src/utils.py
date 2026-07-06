@@ -879,3 +879,57 @@ def estimate_human_orientation(human_joints, joint_names, frame_idx=0):
     assert np.linalg.det(rotation_matrix) > 0
     rotation = R.from_matrix(rotation_matrix)
     return rotation.as_quat(scalar_first=True)
+
+
+def estimate_mocap_foot_orientation(human_joints, joint_names, frame_idx=0):
+    """
+    Estimate a mocap actor's horizontal orientation from foot-to-toe direction.
+
+    For static climbing terrain, object poses can be dummy identities, so the
+    first-frame object direction is not a reliable source of actor yaw.
+
+    Args:
+        human_joints (np.ndarray): Human joint positions with shape (frames, joints, 3)
+        joint_names (list): List of joint names corresponding to the joint positions
+        frame_idx (int): Frame index to estimate orientation from (default: 0)
+
+    Returns:
+        np.ndarray: Quaternion [w, x, y, z] representing the actor's global orientation
+    """
+    foot_toe_pairs = (
+        ("LeftFoot", "LeftToeBase"),
+        ("RightFoot", "RightToeBase"),
+    )
+    forward_vectors = []
+    for foot_name, toe_name in foot_toe_pairs:
+        if foot_name not in joint_names or toe_name not in joint_names:
+            continue
+        foot_pos = human_joints[frame_idx, joint_names.index(foot_name)]
+        toe_pos = human_joints[frame_idx, joint_names.index(toe_name)]
+        forward_vec = toe_pos - foot_pos
+        forward_vec[2] = 0.0
+        norm = np.linalg.norm(forward_vec)
+        if norm > 1e-6:
+            forward_vectors.append(forward_vec / norm)
+
+    if not forward_vectors:
+        return estimate_human_orientation(human_joints, joint_names, frame_idx)
+
+    x_axis = np.mean(forward_vectors, axis=0)
+    x_axis[2] = 0.0
+    x_axis_norm = np.linalg.norm(x_axis)
+    if x_axis_norm <= 1e-6:
+        return estimate_human_orientation(human_joints, joint_names, frame_idx)
+    x_axis = x_axis / x_axis_norm
+
+    z_axis = np.array([0.0, 0.0, 1.0])
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis_norm = np.linalg.norm(y_axis)
+    if y_axis_norm <= 1e-6:
+        return estimate_human_orientation(human_joints, joint_names, frame_idx)
+    y_axis = y_axis / y_axis_norm
+
+    rotation_matrix = np.column_stack([x_axis, y_axis, z_axis])
+    assert np.linalg.det(rotation_matrix) > 0
+    rotation = R.from_matrix(rotation_matrix)
+    return rotation.as_quat(scalar_first=True)

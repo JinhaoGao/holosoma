@@ -459,6 +459,8 @@ class MotionDataConfig:
     # Use str instead of Literal to allow dynamic robot types
     robot_type: str = "g1"
     robot_defaults: dict[str, RobotDefaults] = field(default_factory=_default_robot_defaults)
+    human_height: float | None = None
+    """Optional subject height in meters. Overrides the data-format default height."""
 
     def __post_init__(self) -> None:
         """Validate data_format and robot_type."""
@@ -515,6 +517,8 @@ class MotionDataConfig:
     @property
     def default_human_height(self) -> float | None:
         """Get default human height for this data format (None if not applicable)."""
+        if self.human_height is not None:
+            return self.human_height
         format_constants: FormatConstants = DATA_FORMAT_CONSTANTS.get(self.data_format, {})
         return format_constants.get("default_human_height")
 

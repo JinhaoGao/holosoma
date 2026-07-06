@@ -534,6 +534,7 @@ class InteractionMeshRetargeter:
         obj_pts_list = []  # original size object pts
         interaction_source_vertices_w_list = []
         interaction_target_vertices_w_list = []
+        mapped_robot_joints_w_list = []
         collect_interaction_mesh = self.save_interaction_mesh or (self.visualize and self.show_interaction_mesh)
         interaction_mesh_handle_list: list[object] = []
 
@@ -622,10 +623,11 @@ class InteractionMeshRetargeter:
                     n_iter=50 if i == 0 else 10,
                     frame_idx=i,
                 )
-                if self.debug or collect_interaction_mesh:
-                    robot_link_positions = self._get_robot_link_positions(
-                        q, self.laplacian_match_links.values()
-                    )  # 15 X 3
+
+                robot_link_positions = self._get_robot_link_positions(
+                    q, self.laplacian_match_links.values()
+                )  # n_mapped_links X 3
+                mapped_robot_joints_w_list.append(robot_link_positions.astype(np.float32))
                 if collect_interaction_mesh:
                     if source_vertices_w is None:
                         raise RuntimeError("Expected source interaction mesh vertices to be materialized")
@@ -695,6 +697,7 @@ class InteractionMeshRetargeter:
             "human_joint_names": np.asarray(self.demo_joints, dtype=str),
             "mapped_human_joints": human_joint_motions[:, self.smplh_mapped_joint_indices],
             "mapped_human_joint_names": np.asarray(mapped_human_joint_names, dtype=str),
+            "mapped_robot_joints": np.asarray(mapped_robot_joints_w_list, dtype=np.float32),
             "mapped_robot_link_names": np.asarray(list(self.laplacian_match_links.values()), dtype=str),
             "fps": 30,
             "cost": cost,

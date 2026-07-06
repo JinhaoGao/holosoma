@@ -14,6 +14,7 @@ import sys
 # Add src to path for direct execution
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -172,8 +173,6 @@ def process_single_task(args):
 
     # Task-specific object setup: set default object_dir for climbing if not provided
     if task_type == "climbing" and task_config.object_dir is None:
-        from dataclasses import replace
-
         task_config = replace(task_config, object_dir=Path(file_path))
 
     constants = create_task_constants(robot_config, motion_data_config, task_config, task_type)
@@ -326,7 +325,7 @@ def main(cfg: ParallelRetargetingConfig) -> None:
         cfg.robot_config = RobotConfig(robot_type=robot)
 
     if cfg.motion_data_config.robot_type != robot or cfg.motion_data_config.data_format != data_format:
-        cfg.motion_data_config = MotionDataConfig(data_format=data_format, robot_type=robot)
+        cfg.motion_data_config = replace(cfg.motion_data_config, data_format=data_format, robot_type=robot)
 
     if task_type == "robot_only":
         files = find_files(data_dir, data_format)

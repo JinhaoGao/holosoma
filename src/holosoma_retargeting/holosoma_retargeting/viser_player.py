@@ -43,6 +43,7 @@ def load_npz(npz_path: str):
     metadata = {
         "human_joint_names": _npz_string_list(data, "human_joint_names"),
         "mapped_human_joint_names": _npz_string_list(data, "mapped_human_joint_names"),
+        "mapped_robot_joints": data["mapped_robot_joints"] if "mapped_robot_joints" in data else None,
         "mapped_robot_link_names": _npz_string_list(data, "mapped_robot_link_names"),
     }
     interaction_mesh = _load_interaction_mesh_npz(data)
@@ -231,6 +232,7 @@ class MappedSkeletonOverlay:
         robot_xml_path: Path,
         point_radius: float,
         line_width: float,
+        mapped_robot_joints: np.ndarray | None = None,
     ) -> None:
         self.server = server
         self.human_joints = np.asarray(human_joints)
@@ -239,6 +241,9 @@ class MappedSkeletonOverlay:
         self.human_joint_names = list(joints_mapping.keys())
         self.robot_link_names = list(joints_mapping.values())
         self.human_joint_indices = [demo_joints.index(name) for name in self.human_joint_names]
+        self.mapped_robot_joints = (
+            np.asarray(mapped_robot_joints, dtype=np.float32) if mapped_robot_joints is not None else None
+        )
         self.mapped_edges = _mapped_skeleton_edges(self.human_joint_names)
         self.line_width = float(line_width)
         self.visible = True
@@ -277,7 +282,7 @@ class MappedSkeletonOverlay:
 
             self._clear_locked()
             human_points = self._human_points(frame_float)
-            robot_points = self._robot_points(q)
+            robot_points = self._robot_points(q, frame_float)
             self._handles.extend(
                 [
                     self._draw_points("/overlays/mapped/human_kpts", human_points, color=(0, 0, 255)),
@@ -315,7 +320,10 @@ class MappedSkeletonOverlay:
         human_frame = _interpolate_sequence(self.human_joints, frame_float)
         return np.asarray(human_frame[self.human_joint_indices], dtype=np.float32)
 
-    def _robot_points(self, q: np.ndarray) -> np.ndarray:
+    def _robot_points(self, q: np.ndarray, frame_float: float) -> np.ndarray:
+        if self.mapped_robot_joints is not None:
+            return np.asarray(_interpolate_sequence(self.mapped_robot_joints, frame_float), dtype=np.float32)
+
         q = np.asarray(q, dtype=float)
         model_q = np.zeros(self.robot_model.nq, dtype=float)
         if q.shape[0] >= self.robot_model.nq:
@@ -449,7 +457,7 @@ def _build_mapped_skeleton_overlay(
     config: ViserConfig,
     server: viser.ViserServer,
     human_joints: np.ndarray | None,
-    npz_metadata: dict[str, list[str] | None],
+    npz_metadata: dict[str, object],
 ) -> MappedSkeletonOverlay | None:
     if not config.show_mapped_skeletons:
         return None
@@ -465,9 +473,10 @@ def _build_mapped_skeleton_overlay(
     robot_type = _resolve_robot_type(config)
     saved_demo_joints = npz_metadata.get("human_joint_names")
     saved_mapped_human_joint_names = npz_metadata.get("mapped_human_joint_names")
+    saved_mapped_robot_joints = npz_metadata.get("mapped_robot_joints")
     saved_mapped_robot_link_names = npz_metadata.get("mapped_robot_link_names")
 
-    if saved_demo_joints is not None and len(saved_demo_joints) == human_joints.shape[1]:
+    if isinstance(saved_demo_joints, list) and len(saved_demo_joints) == human_joints.shape[1]:
         demo_joints = saved_demo_joints
         data_format = config.data_format or "saved"
     else:
@@ -478,8 +487,8 @@ def _build_mapped_skeleton_overlay(
         demo_joints = motion_data_config.resolved_demo_joints
 
     if (
-        saved_mapped_human_joint_names is not None
-        and saved_mapped_robot_link_names is not None
+        isinstance(saved_mapped_human_joint_names, list)
+        and isinstance(saved_mapped_robot_link_names, list)
         and len(saved_mapped_human_joint_names) == len(saved_mapped_robot_link_names)
     ):
         joints_mapping = dict(zip(saved_mapped_human_joint_names, saved_mapped_robot_link_names))
@@ -499,6 +508,13 @@ def _build_mapped_skeleton_overlay(
         robot_xml_path=robot_xml_path,
         point_radius=config.skeleton_point_radius,
         line_width=config.skeleton_line_width,
+        mapped_robot_joints=(
+            np.asarray(saved_mapped_robot_joints)
+            if saved_mapped_robot_joints is not None
+            and np.asarray(saved_mapped_robot_joints).ndim == 3
+            and np.asarray(saved_mapped_robot_joints).shape[1] == len(joints_mapping)
+            else None
+        ),
     )
     print(
         "[viser_player] Mapped skeleton overlay enabled | "
@@ -542,7 +558,7 @@ def make_player(
     qpos: np.ndarray,
     human_joints: np.ndarray | None = None,
     fps: int | None = None,
-    npz_metadata: dict[str, list[str] | None] | None = None,
+    npz_metadata: dict[str, object] | None = None,
     interaction_mesh: dict[str, np.ndarray | int] | None = None,
 ):
     """
