@@ -242,6 +242,30 @@ done
 与正常 LAFAN 转换流程一样，先按上面的安装说明准备被忽略的本地
 `data_utils/lafan1` helper。
 
+如果文件名中的 `160` 只是名义身高，可以通过
+`--motion-data-config.human-height` 覆盖 `.npz` 中记录的身高。每次实验请使用
+独立的 `--save-dir`，避免覆盖不同缩放结果。例如批量测试 1.50–1.70 m：
+
+```bash
+for height in 1.50 1.55 1.60 1.65 1.70; do
+  tag=${height/./}
+  python examples/parallel_robot_retarget.py \
+    --robot e1 \
+    --data-dir demo_data/noetix_lafan/260713_hurdle \
+    --task-type robot_only \
+    --data-format noetix_lafan \
+    --task-config.object-name ground \
+    --task-config.ground-range -10 10 \
+    --motion-data-config.human-height "$height" \
+    --save-dir "demo_results/e1/robot_only/noetix_lafan/260713_hurdle_h${tag}" \
+    --retargeter.foot-sticking-tolerance 0.02 \
+    --max-workers 4
+done
+```
+
+E1 的缩放系数为 `1.4 / human_height`；因此上面 5 组对应约
+`0.9333, 0.9032, 0.8750, 0.8485, 0.8235`。批处理输出文件名会带 `_original.npz`。
+
 ### 2. 单条 Noetix BVH 重定向到 E1
 
 ```bash

@@ -248,7 +248,11 @@ def load_motion_data(
             human_joints = human_data["global_joint_positions"].copy()
             spine_joint_idx = constants.DEMO_JOINTS.index("Spine1")
             human_joints[:, spine_joint_idx, -1] -= 0.06
-            human_height = float(human_data["height"])
+            human_height = motion_data_config.human_height
+            if human_height is None:
+                human_height = float(human_data["height"])
+            if human_height <= 0:
+                raise ValueError(f"human_height must be positive, got {human_height}")
             smpl_scale = constants.ROBOT_HEIGHT / human_height
         elif data_format == "smplx":
             npz_file = data_path / f"{task_name}.npz"
