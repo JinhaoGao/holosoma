@@ -8,6 +8,7 @@ import sys
 from argparse import ArgumentParser
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import numpy as np
 
@@ -59,6 +60,43 @@ NOETIX_FULLBODY_SPINE_MAPPING = {
 
 NOETIX_LAFAN22_MAPPING = NOETIX_FULLBODY_SPINE_MAPPING.copy()
 
+# Some Noetix exports use the same full-body layout but omit the third spine
+# joint and call the toe joints ``*ToeBase``.  Keep the LAFAN left/right tensor
+# convention used by the other mappings above.  ``Spine2`` is synthesized
+# halfway between source ``Spine1`` and ``Neck`` after selecting the joints.
+NOETIX_FULLBODY_REDUCED_SPINE_MAPPING = {
+    **NOETIX_FULLBODY_CHEST_MAPPING,
+    "RightToeBase": "LeftToeBase",
+    "LeftToeBase": "RightToeBase",
+    "Spine": "Spine",
+    "Spine1": "Spine1",
+    "Spine2": "Neck",
+}
+
+NOETIX_FULLBODY_REDUCED_SPINE_JOINTS = {
+    "Hips",
+    "Spine",
+    "Spine1",
+    "Neck",
+    "Head",
+    "LeftUpLeg",
+    "LeftLeg",
+    "LeftFoot",
+    "LeftToeBase",
+    "RightUpLeg",
+    "RightLeg",
+    "RightFoot",
+    "RightToeBase",
+    "LeftShoulder",
+    "LeftArm",
+    "LeftForeArm",
+    "LeftHand",
+    "RightShoulder",
+    "RightArm",
+    "RightForeArm",
+    "RightHand",
+}
+
 NOETIX_RUN23_MAPPING = {
     "Hips": "Hips",
     "RightUpLeg": "LeftHip",
@@ -91,6 +129,9 @@ def classify_bvh(joint_names: list[str]) -> tuple[str, dict[str, str]]:
     if {"LeftHip", "RightHip", "Chest4", "LeftWrist", "RightWrist"} <= names:
         return "run23_yxz", NOETIX_RUN23_MAPPING
 
+    if NOETIX_FULLBODY_REDUCED_SPINE_JOINTS <= names and "Spine2" not in names:
+        return "fullbody_reduced_spine_zyx", NOETIX_FULLBODY_REDUCED_SPINE_MAPPING
+
     if "FZLeftThumb1" in names or "LeftHandPalm" in names:
         if "Spine" in names:
             return "fullbody57_spine_zyx", NOETIX_FULLBODY_SPINE_MAPPING
@@ -119,6 +160,17 @@ def select_canonical_joints(
 
     indices = [source_idx[mapping[name]] for name in NOETIX_LAFAN_DEMO_JOINTS]
     return positions_y_up[:, indices, :]
+
+
+def synthesize_reduced_spine2(canonical_positions_y_up: np.ndarray) -> np.ndarray:
+    """Insert a stable third spine landmark for Noetix's two-spine layout."""
+    canonical_positions_y_up = canonical_positions_y_up.copy()
+    joint_idx = {name: idx for idx, name in enumerate(NOETIX_LAFAN_DEMO_JOINTS)}
+    canonical_positions_y_up[:, joint_idx["Spine2"]] = 0.5 * (
+        canonical_positions_y_up[:, joint_idx["Spine1"]]
+        + canonical_positions_y_up[:, joint_idx["Neck"]]
+    )
+    return canonical_positions_y_up
 
 
 def transform_y_up_to_z_up(points: np.ndarray) -> np.ndarray:
@@ -177,10 +229,45 @@ def apply_lafan_root_orientation_hint(
 
 
 def source_height_from_filename(path: Path) -> float | None:
-    match = re.search(r"(?:^|_)(\d{3})__", path.name)
+    # Both ``..._160__...`` and ``..._160_000_...`` occur in Noetix exports.
+    match = re.search(r"(?:^|_)(\d{3})(?=_|$)", path.stem)
     if match is None:
         return None
-    return float(match.group(1)) / 100.0
+    height_cm = int(match.group(1))
+    # Avoid treating a sequence ordinal such as ``_001_`` as a human height.
+    if not 120 <= height_cm <= 230:
+        return None
+    return height_cm / 100.0
+
+
+def read_bvh_with_normalized_motion_rows(bvh_path: Path):
+    """Read a BVH after normalizing its motion-row whitespace.
+
+    The upstream LAFAN reader splits motion rows on a literal single space.
+    Noetix BVHs commonly contain repeated spaces (and a trailing blank row),
+    which otherwise produces empty numeric tokens.  Normalize only rows after
+    ``Frame Time`` so the hierarchy and channel ordering remain untouched.
+    """
+    temp_path: Path | None = None
+    try:
+        with NamedTemporaryFile(mode="w", suffix=".bvh", encoding="utf-8", delete=False) as temp_file:
+            temp_path = Path(temp_file.name)
+            motion_rows = False
+            for line in bvh_path.read_text(errors="replace").splitlines():
+                if motion_rows:
+                    fields = line.split()
+                    if fields:
+                        temp_file.write(" ".join(fields) + "\n")
+                    continue
+
+                temp_file.write(line + "\n")
+                if line.lstrip().startswith("Frame Time:"):
+                    motion_rows = True
+
+        return extract.read_bvh(str(temp_path))
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 def read_source_fps(path: Path) -> float:
@@ -229,11 +316,13 @@ def convert_file(
     target_fps: float,
     drop_jump_threshold_m: float,
 ) -> None:
-    anim = extract.read_bvh(str(bvh_path))
+    anim = read_bvh_with_normalized_motion_rows(bvh_path)
     _, global_positions_cm = utils.quat_fk(anim.quats, anim.pos, anim.parents)
     source_type, mapping = classify_bvh(anim.bones)
 
     canonical_y_up_m = select_canonical_joints(global_positions_cm / 100.0, anim.bones, mapping)
+    if source_type == "fullbody_reduced_spine_zyx":
+        canonical_y_up_m = synthesize_reduced_spine2(canonical_y_up_m)
     canonical_z_up_m = transform_y_up_to_z_up(canonical_y_up_m)
     canonical_z_up_m, dropped_initial_frame = drop_initial_jump(canonical_z_up_m, drop_jump_threshold_m)
     canonical_z_up_m = recenter_xy(canonical_z_up_m)

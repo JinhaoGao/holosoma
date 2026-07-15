@@ -212,6 +212,36 @@ python data_utils/convert_noetix_bvh.py \
 
 输出：`demo_data/noetix_lafan/<sequence>.npz`。
 
+#### 260713 hurdle BVH（E1）
+
+`260713_hurdle` 的 5 个 BVH 是 240 Hz 的 reduced-spine Noetix 导出：它们使用
+`Spine` / `Spine1`、`LeftToeBase` / `RightToeBase` 和重复空格分隔的 motion rows。
+转换器会规范化这些 row，并在 `Spine1` 与 `Neck` 之间插值 canonical `Spine2`。
+
+```bash
+python data_utils/convert_noetix_bvh.py \
+  --input-dir /path/to/260713_hurdle \
+  --output-dir demo_data/noetix_lafan/260713_hurdle \
+  --target-fps 30
+
+for sequence in Barrior_ZST_160_000_Skeleton Barrior_ZST_160_001_Skeleton \
+                Barrior_ZST_160_002_Skeleton Barrior_ZST_160_003_Skeleton \
+                Barrior_ZST_160_Skeleton; do
+  python examples/robot_retarget.py \
+    --robot e1 \
+    --data_path demo_data/noetix_lafan/260713_hurdle \
+    --task-type robot_only \
+    --task-name "$sequence" \
+    --data_format noetix_lafan \
+    --task-config.ground-range -10 10 \
+    --save_dir demo_results/e1/robot_only/noetix_lafan/260713_hurdle \
+    --retargeter.foot-sticking-tolerance 0.02
+done
+```
+
+与正常 LAFAN 转换流程一样，先按上面的安装说明准备被忽略的本地
+`data_utils/lafan1` helper。
+
 ### 2. 单条 Noetix BVH 重定向到 E1
 
 ```bash
