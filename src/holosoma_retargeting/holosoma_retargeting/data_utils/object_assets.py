@@ -255,3 +255,40 @@ def create_omomo_object_scene(
     destination = destination_dir / f"{robot_xml.stem}_w_{object_name}{scale_suffix}.xml"
     tree.write(destination, encoding="utf-8", xml_declaration=True)
     return destination
+
+
+def create_scaled_omomo_object_urdf(
+    object_name: str,
+    scale: tuple[float, float, float],
+    *,
+    models_root: str | Path | None = None,
+    output_dir: str | Path | None = None,
+) -> Path:
+    """Create a cached URDF whose visual and collision meshes use ``scale``."""
+
+    asset = get_omomo_object_asset(object_name, models_root=models_root)
+    validate_omomo_object_asset(asset, verify_hash=False)
+    scale_value = _scale_text(scale)
+    if scale_value == "1 1 1":
+        return asset.urdf_path
+
+    destination_dir = (
+        Path(output_dir).expanduser().resolve()
+        if output_dir is not None
+        else asset.mesh_path.parent / "generated"
+    )
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / (
+        f"{object_name}_scaled_{scale[0]:g}_{scale[1]:g}_{scale[2]:g}.urdf"
+    )
+
+    tree = ET.parse(asset.urdf_path)  # noqa: S314
+    mesh_reference = asset.mesh_path.resolve().as_posix()
+    mesh_elements = tree.getroot().findall(".//mesh")
+    if not mesh_elements:
+        raise ValueError(f"OMOMO object URDF contains no mesh elements: {asset.urdf_path}")
+    for mesh in mesh_elements:
+        mesh.set("filename", mesh_reference)
+        mesh.set("scale", scale_value)
+    tree.write(destination, encoding="utf-8", xml_declaration=True)
+    return destination

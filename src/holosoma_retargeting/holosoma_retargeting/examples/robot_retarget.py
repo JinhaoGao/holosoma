@@ -16,7 +16,6 @@ from types import SimpleNamespace
 from typing import Literal
 
 import numpy as np
-import trimesh
 import tyro
 
 src_root = Path(__file__).resolve().parents[2]
@@ -33,6 +32,12 @@ from holosoma_retargeting.data_utils.motion_data import (  # noqa: E402
     load_human_motion,
     validate_motion_task,
 )
+from holosoma_retargeting.data_utils.object_assets import (  # noqa: E402
+    create_omomo_object_scene,
+    create_scaled_omomo_object_urdf,
+    get_omomo_object_asset,
+)
+from holosoma_retargeting.data_utils.omomo import parse_omomo_sequence_name  # noqa: E402
 from holosoma_retargeting.src.interaction_mesh_retargeter import (  # noqa: E402
     InteractionMeshRetargeter,  # type: ignore[import-not-found]
 )
@@ -41,8 +46,6 @@ from holosoma_retargeting.src.utils import (  # noqa: E402
     create_new_scene_xml_file,
     create_scaled_multi_boxes_urdf,
     create_scaled_multi_boxes_xml,
-    create_scaled_object_mesh_and_urdf,
-    create_scaled_object_scene_xml,
     estimate_human_orientation,
     estimate_mocap_foot_orientation,
     estimate_smpl_orientation,
@@ -82,6 +85,34 @@ _AUGMENTATION_TRANSLATION = np.array([0.2, 0.0, 0.0])
 # Type aliases
 TaskType = Literal["robot_only", "object_interaction", "climbing"]
 # ----------------------------- Helper Functions -----------------------------
+
+
+def resolve_task_object_name(
+    task_type: str,
+    data_format: str,
+    task_name: str,
+    explicit_object_name: str | None,
+) -> str:
+    """Resolve the object category and reject sequence/config mismatches."""
+
+    if task_type == "robot_only":
+        return explicit_object_name or "ground"
+    if task_type == "climbing":
+        return explicit_object_name or "multi_boxes"
+    if task_type != "object_interaction":
+        raise ValueError(f"Unknown task type: {task_type}")
+    if data_format != "omomo":
+        if explicit_object_name is None:
+            raise ValueError("Object-interaction tasks require an explicit object name for non-OMOMO data")
+        return explicit_object_name
+
+    sequence_object = parse_omomo_sequence_name(task_name).object_name
+    if explicit_object_name is not None and explicit_object_name != sequence_object:
+        raise ValueError(
+            f"OMOMO task {task_name!r} contains object {sequence_object!r}, "
+            f"but task_config.object_name is {explicit_object_name!r}"
+        )
+    return sequence_object
 
 
 def create_task_constants(
@@ -127,10 +158,13 @@ def create_task_constants(
         task_constants.OBJECT_MESH_FILE = None
     elif task_type == "object_interaction":
         obj_name = task_config.object_name or "largebox"
+        object_asset = get_omomo_object_asset(obj_name)
         task_constants.OBJECT_NAME = obj_name
-        task_constants.OBJECT_URDF_FILE = f"models/{obj_name}/{obj_name}.urdf"
-        task_constants.OBJECT_MESH_FILE = f"models/{obj_name}/{obj_name}.obj"
-        task_constants.OBJECT_URDF_TEMPLATE = f"models/templates/{obj_name}.urdf.jinja"
+        task_constants.OBJECT_URDF_FILE = str(object_asset.urdf_path)
+        task_constants.OBJECT_MESH_FILE = str(object_asset.mesh_path)
+        task_constants.OBJECT_URDF_TEMPLATE = str(
+            object_asset.mesh_path.parent.parent / "templates" / "omomo_object.urdf.jinja"
+        )
         task_constants.SCENE_XML_FILE = ""
     elif task_type == "climbing":
         obj_name = task_config.object_name or "multi_boxes"
@@ -281,26 +315,27 @@ def setup_object_data(
         if object_scale.shape != (3,) or np.any(object_scale <= 0):
             raise ValueError(f"object_scale must contain three positive values, got {task_config.object_scale}")
 
-        constants.SCENE_XML_FILE = ""
-        object_urdf_file = constants.OBJECT_URDF_FILE
         object_local_pts = object_local_pts * object_scale
-        if not np.allclose(object_scale, np.ones(3)):
-            scale_factors = tuple(float(value) for value in object_scale)
-            mesh = trimesh.load(constants.OBJECT_MESH_FILE, force="mesh")
-            generated_dir = Path(constants.OBJECT_MESH_FILE).parent / "generated"
-            object_urdf_file = create_scaled_object_mesh_and_urdf(
-                scale_factors,
-                np.asarray(mesh.vertices),
-                np.asarray(mesh.faces),
-                np.eye(3),
-                constants.OBJECT_URDF_TEMPLATE,
-                save_dir=str(generated_dir),
+        scale_factors = tuple(float(value) for value in object_scale)
+        models_root = Path(constants.OBJECT_MESH_FILE).parent.parent
+        object_urdf_file = create_scaled_omomo_object_urdf(
+            constants.OBJECT_NAME,
+            scale_factors,
+            models_root=models_root,
+        )
+        robot_xml_file = Path(constants.ROBOT_URDF_FILE).with_suffix(".xml")
+        if not robot_xml_file.is_absolute():
+            robot_xml_file = Path(__file__).resolve().parents[1] / robot_xml_file
+        constants.SCENE_XML_FILE = str(
+            create_omomo_object_scene(
+                robot_xml_file,
+                constants.OBJECT_NAME,
+                scale=scale_factors,
+                models_root=models_root,
             )
+        )
 
-            scene_xml_file = constants.ROBOT_URDF_FILE.replace(".urdf", f"_w_{constants.OBJECT_NAME}.xml")
-            constants.SCENE_XML_FILE = create_scaled_object_scene_xml(scene_xml_file, scale_factors)
-
-        return object_local_pts, object_local_pts_demo, object_urdf_file
+        return object_local_pts, object_local_pts_demo, str(object_urdf_file)
 
     if task_type == "climbing":
         if object_dir is None:
@@ -606,6 +641,14 @@ def main(cfg: RetargetingConfig) -> None:
 
     if cfg.motion_data_config.robot_type != robot or cfg.motion_data_config.data_format != data_format:
         cfg.motion_data_config = replace(cfg.motion_data_config, data_format=data_format, robot_type=robot)
+
+    resolved_object_name = resolve_task_object_name(
+        task_type,
+        data_format,
+        task_name,
+        cfg.task_config.object_name,
+    )
+    cfg.task_config = replace(cfg.task_config, object_name=resolved_object_name)
 
     # Task-specific object setup: set default object_dir for climbing if not provided
     if task_type == "climbing" and cfg.task_config.object_dir is None:

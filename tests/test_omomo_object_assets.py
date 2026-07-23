@@ -20,6 +20,7 @@ if str(PACKAGE_ROOT) not in sys.path:
 from holosoma_retargeting.data_utils.object_assets import (  # noqa: E402
     OMOMO_MESH_SHA256,
     create_omomo_object_scene,
+    create_scaled_omomo_object_urdf,
     default_models_root,
     get_all_omomo_object_assets,
     validate_all_omomo_object_assets,
@@ -100,6 +101,18 @@ class OmomoObjectSceneTests(unittest.TestCase):
             mesh = root.find("./asset/mesh[@name='smallbox_mesh']")
             self.assertIsNotNone(mesh)
             self.assertEqual(mesh.get("scale"), "0.5 1 1.5")
+
+            urdf_path = create_scaled_omomo_object_urdf(
+                "smallbox",
+                (0.5, 1.0, 1.5),
+                models_root=models_root,
+                output_dir=tmpdir,
+            )
+            urdf_root = ET.parse(urdf_path).getroot()  # noqa: S314
+            urdf_meshes = urdf_root.findall(".//mesh")
+            self.assertEqual(len(urdf_meshes), 2)
+            self.assertTrue(all(item.get("scale") == "0.5 1 1.5" for item in urdf_meshes))
+            yourdfpy.URDF.load(urdf_path)
 
 
 if __name__ == "__main__":

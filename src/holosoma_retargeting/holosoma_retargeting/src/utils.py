@@ -83,6 +83,13 @@ def load_object_data(
             points = weighted_surface_sampling(obj_mesh, sample_count, surface_weights, seed)
     else:
         points, _ = trimesh.sample.sample_surface_even(obj_mesh, sample_count, seed=seed)
+        if len(points) < sample_count:
+            supplemental_points, _ = trimesh.sample.sample_surface(
+                obj_mesh,
+                sample_count - len(points),
+                seed=seed + 1,
+            )
+            points = np.concatenate([points, supplemental_points], axis=0)
 
     points = np.array(points)
     points_scaled = points * smpl_scale
