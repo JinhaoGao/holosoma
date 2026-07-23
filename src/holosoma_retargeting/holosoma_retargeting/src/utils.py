@@ -734,7 +734,7 @@ def create_new_scene_xml_file(
     with open(ori_scene_xml_path) as f:
         content = f.read()
 
-    new_asset = new_object_asset_xml_path.split("/")[-1]
+    new_asset = new_object_asset_xml_path.rsplit("/", maxsplit=1)[-1]
     pattern = r'file="box_assets\.xml"'
     replacement = f'file="{new_asset}"'
     content = re.sub(pattern, replacement, content)
@@ -773,7 +773,10 @@ def extract_foot_sticking_sequence_velocity(smpl_joints, demo_joints, foot_names
     right_toe_velocity = np.concatenate([[velocity_threshold + 1], right_toe_velocity])
 
     return [
-        {"L_Toe": left_toe_velocity[i] <= velocity_threshold, "R_Toe": right_toe_velocity[i] <= velocity_threshold}
+        {
+            foot_names[0]: left_toe_velocity[i] <= velocity_threshold,
+            foot_names[1]: right_toe_velocity[i] <= velocity_threshold,
+        }
         for i in range(len(smpl_joints))
     ]
 
@@ -879,6 +882,24 @@ def estimate_human_orientation(human_joints, joint_names, frame_idx=0):
     assert np.linalg.det(rotation_matrix) > 0
     rotation = R.from_matrix(rotation_matrix)
     return rotation.as_quat(scalar_first=True)
+
+
+def estimate_smpl_orientation(human_joints, joint_names, frame_idx=0):
+    """Estimate a Z-up SMPL-family root orientation from the hip axis."""
+
+    left_hip_idx = joint_names.index("L_Hip")
+    right_hip_idx = joint_names.index("R_Hip")
+    left_axis = human_joints[frame_idx, left_hip_idx] - human_joints[frame_idx, right_hip_idx]
+    left_axis[2] = 0.0
+    norm = np.linalg.norm(left_axis)
+    if norm <= 1e-6:
+        raise ValueError("Cannot estimate SMPL-X orientation from coincident hip joints")
+    left_axis /= norm
+    up_axis = np.array([0.0, 0.0, 1.0])
+    forward_axis = np.cross(left_axis, up_axis)
+    forward_axis /= np.linalg.norm(forward_axis)
+    rotation_matrix = np.column_stack([forward_axis, left_axis, up_axis])
+    return R.from_matrix(rotation_matrix).as_quat(scalar_first=True)
 
 
 def estimate_mocap_foot_orientation(human_joints, joint_names, frame_idx=0):

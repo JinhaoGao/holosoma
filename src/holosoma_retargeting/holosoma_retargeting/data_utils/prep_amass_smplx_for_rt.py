@@ -1,324 +1,234 @@
+"""Convert raw AMASS SMPL-X sequences to the unified retargeting NPZ format."""
+
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import torch
 import tyro
-from human_body_prior.body_model.body_model import BodyModel  # type: ignore[import-not-found]
+from holosoma_retargeting.config_types.data_type import AMASS_DEMO_JOINTS
+from holosoma_retargeting.data_utils.smplx_model import (
+    compute_smplx_height,
+    create_smplx_model,
+    forward_smplx_model,
+)
+from scipy.spatial.transform import Rotation
+
+DEFAULT_SMPLX_MODEL_DIR = Path(__file__).resolve().parents[1] / "models" / "smplx"
 
 
-def load_ori_npz_file(npz_file_path, dest_fps=30):
-    """
-    >>> import numpy as np
-    >>> data = np.load("Jog_1_stageii.npz")
-    >>> data.files
-    ['gender', 'surface_model_type', 'mocap_frame_rate', 'mocap_time_length',
-    'markers_latent', 'latent_labels', 'markers_latent_vids',
-    'trans', 'poses', 'betas', 'num_betas',
-    'root_orient', 'pose_body', 'pose_hand', 'pose_jaw', 'pose_eye']
-    """
-    data = np.load(npz_file_path)
-    ori_fps = data["mocap_frame_rate"]
+@dataclass(frozen=True)
+class AMASSParameters:
+    """Validated and resampled SMPL-X parameters from one AMASS sequence."""
 
-    downsample_ratio = int(ori_fps / dest_fps)
+    transl: torch.Tensor
+    global_orient: torch.Tensor
+    body_pose: torch.Tensor
+    betas: torch.Tensor
+    source_fps: float
+    fps: float
 
-    return {
-        "gender": data["gender"],
-        "fps": dest_fps,
-        "trans": data["trans"][::downsample_ratio],
-        "poses": data["poses"][::downsample_ratio],
-        "betas": data["betas"],
-        "num_betas": data["num_betas"],
-        "root_orient": data["root_orient"][::downsample_ratio],
-        "pose_body": data["pose_body"][::downsample_ratio],
-        "pose_hand": data["pose_hand"][::downsample_ratio],
-        "pose_jaw": data["pose_jaw"][::downsample_ratio],
-        "pose_eye": data["pose_eye"][::downsample_ratio],
-    }
+    @property
+    def num_frames(self) -> int:
+        return int(self.body_pose.shape[0])
 
 
-def run_smplx_model(
-    root_trans,
-    aa_rot_rep,
-    betas,
-    gender,
-    bm_dict,
-):
-    # root_trans: BS X T X 3
-    # aa_rot_rep: BS X T X 22 X 3
-    # betas: BS X 16
-    # gender: BS
-    bs, num_steps, num_joints, _ = aa_rot_rep.shape
-    if num_joints != 52:
-        padding_zeros_hand = torch.zeros(bs, num_steps, 30, 3).to(aa_rot_rep.device)  # BS X T X 30 X 3
-        aa_rot_rep = torch.cat((aa_rot_rep, padding_zeros_hand), dim=2)  # BS X T X 52 X 3
-
-    aa_rot_rep = aa_rot_rep.reshape(bs * num_steps, -1, 3)  # (BS*T) X n_joints X 3
-
-    betas = betas[:, None, :].repeat(1, num_steps, 1).reshape(bs * num_steps, -1)  # (BS*T) X 16
-    gender = np.asarray(gender)[:, np.newaxis].repeat(num_steps, axis=1)
-    gender = gender.reshape(-1).tolist()  # (BS*T)
-
-    smpl_trans = root_trans.reshape(-1, 3)  # (BS*T) X 3
-    smpl_betas = betas  # (BS*T) X 16
-    smpl_root_orient = aa_rot_rep[:, 0, :]  # (BS*T) X 3
-    smpl_pose_body = aa_rot_rep[:, 1:22, :].reshape(-1, 63)  # (BS*T) X 63
-    smpl_pose_hand = aa_rot_rep[:, 22:, :].reshape(-1, 90)  # (BS*T) X 90
-
-    B = smpl_trans.shape[0]  # (BS*T)
-
-    smpl_vals = [
-        smpl_trans,
-        smpl_root_orient,
-        smpl_betas,
-        smpl_pose_body,
-        smpl_pose_hand,
-    ]
-    # batch may be a mix of genders, so need to carefully use the corresponding SMPL body model
-    # gender_names = ["male", "female", "neutral"]
-    gender_names = ["neutral"]  # We use neutral gender for all the data in G1 setting
-    pred_joints = []
-    pred_verts = []
-    prev_nbidx = 0
-    cat_idx_map = np.ones((B), dtype=np.int64) * -1
-    for gender_name in gender_names:
-        gender_idx = np.array(gender) == gender_name
-        nbidx = np.sum(gender_idx)
-
-        cat_idx_map[gender_idx] = np.arange(prev_nbidx, prev_nbidx + nbidx, dtype=np.int64)
-        prev_nbidx += nbidx
-
-        gender_smpl_vals = [val[gender_idx] for val in smpl_vals]
-
-        if nbidx == 0:
-            # skip if no frames for this gender
-            continue
-
-        # reconstruct SMPL
-        (
-            cur_pred_trans,
-            cur_pred_orient,
-            cur_betas,
-            cur_pred_pose,
-            cur_pred_pose_hand,
-        ) = gender_smpl_vals
-        bm = bm_dict[gender_name]
-
-        pred_body = bm(
-            pose_body=cur_pred_pose,
-            pose_hand=cur_pred_pose_hand,
-            betas=cur_betas,
-            root_orient=cur_pred_orient,
-            trans=cur_pred_trans,
-        )
-
-        pred_joints.append(pred_body.Jtr)
-        pred_verts.append(pred_body.v)
-
-    x_pred_smpl_joints = torch.cat(pred_joints, axis=0)  # () X 52 X 3
-
-    x_pred_smpl_joints = x_pred_smpl_joints[cat_idx_map]  # (BS*T) X 22 X 3
-
-    x_pred_smpl_verts = torch.cat(pred_verts, axis=0)
-    x_pred_smpl_verts = x_pred_smpl_verts[cat_idx_map]  # (BS*T) X 6890 X 3
-
-    x_pred_smpl_joints = x_pred_smpl_joints.reshape(bs, num_steps, -1, 3)  # BS X T X 22 X 3/BS X T X 24 X 3
-    x_pred_smpl_verts = x_pred_smpl_verts.reshape(bs, num_steps, -1, 3)  # BS X T X 6890 X 3
-
-    mesh_faces = pred_body.f
-
-    return x_pred_smpl_joints, x_pred_smpl_verts, mesh_faces
+@dataclass(frozen=True)
+class ConvertedAMASSMotion:
+    global_joint_positions: np.ndarray
+    root_quaternions_wxyz: np.ndarray
+    height: float
+    source_fps: float
+    fps: float
 
 
-def prep_smplx_model(model_root_folder):
-    # Prepare SMPLX model
-    support_base_dir = model_root_folder
-    surface_model_type = "smplx"
-    surface_model_male_fname = os.path.join(support_base_dir, surface_model_type, "SMPLX_MALE.npz")
-    surface_model_female_fname = os.path.join(support_base_dir, surface_model_type, "SMPLX_FEMALE.npz")
-    surface_model_neutral_fname = os.path.join(support_base_dir, surface_model_type, "SMPLX_NEUTRAL.npz")
-    dmpl_fname = None
-    num_dmpls = None
-    num_expressions = None
-    num_betas = 16
-
-    male_bm = BodyModel(
-        bm_fname=surface_model_male_fname,
-        num_betas=num_betas,
-        num_expressions=num_expressions,
-        num_dmpls=num_dmpls,
-        dmpl_fname=dmpl_fname,
-    )
-    female_bm = BodyModel(
-        bm_fname=surface_model_female_fname,
-        num_betas=num_betas,
-        num_expressions=num_expressions,
-        num_dmpls=num_dmpls,
-        dmpl_fname=dmpl_fname,
-    )
-    neutral_bm = BodyModel(
-        bm_fname=surface_model_neutral_fname,
-        num_betas=num_betas,
-        num_expressions=num_expressions,
-        num_dmpls=num_dmpls,
-        dmpl_fname=dmpl_fname,
-    )
-    return {
-        "male": male_bm,
-        "female": female_bm,
-        "neutral": neutral_bm,
-    }
+def _finite_array(data: np.lib.npyio.NpzFile, key: str, dtype=np.float32) -> np.ndarray:
+    if key not in data:
+        raise KeyError(f"AMASS file is missing required field {key!r}")
+    value = np.asarray(data[key], dtype=dtype)
+    if not np.isfinite(value).all():
+        raise ValueError(f"AMASS field {key!r} contains NaN or Inf")
+    return value
 
 
-def compute_height(bm_dict, betas, gender):
-    """
-    Compute height by running SMPLX model in T-pose and measuring vertex height.
+def _resample_indices(num_frames: int, source_fps: float, target_fps: float) -> np.ndarray:
+    if not np.isfinite(source_fps) or source_fps <= 0:
+        raise ValueError(f"AMASS source FPS must be positive and finite, got {source_fps}")
+    if not np.isfinite(target_fps) or target_fps <= 0 or target_fps > source_fps:
+        raise ValueError(f"Target FPS must be in (0, {source_fps}], got {target_fps}")
+    sample_times = np.arange(0.0, num_frames / source_fps, 1.0 / target_fps)
+    return np.unique(np.minimum(np.rint(sample_times * source_fps).astype(np.int64), num_frames - 1))
 
-    Args:
-        bm_dict: Dictionary of BodyModel instances
-        betas: Shape parameters (1, 16) or (16,)
-        gender: Gender string ('male' or 'female')
 
-    Returns:
-        float: Height in meters (max_z - min_z of vertices)
-    """
-    rest_root_trans = torch.zeros(1, 1, 3)
-    rest_poses = torch.zeros(1, 1, 52, 3)
-    rest_jnts, rest_verts, mesh_faces = run_smplx_model(
-        root_trans=rest_root_trans, aa_rot_rep=rest_poses, betas=betas, gender=gender, bm_dict=bm_dict
+def load_amass_parameters(input_file: Path | str, fps: float = 30.0) -> AMASSParameters:
+    """Load one raw ``*_stageii.npz`` sequence and resample it."""
+
+    input_path = Path(input_file).expanduser()
+    if not input_path.is_file():
+        raise FileNotFoundError(f"AMASS input file not found: {input_path}")
+
+    with np.load(input_path, allow_pickle=False) as data:
+        transl = _finite_array(data, "trans")
+        poses = _finite_array(data, "poses")
+        betas = _finite_array(data, "betas").reshape(-1)
+        source_fps = float(np.asarray(data["mocap_frame_rate"]).item())
+
+    if transl.ndim != 2 or transl.shape[1] != 3:
+        raise ValueError(f"AMASS trans must have shape (T, 3), got {transl.shape}")
+    if poses.ndim != 2 or poses.shape[0] != transl.shape[0] or poses.shape[1] < 66:
+        raise ValueError(f"AMASS poses must have shape (T, >=66), got {poses.shape}")
+    if transl.shape[0] == 0 or betas.size == 0:
+        raise ValueError("AMASS sequence must contain frames and shape coefficients")
+
+    indices = _resample_indices(transl.shape[0], source_fps, fps)
+    frame_betas = np.broadcast_to(betas, (indices.size, betas.size)).copy()
+    return AMASSParameters(
+        transl=torch.from_numpy(transl[indices]),
+        global_orient=torch.from_numpy(poses[indices, :3]),
+        body_pose=torch.from_numpy(poses[indices, 3:66]),
+        betas=torch.from_numpy(frame_betas),
+        source_fps=source_fps,
+        fps=float(fps),
     )
 
-    rest_jnts = rest_jnts.squeeze(0).squeeze(0).detach().cpu().numpy()
-    rest_verts = rest_verts.squeeze(0).squeeze(0).detach().cpu().numpy()
 
-    # Compute height as max_y - min_y
-    # (Use y because it seems when root orientation is 0, the SMPL model is not standing along z axis)
-    min_z = np.min(rest_verts[:, 1])
-    max_z = np.max(rest_verts[:, 1])
+def convert_amass_parameters(
+    parameters: AMASSParameters,
+    model_path: Path | str,
+    batch_size: int = 128,
+) -> ConvertedAMASSMotion:
+    """Run batched SMPL-X FK and preserve AMASS's world Z-up frame."""
 
-    return max_z - min_z
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+    body_model = create_smplx_model(model_path, num_betas=parameters.betas.shape[1])
+    joint_batches: list[np.ndarray] = []
+    with torch.no_grad():
+        for start in range(0, parameters.num_frames, batch_size):
+            end = min(parameters.num_frames, start + batch_size)
+            output = forward_smplx_model(
+                body_model,
+                betas=parameters.betas[start:end],
+                global_orient=parameters.global_orient[start:end],
+                body_pose=parameters.body_pose[start:end],
+                transl=parameters.transl[start:end],
+            )
+            joint_batches.append(output.joints[:, : len(AMASS_DEMO_JOINTS)].cpu().numpy())
+        height = compute_smplx_height(body_model, parameters.betas)
+
+    joints = np.concatenate(joint_batches, axis=0).astype(np.float32, copy=False)
+    root_quaternions = Rotation.from_rotvec(parameters.global_orient.numpy()).as_quat(scalar_first=True)
+    if not np.isfinite(height) or height <= 0:
+        raise ValueError(f"Computed invalid SMPL-X height: {height}")
+    return ConvertedAMASSMotion(
+        global_joint_positions=joints,
+        root_quaternions_wxyz=root_quaternions.astype(np.float32),
+        height=height,
+        source_fps=parameters.source_fps,
+        fps=parameters.fps,
+    )
 
 
-def get_npz_files(amass_root_folder, subdataset_folder=None):
-    """
-    Get all npz files from the amass root folder.
+def save_converted_amass(
+    motion: ConvertedAMASSMotion,
+    output_file: Path | str,
+    source_file: Path | str,
+    overwrite: bool = False,
+) -> Path:
+    output_path = Path(output_file).expanduser()
+    if output_path.exists() and not overwrite:
+        raise FileExistsError(f"Output already exists: {output_path}")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        output_path,
+        global_joint_positions=motion.global_joint_positions,
+        height=np.float32(motion.height),
+        source_fps=np.float32(motion.source_fps),
+        fps=np.float32(motion.fps),
+        joint_names=np.asarray(AMASS_DEMO_JOINTS, dtype=str),
+        root_quaternions_wxyz=motion.root_quaternions_wxyz,
+        source_format=np.asarray("amass"),
+        coordinate_system=np.asarray("right_handed_z_up"),
+        source_file=np.asarray(str(Path(source_file).expanduser().resolve())),
+    )
+    return output_path
 
-    Args:
-        amass_root_folder: Root folder containing AMASS SMPLX npz files
-        subdataset_folder: Optional subdataset folder name. If specified, only loads
-            npz files from amass_root_folder/subdataset_folder/*/*.npz.
-            If None, loads from amass_root_folder/**/*.npz (recursive).
 
-    Returns:
-        List of npz file paths
-    """
-    amass_path = Path(amass_root_folder)
-    if subdataset_folder is not None:
-        # Load from amass_root_folder/subdataset_folder/*/*.npz
-        search_path = amass_path / subdataset_folder
-        npz_files = [str(p) for p in search_path.rglob("*_stageii.npz")]
-    else:
-        # Load from amass_root_folder/**/*.npz (recursive)
-        npz_files = [str(p) for p in amass_path.rglob("*_stageii.npz")]
-    return npz_files
+def convert_amass_file(
+    input_file: Path | str,
+    output_file: Path | str,
+    model_path: Path | str = DEFAULT_SMPLX_MODEL_DIR,
+    fps: float = 30.0,
+    batch_size: int = 128,
+    overwrite: bool = False,
+) -> Path:
+    parameters = load_amass_parameters(input_file, fps=fps)
+    motion = convert_amass_parameters(parameters, model_path=model_path, batch_size=batch_size)
+    return save_converted_amass(motion, output_file, input_file, overwrite=overwrite)
+
+
+def get_amass_files(amass_root: Path, subdataset: str | None = None) -> list[Path]:
+    search_root = amass_root / subdataset if subdataset else amass_root
+    if not search_root.is_dir():
+        raise FileNotFoundError(f"AMASS data directory not found: {search_root}")
+    return sorted(search_root.rglob("*_stageii.npz"))
+
+
+def output_name(input_file: Path, amass_root: Path) -> str:
+    relative = input_file.relative_to(amass_root)
+    return "_".join(relative.parts)
 
 
 @dataclass
 class Config:
-    """Configuration for processing AMASS SMPLX data."""
+    amass_root_folder: Path
+    """Root containing raw AMASS ``*_stageii.npz`` files."""
 
-    amass_root_folder: str = "/home/ubuntu/datasets/rt_ori_human_data/amass-smplx"
-    """Root folder containing AMASS SMPLX npz files."""
+    output_folder: Path
+    """Directory for converted retargeting NPZ files."""
 
-    output_folder: str = "/home/ubuntu/datasets/rt_processed_data/amass-smplx-processed"
-    """Output folder for processed data."""
-
-    model_root_folder: str = "/home/ubuntu/datasets/rt_ori_human_data/smpl_all_models"
-    """Root folder containing SMPLX model files."""
+    model_root_folder: Path = DEFAULT_SMPLX_MODEL_DIR
+    """SMPL-X model file, ``smplx`` directory, or its parent."""
 
     subdataset_folder: str | None = None
-    """Optional subdataset folder name. If specified, only loads npz files from
-    amass_root_folder/subdataset_folder/*/*.npz. If None, loads from
-    amass_root_folder/**/*.npz (recursive)."""
+    """Optional AMASS subdataset directory."""
+
+    fps: float = 30.0
+    """Output FPS."""
+
+    batch_size: int = 128
+    """Frames per SMPL-X forward pass."""
+
+    overwrite: bool = False
+    """Replace converted files that already exist."""
 
 
-def main(cfg: Config):
-    # Get all the npz file paths in the amass-smplx folder
-    npz_file_paths = get_npz_files(cfg.amass_root_folder, cfg.subdataset_folder)
+def main(config: Config) -> None:
+    files = get_amass_files(config.amass_root_folder, config.subdataset_folder)
+    if not files:
+        raise FileNotFoundError(f"No *_stageii.npz files found under {config.amass_root_folder}")
 
-    # Prepare desired output folder
-    os.makedirs(cfg.output_folder, exist_ok=True)
-
-    bm_dict = prep_smplx_model(cfg.model_root_folder)
-
-    num_body_joints = 22
-    for npz_file_path in npz_file_paths:
-        data = load_ori_npz_file(npz_file_path)
-        gender = data["gender"]
-        betas = data["betas"]  # 16
-        root_trans = data["trans"]  # T X 3
-        aa_rot_rep = data["poses"]  # T X 165 (55*3)
-        aa_rot_52 = aa_rot_rep.reshape(-1, 55, 3)[:, :52, :]  # T X 52 X 3
-
-        # Convert numpy to tensor
-        root_trans = torch.from_numpy(root_trans).float()[None]  # 1 X T X 3
-        aa_rot_52 = torch.from_numpy(aa_rot_52).float()[None]  # 1 X T X 52 X 3
-        betas = torch.from_numpy(betas).float()[None]  # 1 X 16
-
-        # Run FK to obtain global joint positions and global joint rotations
-        global_joint_positions, global_joint_verts, mesh_faces = run_smplx_model(
-            root_trans=root_trans, aa_rot_rep=aa_rot_52, betas=betas, gender=[gender], bm_dict=bm_dict
+    converted = 0
+    skipped = 0
+    for input_file in files:
+        destination = config.output_folder / output_name(input_file, config.amass_root_folder)
+        if destination.exists() and not config.overwrite:
+            skipped += 1
+            continue
+        convert_amass_file(
+            input_file,
+            destination,
+            model_path=config.model_root_folder,
+            fps=config.fps,
+            batch_size=config.batch_size,
+            overwrite=config.overwrite,
         )
-
-        global_joint_positions = (
-            global_joint_positions.squeeze(0).detach().cpu().numpy()[:, :num_body_joints, :]
-        )  # T X 55 X 3
-
-        # Compute height based on min_z and max_z value of all the vertices
-        height = compute_height(bm_dict, betas, gender=[gender])
-        print(f"Height: {height}")
-
-        # Save the processed data to the output folder
-        npz_path = Path(npz_file_path)
-        subset_data_name = npz_path.parts[-3]
-        sub_name = npz_path.parts[-2]
-        output_file_path = os.path.join(cfg.output_folder, subset_data_name + "_" + sub_name + "_" + npz_path.name)
-        np.savez(output_file_path, global_joint_positions=global_joint_positions, height=height)
-        print(f"Saved processed data to {output_file_path}")
-
-        # break
-
-    print("All data processed successfully")
+        converted += 1
+        print(f"Converted: {input_file} -> {destination}")
+    print(f"AMASS conversion complete: converted={converted}, skipped={skipped}")
 
 
 if __name__ == "__main__":
-    cfg = tyro.cli(Config)
-    main(cfg)
-
-"""
-    "pelvis",
-    "left_hip",
-    "right_hip",
-    "spine1",
-    "left_knee",
-    "right_knee",
-    "spine2",
-    "left_ankle",
-    "right_ankle",
-    "spine3",
-    "left_foot",
-    "right_foot",
-    "neck",
-    "left_collar",
-    "right_collar",
-    "head",
-    "left_shoulder",
-    "right_shoulder",
-    "left_elbow",
-    "right_elbow",
-    "left_wrist",
-    "right_wrist",
-"""
+    main(tyro.cli(Config))

@@ -30,7 +30,7 @@ class RetargetingConfig:
     data_format: str | None = None
     """Motion data format. Auto-determined by task_type if None.
     Can be any format registered in DEMO_JOINTS_REGISTRY
-    (e.g., 'lafan', 'smplh', 'mocap', 'smplx', or custom formats)."""
+    (amass, lafan, omomo, noetix_mocap, gvhmr, or mocap)."""
 
     task_name: str = "sub3_largebox_003"
     """Name of the task/sequence."""
@@ -50,7 +50,7 @@ class RetargetingConfig:
     via --robot-config.robot-urdf-file)."""
 
     motion_data_config: MotionDataConfig = field(
-        default_factory=lambda: MotionDataConfig(data_format="smplh", robot_type="g1")
+        default_factory=lambda: MotionDataConfig(data_format="omomo", robot_type="g1")
     )
     """Motion data configuration (nested - can override demo_joints, joints_mapping, etc.
     via --motion-data-config.demo-joints).

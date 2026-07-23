@@ -138,11 +138,15 @@ class MotionLoader:
     def _load_motion(self):
         """Loads the motion from the csv file."""
         if self.motion_file.endswith(".npz"):
-            data = np.load(self.motion_file)
-            self.input_fps = round(1 / data.get("fps", 1 / self.input_fps))
-            motion = torch.from_numpy(data["qpos"]).to(torch.float32)
+            with np.load(self.motion_file, allow_pickle=False) as data:
+                if "fps" in data:
+                    self.input_fps = float(np.asarray(data["fps"]).item())
+                motion = torch.from_numpy(data["qpos"]).to(torch.float32)
         else:
-            raise ValueError("Unsupported motion file format. Use .csv or .npz.")
+            raise ValueError("Unsupported motion file format. Use .npz.")
+        if not np.isfinite(self.input_fps) or self.input_fps <= 0:
+            raise ValueError(f"Input FPS must be positive and finite, got {self.input_fps}")
+        self.input_dt = 1.0 / self.input_fps
 
         if self.line_range is not None:
             start, end = self.line_range

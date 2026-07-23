@@ -81,7 +81,7 @@ class DataConversionConfig:
     robot: str = "g1"
     """Robot model to use. Use str to allow dynamic robot types."""
 
-    data_format: str = "smplh"
+    data_format: str = "omomo"
     """Motion data format. Use str to allow dynamic data formats."""
 
     object_name: str | None = None
@@ -114,7 +114,7 @@ class DataConversionConfig:
     via --robot-config.robot-urdf-file)."""
 
     motion_data_config: MotionDataConfig = field(
-        default_factory=lambda: MotionDataConfig(data_format="smplh", robot_type="g1")
+        default_factory=lambda: MotionDataConfig(data_format="omomo", robot_type="g1")
     )
     """Motion data configuration (nested - can override data_format, robot_type, etc.
     via --motion-data-config.data-format)."""

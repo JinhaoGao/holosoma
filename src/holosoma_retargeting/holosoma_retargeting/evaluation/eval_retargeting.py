@@ -24,21 +24,15 @@ import tyro
 src_root = Path(__file__).resolve().parents[2]
 if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
-from holosoma_retargeting.config_types.data_type import (  # noqa: E402
-    SMPLH_DEMO_JOINTS,
-    MotionDataConfig,
-)
+from holosoma_retargeting.config_types.data_type import MotionDataConfig, normalize_data_format  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 from holosoma_retargeting.src.mujoco_utils import _world_mesh_from_geom  # type: ignore[import-not-found]  # noqa: E402
 from holosoma_retargeting.src.utils import (  # type: ignore[import-not-found]  # noqa: E402
-    calculate_scale_factor,
     create_new_scene_xml_file,
     create_scaled_multi_boxes_xml,
     extract_foot_sticking_sequence_velocity,
     load_intermimic_data,
-    preprocess_motion_data,
     transform_points_world_to_local,
-    transform_y_up_to_z_up,
 )
 
 
@@ -60,6 +54,8 @@ def create_task_constants(
     # Copy legacy constants from motion data config
     for attr, value in motion_data_config.legacy_constants().items():
         setattr(namespace, attr, value)
+    namespace.ROBOT_TYPE = robot_config.robot_type
+    namespace.SOURCE_DATA_FORMAT = motion_data_config.data_format
 
     # Override or supplement object information if requested
     if object_name is not None:
@@ -372,7 +368,7 @@ class RetargetingEvaluator:
 
         return 1 - np.sum(worst_miss_contact) / len(q_trajectory)
 
-    def detect_foot_sliding(self, q_trajectory, contact_sequences):
+    def detect_foot_sliding(self, q_trajectory, contact_sequences, toe_names):
         """
         Detect foot sliding during contact phases.
 
@@ -384,12 +380,11 @@ class RetargetingEvaluator:
             dict: Foot sliding metrics
         """
 
+        robot_toe_links = [self.joints_mapping[toe_name] for toe_name in toe_names]
         left_toe_positions = []
         right_toe_positions = []
         for q in q_trajectory:
-            toe_positions = self._get_robot_link_positions(
-                q, ["left_ankle_roll_sphere_5_link", "right_ankle_roll_sphere_5_link"]
-            )
+            toe_positions = self._get_robot_link_positions(q, robot_toe_links)
             left_toe_positions.append(toe_positions[0])
             right_toe_positions.append(toe_positions[1])
 
@@ -401,8 +396,12 @@ class RetargetingEvaluator:
         left_toe_xy_velocities = np.concatenate([[0], left_toe_xy_velocities])
         right_toe_xy_velocities = np.concatenate([[0], right_toe_xy_velocities])
 
-        left_foot_sticking_sequence = np.array([contact_sequence["L_Toe"] for contact_sequence in contact_sequences])
-        right_foot_sticking_sequence = np.array([contact_sequence["R_Toe"] for contact_sequence in contact_sequences])
+        left_foot_sticking_sequence = np.array(
+            [contact_sequence[toe_names[0]] for contact_sequence in contact_sequences]
+        )
+        right_foot_sticking_sequence = np.array(
+            [contact_sequence[toe_names[1]] for contact_sequence in contact_sequences]
+        )
 
         left_foot_sliding_sequence = left_foot_sticking_sequence & (left_toe_xy_velocities > self.sliding_threshold)
         right_foot_sliding_sequence = right_foot_sticking_sequence & (right_toe_xy_velocities > self.sliding_threshold)
@@ -445,7 +444,9 @@ class RetargetingEvaluator:
         human_joints, object_poses = load_intermimic_data(f"{input_data_dir}/{task_name}.pt")
         contact_sequences = extract_foot_sticking_sequence_velocity(human_joints, self.demo_joints, ["L_Toe", "R_Toe"])
         sliding_duration, max_toe_sliding_velocities = self.detect_foot_sliding(
-            q_retarget, contact_sequences[: q_retarget.shape[0]]
+            q_retarget,
+            contact_sequences[: q_retarget.shape[0]],
+            ["L_Toe", "R_Toe"],
         )
 
         contact_results = self.evaluate_contact_precision(human_joints, object_poses, q_retarget)
@@ -550,7 +551,9 @@ class RetargetingEvaluator:
             human_joints, self.demo_joints, ["LeftToeBase", "RightToeBase"]
         )
         sliding_duration, max_toe_sliding_velocities = self.detect_foot_sliding(
-            q_retarget, contact_sequences[: q_retarget.shape[0]]
+            q_retarget,
+            contact_sequences[: q_retarget.shape[0]],
+            ["LeftToeBase", "RightToeBase"],
         )
 
         contact_results = self.evaluate_terrain_contact_precision(human_joints, q_retarget)
@@ -566,62 +569,33 @@ class RetargetingEvaluator:
             "opt_cost": opt_cost,
         }
 
-    def evaluate_robot_only_trajectory(self, task_name, data_dir, input_data_dir):
+    def evaluate_robot_only_trajectory(self, data_dir):
         """
         Evaluate a complete retargeting trajectory.
 
         Args:
-            task_name: Name of the task/sequence
             data_dir: Path to retargeting result file (.npz)
-            input_data_dir: Path to input data directory
-
         Returns:
             dict: Complete evaluation results
         """
-        try:
-            rt_res_data = np.load(f"{data_dir}", allow_pickle=True)
-            q_retarget = rt_res_data["qpos"]
-        except (OSError, KeyError, ValueError):
-            return None
+        with np.load(data_dir, allow_pickle=False) as rt_res_data:
+            q_retarget = np.asarray(rt_res_data["qpos"])
+            if "human_joints" not in rt_res_data or "human_joint_names" not in rt_res_data:
+                raise KeyError("Retargeting result is missing saved human skeleton data")
+            human_joints = np.asarray(rt_res_data["human_joints"], dtype=np.float32)
+            demo_joints_for_contact = [str(name) for name in rt_res_data["human_joint_names"].tolist()]
+            source_format = (
+                str(np.asarray(rt_res_data["source_data_format"]).item())
+                if "source_data_format" in rt_res_data
+                else self.constants.SOURCE_DATA_FORMAT
+            )
+            opt_cost = np.asarray(rt_res_data["cost"])
         penetration_duration, penetration_max_depths = self.evaluate_penetration(q_retarget)
 
-        # Determine data format by checking file existence
-        data_name = task_name.split("_original")[0]
-        npy_path = Path(input_data_dir) / f"{data_name}.npy"
-        pt_path = Path(input_data_dir) / f"{data_name}.pt"
-
-        # Determine data format and toe names based on file extension
-        if pt_path.exists():
-            # OMOMO (smplh) data format
-            toe_names = ["L_Toe", "R_Toe"]
-            human_joints, _ = load_intermimic_data(str(pt_path))
-            smpl_scale = calculate_scale_factor(data_name, self.constants.ROBOT_HEIGHT)
-
-            # For smplh data, we need to use smplh demo_joints for contact extraction
-            # Check if toe names are in current demo_joints
-            if all(toe in self.demo_joints for toe in toe_names):
-                # Use current demo_joints
-                demo_joints_for_contact = self.demo_joints
-                human_joints = preprocess_motion_data(human_joints, self, toe_names, smpl_scale)
-            else:
-                # Use smplh demo_joints for contact extraction
-                demo_joints_for_contact = SMPLH_DEMO_JOINTS
-                # Just scale without normalization (smplh data doesn't need height normalization)
-                human_joints = human_joints * smpl_scale
-        elif npy_path.exists():
-            # LAFAN data format
-            toe_names = ["LeftToeBase", "RightToeBase"]
-            human_joints = np.load(str(npy_path))
-            human_joints = transform_y_up_to_z_up(human_joints)
-            spine_joint_idx = self.demo_joints.index("Spine1")
-            # LAFAN-specific spine adjustment
-            human_joints[:, spine_joint_idx, -1] -= 0.06
-            smpl_scale = getattr(self.constants, "DEFAULT_SCALE_FACTOR", None) or 1.0
-
-            human_joints = preprocess_motion_data(human_joints, self, toe_names, smpl_scale)
-            demo_joints_for_contact = self.demo_joints
-        else:
-            raise FileNotFoundError(f"Neither {npy_path} nor {pt_path} found for task {data_name}")
+        toe_names = MotionDataConfig(
+            data_format=source_format,
+            robot_type=self.constants.ROBOT_TYPE,
+        ).toe_names
 
         contact_sequences = extract_foot_sticking_sequence_velocity(
             human_joints,
@@ -629,10 +603,10 @@ class RetargetingEvaluator:
             toe_names,
         )
         sliding_duration, max_toe_sliding_velocities = self.detect_foot_sliding(
-            q_retarget, contact_sequences[: q_retarget.shape[0]]
+            q_retarget,
+            contact_sequences[: q_retarget.shape[0]],
+            toe_names,
         )
-
-        opt_cost = rt_res_data["cost"]
 
         return {
             "penetration_duration": penetration_duration,
@@ -700,7 +674,7 @@ def _evaluate_single_task(
     if data_type == "robot_object":
         return task_name, evaluator.evaluate_trajectory(task_name, data_path, input_data_dir)
     if data_type == "robot_only":
-        return task_name, evaluator.evaluate_robot_only_trajectory(task_name, data_path, input_data_dir)
+        return task_name, evaluator.evaluate_robot_only_trajectory(data_path)
     if data_type == "robot_terrain":
         return task_name, evaluator.evaluate_robot_terrain_trajectory(task_name, data_path, input_data_dir)
     raise ValueError(f"Invalid data type: {data_type}")
@@ -738,18 +712,18 @@ class Args:
     # Nested configs for overrides
     robot_config: RobotConfig = field(default_factory=lambda: RobotConfig(robot_type="g1"))
     motion_data_config: MotionDataConfig = field(
-        default_factory=lambda: MotionDataConfig(data_format="smplh", robot_type="g1")
+        default_factory=lambda: MotionDataConfig(data_format="omomo", robot_type="g1")
     )
 
 
 def main(cfg: Args) -> None:
     default_data_formats = {
-        "robot_object": "smplh",
-        "robot_only": "smplh",
+        "robot_object": "omomo",
+        "robot_only": "omomo",
         "robot_terrain": "mocap",
     }
 
-    data_format = cfg.data_format or default_data_formats[cfg.data_type]
+    data_format = normalize_data_format(cfg.data_format or default_data_formats[cfg.data_type])
 
     # Ensure configs match top-level selections
     if cfg.robot_config.robot_type != cfg.robot:

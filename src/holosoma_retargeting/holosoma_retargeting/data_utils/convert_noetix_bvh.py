@@ -18,16 +18,13 @@ for path in (src_root, data_utils_root):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from holosoma_retargeting.config_types.data_type import NOETIX_LAFAN_DEMO_JOINTS  # noqa: E402
+from holosoma_retargeting.config_types.data_type import NOETIX_MOCAP_DEMO_JOINTS  # noqa: E402
 from lafan1 import extract, utils  # type: ignore[import-not-found] # noqa: E402
-
 
 NOETIX_FULLBODY_CHEST_MAPPING = {
     "Hips": "Hips",
-    # Match the existing LAFAN retargeting tensor convention. LAFAN BVH files
-    # store left-side joints before right-side joints, while LAFAN_DEMO_JOINTS
-    # names the right side first. This looks inverted, but it is the convention
-    # used by the known-good LAFAN retargeting path.
+    # Normalize the company BVH exports into the Noetix 22-joint tensor order.
+    # The source export's left/right labels are inverted relative to that order.
     "RightUpLeg": "LeftUpLeg",
     "RightLeg": "LeftLeg",
     "RightFoot": "LeftFoot",
@@ -58,12 +55,11 @@ NOETIX_FULLBODY_SPINE_MAPPING = {
     "Spine2": "Spine2",
 }
 
-NOETIX_LAFAN22_MAPPING = NOETIX_FULLBODY_SPINE_MAPPING.copy()
+NOETIX_22_JOINT_MAPPING = NOETIX_FULLBODY_SPINE_MAPPING.copy()
 
 # Some Noetix exports use the same full-body layout but omit the third spine
-# joint and call the toe joints ``*ToeBase``.  Keep the LAFAN left/right tensor
-# convention used by the other mappings above.  ``Spine2`` is synthesized
-# halfway between source ``Spine1`` and ``Neck`` after selecting the joints.
+# joint and call the toe joints ``*ToeBase``. ``Spine2`` is synthesized halfway
+# between source ``Spine1`` and ``Neck`` after selecting the joints.
 NOETIX_FULLBODY_REDUCED_SPINE_MAPPING = {
     **NOETIX_FULLBODY_CHEST_MAPPING,
     "RightToeBase": "LeftToeBase",
@@ -129,7 +125,7 @@ def classify_bvh(joint_names: list[str]) -> tuple[str, dict[str, str]]:
     if {"LeftHip", "RightHip", "Chest4", "LeftWrist", "RightWrist"} <= names:
         return "run23_yxz", NOETIX_RUN23_MAPPING
 
-    if NOETIX_FULLBODY_REDUCED_SPINE_JOINTS <= names and "Spine2" not in names:
+    if names >= NOETIX_FULLBODY_REDUCED_SPINE_JOINTS and "Spine2" not in names:
         return "fullbody_reduced_spine_zyx", NOETIX_FULLBODY_REDUCED_SPINE_MAPPING
 
     if "FZLeftThumb1" in names or "LeftHandPalm" in names:
@@ -138,7 +134,7 @@ def classify_bvh(joint_names: list[str]) -> tuple[str, dict[str, str]]:
         return "fullbody57_chest_zyx", NOETIX_FULLBODY_CHEST_MAPPING
 
     if {"LeftUpLeg", "RightUpLeg", "Spine", "Spine1", "Spine2", "LeftToe", "RightToe"} <= names:
-        return "lafan22_zyx", NOETIX_LAFAN22_MAPPING
+        return "noetix22_zyx", NOETIX_22_JOINT_MAPPING
 
     raise ValueError(f"Unsupported BVH skeleton. Joints: {joint_names}")
 
@@ -151,24 +147,23 @@ def select_canonical_joints(
     source_idx = {name: idx for idx, name in enumerate(source_joint_names)}
     missing = [
         source_name
-        for canonical_name in NOETIX_LAFAN_DEMO_JOINTS
+        for canonical_name in NOETIX_MOCAP_DEMO_JOINTS
         for source_name in [mapping[canonical_name]]
         if source_name not in source_idx
     ]
     if missing:
         raise ValueError(f"Missing source joints for canonical conversion: {missing}")
 
-    indices = [source_idx[mapping[name]] for name in NOETIX_LAFAN_DEMO_JOINTS]
+    indices = [source_idx[mapping[name]] for name in NOETIX_MOCAP_DEMO_JOINTS]
     return positions_y_up[:, indices, :]
 
 
 def synthesize_reduced_spine2(canonical_positions_y_up: np.ndarray) -> np.ndarray:
     """Insert a stable third spine landmark for Noetix's two-spine layout."""
     canonical_positions_y_up = canonical_positions_y_up.copy()
-    joint_idx = {name: idx for idx, name in enumerate(NOETIX_LAFAN_DEMO_JOINTS)}
+    joint_idx = {name: idx for idx, name in enumerate(NOETIX_MOCAP_DEMO_JOINTS)}
     canonical_positions_y_up[:, joint_idx["Spine2"]] = 0.5 * (
-        canonical_positions_y_up[:, joint_idx["Spine1"]]
-        + canonical_positions_y_up[:, joint_idx["Neck"]]
+        canonical_positions_y_up[:, joint_idx["Spine1"]] + canonical_positions_y_up[:, joint_idx["Neck"]]
     )
     return canonical_positions_y_up
 
@@ -185,8 +180,8 @@ def normalize_xy(vector: np.ndarray) -> np.ndarray | None:
     return vector[:2] / norm
 
 
-def infer_lafan_forward(positions_z_up: np.ndarray, frame_window: int = 30) -> np.ndarray:
-    joint_idx = {name: idx for idx, name in enumerate(NOETIX_LAFAN_DEMO_JOINTS)}
+def infer_noetix_forward(positions_z_up: np.ndarray, frame_window: int = 30) -> np.ndarray:
+    joint_idx = {name: idx for idx, name in enumerate(NOETIX_MOCAP_DEMO_JOINTS)}
     frame_count = min(frame_window, positions_z_up.shape[0])
     directions = []
     for frame_idx in range(frame_count):
@@ -195,8 +190,7 @@ def infer_lafan_forward(positions_z_up: np.ndarray, frame_window: int = 30) -> n
             ("LeftFoot", "LeftToeBase"),
         ):
             foot_to_toe = (
-                positions_z_up[frame_idx, joint_idx[toe_name], :2]
-                - positions_z_up[frame_idx, joint_idx[foot_name], :2]
+                positions_z_up[frame_idx, joint_idx[toe_name], :2] - positions_z_up[frame_idx, joint_idx[foot_name], :2]
             )
             direction = normalize_xy(foot_to_toe)
             if direction is not None:
@@ -214,14 +208,14 @@ def infer_lafan_forward(positions_z_up: np.ndarray, frame_window: int = 30) -> n
     return np.array([0.0, 1.0])
 
 
-def apply_lafan_root_orientation_hint(
+def apply_noetix_root_orientation_hint(
     positions_z_up: np.ndarray,
     spine_horizontal_offset_m: float = 0.03,
 ) -> np.ndarray:
-    """Make the Hips->Spine horizontal component match LAFAN's facing convention."""
+    """Stabilize the Noetix root-to-spine horizontal facing direction."""
     positions_z_up = positions_z_up.copy()
-    joint_idx = {name: idx for idx, name in enumerate(NOETIX_LAFAN_DEMO_JOINTS)}
-    forward = infer_lafan_forward(positions_z_up)
+    joint_idx = {name: idx for idx, name in enumerate(NOETIX_MOCAP_DEMO_JOINTS)}
+    forward = infer_noetix_forward(positions_z_up)
     hips_idx = joint_idx["Hips"]
     spine_idx = joint_idx["Spine"]
     positions_z_up[:, spine_idx, :2] = positions_z_up[:, hips_idx, :2] - spine_horizontal_offset_m * forward
@@ -279,7 +273,7 @@ def read_source_fps(path: Path) -> float:
 
 
 def estimate_height(positions_z_up: np.ndarray) -> float:
-    joint_idx = {name: idx for idx, name in enumerate(NOETIX_LAFAN_DEMO_JOINTS)}
+    joint_idx = {name: idx for idx, name in enumerate(NOETIX_MOCAP_DEMO_JOINTS)}
     head_z = positions_z_up[:, joint_idx["Head"], 2]
     left_toe_z = positions_z_up[:, joint_idx["LeftToeBase"], 2]
     right_toe_z = positions_z_up[:, joint_idx["RightToeBase"], 2]
@@ -306,7 +300,7 @@ def recenter_xy(positions_z_up: np.ndarray) -> np.ndarray:
 
 
 def downsample(positions: np.ndarray, source_fps: float, target_fps: float) -> tuple[np.ndarray, int, float]:
-    stride = max(1, int(round(source_fps / target_fps)))
+    stride = max(1, round(source_fps / target_fps))
     return positions[::stride], stride, source_fps / stride
 
 
@@ -315,6 +309,7 @@ def convert_file(
     output_dir: Path,
     target_fps: float,
     drop_jump_threshold_m: float,
+    overwrite: bool = False,
 ) -> None:
     anim = read_bvh_with_normalized_motion_rows(bvh_path)
     _, global_positions_cm = utils.quat_fk(anim.quats, anim.pos, anim.parents)
@@ -326,21 +321,26 @@ def convert_file(
     canonical_z_up_m = transform_y_up_to_z_up(canonical_y_up_m)
     canonical_z_up_m, dropped_initial_frame = drop_initial_jump(canonical_z_up_m, drop_jump_threshold_m)
     canonical_z_up_m = recenter_xy(canonical_z_up_m)
-    canonical_z_up_m = apply_lafan_root_orientation_hint(canonical_z_up_m)
+    canonical_z_up_m = apply_noetix_root_orientation_hint(canonical_z_up_m)
 
     source_fps = read_source_fps(bvh_path)
     canonical_z_up_m, stride, output_fps = downsample(canonical_z_up_m, source_fps, target_fps)
 
     height = source_height_from_filename(bvh_path) or estimate_height(canonical_z_up_m)
     output_path = output_dir / f"{bvh_path.stem}.npz"
+    if output_path.exists() and not overwrite:
+        print(f"Skipping existing output: {output_path}")
+        return
     np.savez_compressed(
         output_path,
         global_joint_positions=canonical_z_up_m.astype(np.float32),
         height=np.float32(height),
-        joint_names=np.asarray(NOETIX_LAFAN_DEMO_JOINTS, dtype=str),
+        joint_names=np.asarray(NOETIX_MOCAP_DEMO_JOINTS, dtype=str),
         raw_joint_names=np.asarray(anim.bones, dtype=str),
         source_bvh=str(bvh_path),
+        source_format=np.asarray("noetix_mocap"),
         source_type=source_type,
+        coordinate_system=np.asarray("z_up"),
         source_fps=np.float32(source_fps),
         fps=np.float32(output_fps),
         downsample_stride=np.int32(stride),
@@ -356,9 +356,10 @@ def convert_file(
 @dataclass
 class Config:
     input_dir: Path = Path("demo_data/noetix")
-    output_dir: Path = Path("demo_data/noetix_lafan")
+    output_dir: Path = Path("demo_data/noetix_mocap")
     target_fps: float = 30.0
     drop_jump_threshold_m: float = 2.0
+    overwrite: bool = False
 
 
 def main(cfg: Config) -> None:
@@ -368,7 +369,13 @@ def main(cfg: Config) -> None:
         raise FileNotFoundError(f"No BVH files found in {cfg.input_dir}")
 
     for bvh_path in bvh_files:
-        convert_file(bvh_path, cfg.output_dir, cfg.target_fps, cfg.drop_jump_threshold_m)
+        convert_file(
+            bvh_path,
+            cfg.output_dir,
+            cfg.target_fps,
+            cfg.drop_jump_threshold_m,
+            overwrite=cfg.overwrite,
+        )
 
 
 def parse_args() -> Config:
@@ -377,12 +384,14 @@ def parse_args() -> Config:
     parser.add_argument("--output-dir", type=Path, default=Config.output_dir)
     parser.add_argument("--target-fps", type=float, default=Config.target_fps)
     parser.add_argument("--drop-jump-threshold-m", type=float, default=Config.drop_jump_threshold_m)
+    parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
     return Config(
         input_dir=args.input_dir,
         output_dir=args.output_dir,
         target_fps=args.target_fps,
         drop_jump_threshold_m=args.drop_jump_threshold_m,
+        overwrite=args.overwrite,
     )
 
 

@@ -17,8 +17,8 @@ class ViserConfig:
     qpos_npz: str = "rt_results/OMOMO_new/box_parallel/sub8_largebox_051_original.npz"
     """Path to .npz file with qpos data."""
 
-    robot_urdf: str = "models/g1/g1_29dof.urdf"
-    """Path to robot URDF file."""
+    robot_urdf: str | None = None
+    """Robot URDF. If unset, resolved from metadata saved in the result NPZ."""
 
     robot_mujoco_xml: str | None = None
     """Optional MuJoCo XML path whose joint order matches qpos.
@@ -28,7 +28,7 @@ class ViserConfig:
     """Robot type used to resolve mapped skeleton links. If unset, inferred from robot_urdf parent directory."""
 
     data_format: str | None = None
-    """Motion data format used to resolve mapped skeleton joints, such as smplx, smplh, lafan, or mocap."""
+    """Motion data format used to resolve mapped skeleton joints."""
 
     object_urdf: str | None = None
     """Path to object URDF file (optional)."""
@@ -36,8 +36,8 @@ class ViserConfig:
     fps: int = 30
     """Frames per second for playback."""
 
-    assume_object_in_qpos: bool = True
-    """Whether object pose is included in qpos array."""
+    assume_object_in_qpos: bool | None = None
+    """Whether qpos includes object pose. If unset, resolved from result metadata."""
 
     loop: bool = False
     """Whether to loop playback."""

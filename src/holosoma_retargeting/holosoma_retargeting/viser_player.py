@@ -5,12 +5,14 @@ from __future__ import annotations
 import sys
 import threading
 import time
+from contextlib import suppress
+from dataclasses import replace
 from pathlib import Path
 
 import mujoco  # type: ignore[import-not-found]
 import numpy as np
-import tyro
 import trimesh
+import tyro
 import viser  # type: ignore[import-not-found]  # pip install viser
 import yourdfpy  # type: ignore[import-untyped]  # pip install yourdfpy
 from viser.extras import ViserUrdf  # type: ignore[import-not-found]
@@ -22,7 +24,9 @@ from holosoma_retargeting.config_types.data_type import (  # noqa: E402
     DEMO_JOINTS_REGISTRY,
     JOINTS_MAPPINGS,
     MotionDataConfig,
+    normalize_data_format,
 )
+from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 from holosoma_retargeting.config_types.viser import ViserConfig  # noqa: E402
 from holosoma_retargeting.src.utils import interaction_mesh_edges_from_tetrahedra  # noqa: E402
 from holosoma_retargeting.src.viser_utils import (  # noqa: E402
@@ -35,18 +39,23 @@ from holosoma_retargeting.src.viser_utils import (  # noqa: E402
 
 
 def load_npz(npz_path: str):
-    data = np.load(npz_path, allow_pickle=True)
-    # expected: qpos [T, ?], and optional fps
-    qpos = data["qpos"]
-    fps = int(data["fps"]) if "fps" in data else 30
-    human_joints = data["human_joints"] if "human_joints" in data else None
-    metadata = {
-        "human_joint_names": _npz_string_list(data, "human_joint_names"),
-        "mapped_human_joint_names": _npz_string_list(data, "mapped_human_joint_names"),
-        "mapped_robot_joints": data["mapped_robot_joints"] if "mapped_robot_joints" in data else None,
-        "mapped_robot_link_names": _npz_string_list(data, "mapped_robot_link_names"),
-    }
-    interaction_mesh = _load_interaction_mesh_npz(data)
+    with np.load(npz_path, allow_pickle=False) as data:
+        # expected: qpos [T, ?], and optional fps
+        qpos = data["qpos"]
+        fps = float(data["fps"]) if "fps" in data else 30.0
+        human_joints = data.get("human_joints")
+        metadata = {
+            "human_joint_names": _npz_string_list(data, "human_joint_names"),
+            "mapped_human_joint_names": _npz_string_list(data, "mapped_human_joint_names"),
+            "mapped_robot_joints": data.get("mapped_robot_joints"),
+            "mapped_robot_link_names": _npz_string_list(data, "mapped_robot_link_names"),
+            "source_data_format": _npz_scalar(data, "source_data_format"),
+            "robot_type": _npz_scalar(data, "robot_type"),
+            "object_name": _npz_scalar(data, "object_name"),
+            "object_urdf": _npz_scalar(data, "object_urdf"),
+            "contains_object_in_qpos": _npz_scalar(data, "contains_object_in_qpos"),
+        }
+        interaction_mesh = _load_interaction_mesh_npz(data)
     return qpos, fps, human_joints, metadata, interaction_mesh
 
 
@@ -79,7 +88,39 @@ def _npz_string_list(data, key: str) -> list[str] | None:
     return [str(item) for item in value.tolist()]
 
 
+def _npz_scalar(data, key: str):
+    if key not in data:
+        return None
+    return np.asarray(data[key]).item()
+
+
+def _resolve_runtime_config(config: ViserConfig, metadata: dict[str, object]) -> ViserConfig:
+    robot_type = config.robot_type or metadata.get("robot_type")
+    if robot_type is not None:
+        robot_type = str(robot_type)
+
+    robot_urdf = config.robot_urdf
+    if robot_urdf is None:
+        if robot_type is None:
+            raise ValueError("Result has no robot_type metadata; pass --robot-urdf explicitly.")
+        robot_urdf = RobotConfig(robot_type=robot_type).ROBOT_URDF_FILE
+
+    object_urdf = config.object_urdf
+    saved_object_urdf = metadata.get("object_urdf")
+    if object_urdf is None and saved_object_urdf:
+        object_urdf = str(saved_object_urdf)
+
+    return replace(
+        config,
+        robot_type=robot_type,
+        robot_urdf=robot_urdf,
+        object_urdf=object_urdf,
+    )
+
+
 def _build_qpos_to_viser_joint_indices(config: ViserConfig, viser_joint_names: list[str]):
+    if config.robot_urdf is None:
+        raise ValueError("robot_urdf must be resolved before building the Viser player")
     xml_path = Path(config.robot_mujoco_xml) if config.robot_mujoco_xml else infer_mujoco_xml_path(config.robot_urdf)
     if xml_path is None:
         return None
@@ -93,6 +134,8 @@ def _build_qpos_to_viser_joint_indices(config: ViserConfig, viser_joint_names: l
 
 
 def _resolve_robot_mujoco_xml(config: ViserConfig) -> Path | None:
+    if config.robot_urdf is None:
+        return None
     return Path(config.robot_mujoco_xml) if config.robot_mujoco_xml else infer_mujoco_xml_path(config.robot_urdf)
 
 
@@ -103,15 +146,26 @@ def _mesh_color_override(opacity: float):
     return (0.7, 0.7, 0.7, opacity)
 
 
-def _resolve_robot_type(config: ViserConfig) -> str:
+def _resolve_robot_type(config: ViserConfig, npz_metadata: dict[str, object]) -> str:
     if config.robot_type:
         return config.robot_type
+    if npz_metadata.get("robot_type"):
+        return str(npz_metadata["robot_type"])
+    if config.robot_urdf is None:
+        raise ValueError("Cannot resolve robot type; pass --robot-type or --robot-urdf.")
     return Path(config.robot_urdf).parent.name
 
 
-def _resolve_data_format(config: ViserConfig, human_joints: np.ndarray, robot_type: str) -> str | None:
+def _resolve_data_format(
+    config: ViserConfig,
+    human_joints: np.ndarray,
+    robot_type: str,
+    npz_metadata: dict[str, object],
+) -> str | None:
     if config.data_format:
-        return config.data_format
+        return normalize_data_format(config.data_format)
+    if npz_metadata.get("source_data_format"):
+        return normalize_data_format(str(npz_metadata["source_data_format"]))
 
     n_joints = int(human_joints.shape[1])
     candidates = [
@@ -127,8 +181,7 @@ def _resolve_data_format(config: ViserConfig, human_joints: np.ndarray, robot_ty
 
     if len(candidates) == 1:
         print(
-            f"[viser_player] Inferred data_format={candidates[0]} "
-            f"from human_joints shape and robot_type={robot_type}"
+            f"[viser_player] Inferred data_format={candidates[0]} from human_joints shape and robot_type={robot_type}"
         )
         return candidates[0]
     if len(candidates) > 1:
@@ -147,11 +200,15 @@ def _resolve_data_format(config: ViserConfig, human_joints: np.ndarray, robot_ty
 def _data_format_from_path_hint(path: str) -> str | None:
     normalized = path.lower().replace("\\", "/")
     if "amass_smplx" in normalized or "smplx" in normalized:
-        return "smplx"
+        return "amass"
+    if "gvhmr" in normalized:
+        return "gvhmr"
+    if "noetix" in normalized:
+        return "noetix_mocap"
     if "lafan" in normalized:
         return "lafan"
     if "omomo" in normalized or "smplh" in normalized:
-        return "smplh"
+        return "omomo"
     if "mocap" in normalized or "climb" in normalized:
         return "mocap"
     return None
@@ -265,8 +322,7 @@ class MappedSkeletonOverlay:
             self.robot_body_ids.append(body_id)
         if missing_links:
             raise ValueError(
-                "Mapped skeleton robot links are missing in MuJoCo model "
-                f"{robot_xml_path}: {missing_links}"
+                f"Mapped skeleton robot links are missing in MuJoCo model {robot_xml_path}: {missing_links}"
             )
 
     def set_visible(self, visible: bool) -> None:
@@ -310,10 +366,8 @@ class MappedSkeletonOverlay:
 
     def _clear_locked(self) -> None:
         for handle in self._handles:
-            try:
+            with suppress(Exception):
                 handle.remove()
-            except Exception:
-                pass
         self._handles.clear()
 
     def _human_points(self, frame_float: float) -> np.ndarray:
@@ -427,10 +481,8 @@ class InteractionMeshOverlay:
 
     def _clear_locked(self) -> None:
         for handle in self._handles:
-            try:
+            with suppress(Exception):
                 handle.remove()
-            except Exception:
-                pass
         self._handles.clear()
 
     def _draw_mesh(self, name: str, vertices: np.ndarray, tetrahedra: np.ndarray, color: np.ndarray) -> list[object]:
@@ -470,7 +522,7 @@ def _build_mapped_skeleton_overlay(
         print("[viser_player] --show_mapped_skeletons requested, but robot MuJoCo XML could not be inferred.")
         return None
 
-    robot_type = _resolve_robot_type(config)
+    robot_type = _resolve_robot_type(config, npz_metadata)
     saved_demo_joints = npz_metadata.get("human_joint_names")
     saved_mapped_human_joint_names = npz_metadata.get("mapped_human_joint_names")
     saved_mapped_robot_joints = npz_metadata.get("mapped_robot_joints")
@@ -478,9 +530,9 @@ def _build_mapped_skeleton_overlay(
 
     if isinstance(saved_demo_joints, list) and len(saved_demo_joints) == human_joints.shape[1]:
         demo_joints = saved_demo_joints
-        data_format = config.data_format or "saved"
+        data_format = normalize_data_format(config.data_format) if config.data_format else "saved"
     else:
-        data_format = _resolve_data_format(config, human_joints, robot_type)
+        data_format = _resolve_data_format(config, human_joints, robot_type, npz_metadata)
         if data_format is None:
             return None
         motion_data_config = MotionDataConfig(data_format=data_format, robot_type=robot_type)
@@ -494,7 +546,7 @@ def _build_mapped_skeleton_overlay(
         joints_mapping = dict(zip(saved_mapped_human_joint_names, saved_mapped_robot_link_names))
     else:
         if data_format == "saved":
-            data_format = _resolve_data_format(config, human_joints, robot_type)
+            data_format = _resolve_data_format(config, human_joints, robot_type, npz_metadata)
             if data_format is None:
                 return None
         motion_data_config = MotionDataConfig(data_format=data_format, robot_type=robot_type)
@@ -557,7 +609,7 @@ def make_player(
     config: ViserConfig,
     qpos: np.ndarray,
     human_joints: np.ndarray | None = None,
-    fps: int | None = None,
+    fps: float | None = None,
     npz_metadata: dict[str, object] | None = None,
     interaction_mesh: dict[str, np.ndarray | int] | None = None,
 ):
@@ -582,6 +634,8 @@ def make_player(
     object_mesh_opacity = config.mesh_opacity if config.object_mesh_opacity is None else config.object_mesh_opacity
     robot_mesh_color_override = _mesh_color_override(robot_mesh_opacity)
     object_mesh_color_override = _mesh_color_override(object_mesh_opacity)
+    if config.robot_urdf is None:
+        raise ValueError("robot_urdf must be resolved before building the Viser player")
     robot_urdf_y = yourdfpy.URDF.load(config.robot_urdf, load_meshes=True, build_scene_graph=True)
     vr = ViserUrdf(
         server,
@@ -610,6 +664,14 @@ def make_player(
     joint_limits = vr.get_actuated_joint_limits()
     robot_dof = len(joint_limits)
     qpos_to_viser_joint_indices = _build_qpos_to_viser_joint_indices(config, list(joint_limits.keys()))
+    contains_object_in_qpos = config.assume_object_in_qpos
+    if contains_object_in_qpos is None:
+        saved_contains_object = (npz_metadata or {}).get("contains_object_in_qpos")
+        if saved_contains_object is not None:
+            contains_object_in_qpos = bool(saved_contains_object)
+        else:
+            contains_object_in_qpos = qpos.shape[1] == 7 + robot_dof + 7
+    contains_object_in_qpos = bool(contains_object_in_qpos) and vo is not None
 
     # Use fps from config if not provided, otherwise use the one from npz file
     actual_fps = fps if fps is not None else config.fps
@@ -762,9 +824,9 @@ def make_player(
         robot_base_frame=robot_root,
         motion_sequence=qpos,
         robot_dof=robot_dof,
-        viser_object=vo if config.assume_object_in_qpos else None,
-        object_base_frame=object_root if config.assume_object_in_qpos else None,
-        contains_object_in_qpos=config.assume_object_in_qpos,
+        viser_object=vo if contains_object_in_qpos else None,
+        object_base_frame=object_root if contains_object_in_qpos else None,
+        contains_object_in_qpos=contains_object_in_qpos,
         initial_fps=actual_fps,
         initial_interp_mult=config.visual_fps_multiplier,
         loop=config.loop,
@@ -778,7 +840,7 @@ def make_player(
     n_frames = int(qpos.shape[0])
     print(
         f"[viser_player] Loaded {n_frames} frames | robot_dof={robot_dof} | "
-        f"object={'yes' if (config.object_urdf and config.assume_object_in_qpos) else 'no'}"
+        f"object={'yes' if contains_object_in_qpos else 'no'}"
     )
     print("Open the viewer URL printed above. Close the process (Ctrl+C) to exit.")
     return server
@@ -787,6 +849,7 @@ def make_player(
 def main(cfg: ViserConfig) -> None:
     """Main function for viser player."""
     qpos, fps, human_joints, npz_metadata, interaction_mesh = load_npz(cfg.qpos_npz)
+    cfg = _resolve_runtime_config(cfg, npz_metadata)
     make_player(
         config=cfg,
         qpos=qpos,

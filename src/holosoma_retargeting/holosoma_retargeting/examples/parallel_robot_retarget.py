@@ -1,9 +1,4 @@
-"""
-Unified parallel processing script for retargeting all task types:
-- robot_only: Robot-only retargeting with ground interaction (LAFAN)
-- object_interaction: Object manipulation retargeting (InterMimic)
-- climbing: Climbing retargeting with dynamic terrain (MOCAP)
-"""
+"""Parallel entry point for all registered motion formats and task types."""
 
 from __future__ import annotations
 
@@ -13,6 +8,7 @@ import sys
 
 # Add src to path for direct execution
 import time
+import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import replace
 from pathlib import Path
@@ -24,9 +20,10 @@ src_root = Path(__file__).resolve().parents[2]
 if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
-from holosoma_retargeting.config_types.data_type import MotionDataConfig  # noqa: E402
+from holosoma_retargeting.config_types.data_type import normalize_data_format  # noqa: E402
 from holosoma_retargeting.config_types.retargeting import ParallelRetargetingConfig  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
+from holosoma_retargeting.data_utils.motion_data import discover_motion_files  # noqa: E402
 
 # Import reusable functions from robot_retarget.py
 from holosoma_retargeting.examples.robot_retarget import (  # type: ignore[import-not-found]  # noqa: E402
@@ -36,6 +33,7 @@ from holosoma_retargeting.examples.robot_retarget import (  # type: ignore[impor
     initialize_robot_pose,
     load_motion_data,
     setup_object_data,
+    validate_config,
 )
 
 # Import after path modification
@@ -51,47 +49,16 @@ from holosoma_retargeting.src.utils import (  # type: ignore[import-not-found]  
 
 # Override save directories for parallel processing (use demo_results_parallel instead of demo_results)
 PARALLEL_SAVE_DIRS = {
-    "robot_only": "demo_results_parallel/{robot}/robot_only/omomo",
-    "object_interaction": "demo_results_parallel/{robot}/object_interaction/omomo",
-    "climbing": "demo_results_parallel/{robot}/climbing/mocap_climb",
+    "robot_only": "demo_results_parallel/{robot}/robot_only/{data_format}",
+    "object_interaction": "demo_results_parallel/{robot}/object_interaction/{data_format}",
+    "climbing": "demo_results_parallel/{robot}/climbing/{data_format}",
 }
 
 
-def find_files(data_dir: Path, data_format: str, object_name: str | None = None):
-    """Find files based on data format.
+def find_files(data_dir: Path, data_format: str, object_name: str | None = None) -> list[str]:
+    """Discover files through the shared single/batch format registry."""
 
-    Args:
-        data_dir: Directory to search for files
-        data_format: Data format ("lafan", "smplh", "mocap")
-        object_name: Optional object name to filter files (for smplh format)
-
-    Returns:
-        Sorted list of file paths
-    """
-    data_dir = Path(data_dir)
-
-    if data_format == "lafan":
-        # LAFAN: .npy files in root directory
-        files = [str(p) for p in data_dir.glob("*.npy")]
-        return sorted(files)
-    if data_format == "smplh":
-        # SMPLH/OMOMO: .pt files (optionally filtered by object_name)
-        if object_name:
-            files = [str(p) for p in data_dir.glob(f"*{object_name}*.pt")]
-        else:
-            files = [str(p) for p in data_dir.glob("*.pt")]
-        return sorted(files)
-    if data_format == "mocap":
-        # MOCAP: .npy files in subdirectories
-        files = [str(p) for p in data_dir.glob("*/*.npy")]
-        return sorted(files)
-    if data_format == "smplx":
-        # SMPL-X: .npz files in root directory
-        files = [str(p) for p in data_dir.glob("*.npz")]
-        return sorted(files)
-    # For other data format, default to be consistent with SMPL-X
-    files = [str(p) for p in data_dir.glob("*.npz")]
-    return sorted(files)
+    return [str(path) for path in discover_motion_files(data_dir, data_format, object_name)]
 
 
 def generate_augmentation_configs(task_type: str, augmentation: bool = True):
@@ -164,22 +131,25 @@ def process_single_task(args):
     ) = args
 
     os.makedirs(save_dir, exist_ok=True)
+    source_path = Path(file_path)
     if task_type == "climbing":
-        file_path = "/".join(file_path.split("/")[:-1])
-        task_name = extract_task_name(file_path)
+        task_dir = source_path.parent
+        task_name = task_dir.name
+        data_path = task_dir.parent
     else:
-        task_name = extract_task_name(file_path)
+        task_name = extract_task_name(source_path)
+        data_path = source_path.parent
     print(f"Processing: {task_name}")
 
     # Task-specific object setup: set default object_dir for climbing if not provided
     if task_type == "climbing" and task_config.object_dir is None:
-        task_config = replace(task_config, object_dir=Path(file_path))
+        task_config = replace(task_config, object_dir=task_dir)
 
     constants = create_task_constants(robot_config, motion_data_config, task_config, task_type)
 
     # Load motion data
     human_joints, object_poses, smpl_scale = load_motion_data(
-        task_type, data_format, Path(file_path).parent, task_name, constants, motion_data_config
+        task_type, data_format, data_path, task_name, constants, motion_data_config
     )
 
     # Preserve original data (preprocess_motion_data modifies them in place)
@@ -198,13 +168,19 @@ def process_single_task(args):
         human_joints = human_joints_original.copy()
         object_poses = object_poses_original.copy()
         aug_name = aug_config["name"]
-        file_name = f"{save_dir}/{task_name}_{aug_name}.npz"
+        if task_type == "robot_only":
+            file_name = str(Path(save_dir) / f"{task_name}.npz")
+        else:
+            file_name = str(Path(save_dir) / f"{task_name}_{aug_name}.npz")
 
         print(f"  Processing augmentation: {aug_name}")
+        if Path(file_name).exists():
+            print(f"  Skipping existing result: {file_name}")
+            continue
 
         # Setup object data
         if task_type == "climbing":
-            print("obejct_dir: ", task_config.object_dir)
+            print("object_dir: ", task_config.object_dir)
             object_local_pts, object_local_pts_demo, object_urdf_path = setup_object_data(
                 task_type,
                 constants,
@@ -234,7 +210,7 @@ def process_single_task(args):
         if task_type == "robot_only":
             human_joints = preprocess_motion_data(human_joints, retargeter, toe_names, smpl_scale)
         elif task_type in {"object_interaction", "climbing"}:
-            human_joints, object_poses, object_moving_frame_idx = preprocess_motion_data(
+            human_joints, object_poses, _object_moving_frame_idx = preprocess_motion_data(
                 human_joints, retargeter, toe_names, scale=smpl_scale, object_poses=object_poses
             )
 
@@ -256,7 +232,6 @@ def process_single_task(args):
             # Initialize robot pose
             q_init, q_nominal, object_poses_augmented, human_joints, object_poses = initialize_robot_pose(
                 task_type,
-                data_format,
                 human_joints,
                 object_poses,
                 constants,
@@ -272,7 +247,6 @@ def process_single_task(args):
             # Initialize robot pose
             q_init, q_nominal, object_poses_augmented, human_joints, object_poses = initialize_robot_pose(
                 task_type,
-                data_format,
                 human_joints,
                 object_poses,
                 constants,
@@ -283,12 +257,8 @@ def process_single_task(args):
                 task_name,
             )
 
-        # Check if file exists and skip retargeting if it does (after setting up conditions)
-        if Path.exists(Path(file_name)):
-            continue
-
         # Retarget motion
-        retargeted_motions, _, _, _ = retargeter.retarget_motion(
+        retargeter.retarget_motion(
             human_joint_motions=human_joints,
             object_poses=object_poses,
             object_poses_augmented=object_poses_augmented,
@@ -299,6 +269,7 @@ def process_single_task(args):
             q_nominal_list=q_nominal,
             original=(k == 0),
             dest_res_path=file_name,
+            fps=constants.SOURCE_FPS,
         )
 
 
@@ -308,12 +279,17 @@ def main(cfg: ParallelRetargetingConfig) -> None:
     Args:
         cfg: Configuration arguments
     """
+    validate_config(cfg)
     robot = cfg.robot
     task_type = cfg.task_type
 
     # Set defaults based on task type
-    data_format: str = cfg.data_format or DEFAULT_DATA_FORMATS[task_type]
-    save_dir = cfg.save_dir if cfg.save_dir is not None else Path(PARALLEL_SAVE_DIRS[task_type].format(robot=robot))
+    data_format = normalize_data_format(cfg.data_format or DEFAULT_DATA_FORMATS[task_type])
+    save_dir = (
+        cfg.save_dir
+        if cfg.save_dir is not None
+        else Path(PARALLEL_SAVE_DIRS[task_type].format(robot=robot, data_format=data_format))
+    )
     data_dir = cfg.data_dir
 
     os.makedirs(save_dir, exist_ok=True)
@@ -332,6 +308,8 @@ def main(cfg: ParallelRetargetingConfig) -> None:
     else:
         files = find_files(data_dir, data_format, cfg.task_config.object_name)
     print(f"Found {len(files)} files for task type: {task_type}")
+    if not files:
+        raise FileNotFoundError(f"No {data_format} motion files found in {data_dir}")
 
     # Pass configs to worker processes
     process_args = [
@@ -371,8 +349,6 @@ def main(cfg: ParallelRetargetingConfig) -> None:
                 successful += 1
             except Exception as e:
                 print(f"Failed {file_path}: {e}")
-                import traceback
-
                 traceback.print_exc()
                 failed += 1
 

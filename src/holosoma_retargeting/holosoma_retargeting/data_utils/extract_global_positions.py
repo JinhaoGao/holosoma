@@ -30,26 +30,14 @@ def extract_global_positions(bvh_file_path):
     anim = extract.read_bvh(bvh_file_path)
 
     # Compute global positions using Forward Kinematics
-    global_quats, global_positions = utils.quat_fk(anim.quats, anim.pos, anim.parents)
+    _, global_positions = utils.quat_fk(anim.quats, anim.pos, anim.parents)
     return {
-        "positions": global_positions / 100,
+        "positions": (global_positions / 100).astype(np.float32),
         "joint_names": anim.bones,
         "parents": anim.parents,
         "num_frames": global_positions.shape[0],
         "num_joints": global_positions.shape[1],
     }
-
-
-def save_global_positions_to_npy(global_positions, output_path):
-    """
-    Save global positions to a .npy file.
-
-    Args:
-        global_positions (numpy.ndarray): Global positions array
-        output_path (str): Output file path
-    """
-    np.save(output_path, global_positions)
-    print(f"Saved global positions to: {output_path}")
 
 
 @dataclass
@@ -58,6 +46,9 @@ class Config:
 
     input_dir: str = "./lafan1/lafan"
     output_dir: str = "../demo_data/lafan"
+
+    overwrite: bool = False
+    """Replace converted .npy files that already exist."""
 
 
 def main(cfg: Config):
@@ -69,12 +60,12 @@ def main(cfg: Config):
 
     # Check if input directory exists
     if not input_dir.exists():
-        print(f"Error: Input directory {cfg.input_dir} not found!")
-        print("Please run the evaluation script first to generate BVH files.")
-        return
+        raise FileNotFoundError(f"LAFAN input directory not found: {input_dir}")
 
     # Get list of BVH files
     bvh_files = [f.name for f in input_dir.iterdir() if f.is_file() and f.suffix == ".bvh"]
+    if not bvh_files:
+        raise FileNotFoundError(f"No BVH files found in {input_dir}")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -91,9 +82,12 @@ def main(cfg: Config):
         print(f"  Joints: {result['num_joints']}")
         print(f"  Joint names: {result['joint_names']}")
 
-        # Save to .npy file
         output_npy = output_dir / f"{bvh_file[:-4]}.npy"
-        np.save(str(output_npy), result["positions"])
+        if output_npy.exists() and not cfg.overwrite:
+            print(f"Skipping existing output: {output_npy}")
+            continue
+        np.save(output_npy, result["positions"])
+        print(f"Saved converted LAFAN motion to: {output_npy}")
 
 
 if __name__ == "__main__":

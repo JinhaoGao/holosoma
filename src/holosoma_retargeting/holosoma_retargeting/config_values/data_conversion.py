@@ -8,7 +8,7 @@ from holosoma_retargeting.config_types.data_conversion import DataConversionConf
 def get_default_data_conversion_config(
     input_file: str,
     robot: str = "g1",
-    data_format: str = "smplh",
+    data_format: str = "omomo",
     object_name: str | None = None,
     input_fps: int = 30,
     output_fps: int = 50,

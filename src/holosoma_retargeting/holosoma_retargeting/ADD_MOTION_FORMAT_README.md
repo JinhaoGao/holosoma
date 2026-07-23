@@ -1,152 +1,163 @@
-## Instructions for Adding Custom Human Motion Data Format
+# Adding a human motion format
 
-This guide shows you how to add a new data format (e.g., "myformat") to the retargeting pipeline. We use SMPLX as an example, which is already implemented.
+[简体中文](ADD_MOTION_FORMAT_README_zh.md) | English
 
-### Overview
+Human formats have two explicit registrations:
 
-1. **Prepare your data** (prepare .npz files which contain global joint positions and human height information)
-2. **Add your joint names** (create a constant like `MYFORMAT_DEMO_JOINTS`)
-3. **Register your format** in the unified registry (`DEMO_JOINTS_REGISTRY`)
-4. **Add format-specific constants** (toe names, joint mappings, height)
+1. the skeleton and robot mapping in `config_types/data_type.py`;
+2. the file contract and loader in `data_utils/motion_data.py`.
 
-### Step 1: Prepare Your Data Files
+There is intentionally no generic NPZ fallback. A new format must declare and
+validate its own data contract.
 
-Prepare `.npz` files for each motion sequence:
-- **`.npz` format**: Should contain `global_joint_positions` array (T X J X 3) and `height` scalar
+## 1. Define the canonical representation
 
-**Example**: We provide `data_utils/prep_amass_smplx_for_rt.py` for converting AMASS SMPLX data:
-```bash
-# Install dependencies
-git clone https://github.com/nghorbani/human_body_prior.git
-pip install tqdm dotmap PyYAML omegaconf loguru
-cd human_body_prior/
-python setup.py develop
+All adapters return `HumanMotion`:
 
-# Run data processing
-python prep_amass_smplx_for_rt.py \
-  --amass-root-folder /path/to/amass \
-  --output-folder /path/to/output \
-  --model-root-folder /path/to/models
+```python
+HumanMotion(
+    joints=world_joints,                 # float array (T, J, 3), right-handed Z-up
+    fps=fps,                             # positive source FPS
+    human_height=height_m,               # positive height in metres
+    source_path=input_path,
+    object_poses_wxyz_xyz=object_poses,  # optional (T, 7)
+    root_quaternions_wxyz=root_quats,    # optional (T, 4)
+)
 ```
-Please follow the [AMASS](https://amass.is.tue.mpg.de/) instructions to download original data. And follow the [SMPL-X](https://smpl-x.is.tue.mpg.de/index.html) instructions to download SMPL-X models. For AMASS data, we tested on SMPL-X N format. The AMASS data structure should be `/path/to/amass/dataset_name/subject_name/*.npz`. For SMPL-X models, the structure should be `/path/to/models/smplx/SMPLX_NEUTRAL.npz`.
 
-### Step 2: Add Your Format to `config_types/data_type.py`
+Joint positions must be finite and their order must exactly match the
+registered joint-name list. Object poses use `[qw, qx, qy, qz, x, y, z]`.
 
-Edit **only this file** - all format configuration is centralized here!
+For a converted NPZ format, prefer these fields:
 
-#### 2.1: Define Joint Names
+```text
+global_joint_positions  (T, J, 3)
+joint_names             (J,)
+height                  scalar metres
+fps                     scalar
+root_quaternions_wxyz   (T, 4), optional
+source_format           scalar string
+coordinate_system       scalar string
+```
 
-Add a constant with your joint names. **Important**: The order of joint names must match the order of joints in the `J` dimension of your `global_joint_positions` array from Step 1.
+## 2. Register skeleton semantics
 
-For example, if your `global_joint_positions` array has shape `(T, J, 3)` where:
-- `T` = number of timesteps
-- `J` = number of joints
-- `3` = x, y, z coordinates
-
-Then `MYFORMAT_DEMO_JOINTS[0]` should be the name of the joint at `global_joint_positions[:, 0, :]`, `MYFORMAT_DEMO_JOINTS[1]` should be the name of the joint at `global_joint_positions[:, 1, :]`, and so on.
+In `config_types/data_type.py`:
 
 ```python
 MYFORMAT_DEMO_JOINTS = [
-    "Joint1",  # Corresponds to global_joint_positions[:, 0, :]
-    "Joint2",  # Corresponds to global_joint_positions[:, 1, :]
-    # ... list all joints in order matching the J dimension
+    "Pelvis",
+    # Names in the exact order of joints[:, :, :].
 ]
-```
 
-#### 2.2: Register Your Format
+DEMO_JOINTS_REGISTRY["myformat"] = MYFORMAT_DEMO_JOINTS
+TOE_NAMES_BY_FORMAT["myformat"] = ["LeftToe", "RightToe"]
 
-Add your format to the unified registry (this is the **main place** to register):
-
-```python
-DEMO_JOINTS_REGISTRY: dict[str, list[str]] = {
-    "lafan": LAFAN_DEMO_JOINTS,
-    "smplh": SMPLH_DEMO_JOINTS,
-    "mocap": MOCAP_DEMO_JOINTS,
-    "smplx": SMPLX_DEMO_JOINTS,
-    "myformat": MYFORMAT_DEMO_JOINTS,  # ← Add your format here
+JOINTS_MAPPINGS[("myformat", "g1")] = {
+    "Pelvis": "pelvis_contour_link",
+    # Human joint -> robot link.
 }
 ```
 
-#### 2.3: Add Format-Specific Constants
+Add one joint mapping per supported robot. Do not register a robot until every
+mapped link has been checked against that robot model.
 
-Add entries to these dictionaries.
-
-**Required:**
-- `TOE_NAMES_BY_FORMAT` - Must include toe joint names for foot-sticking constraint
-- `JOINTS_MAPPINGS` - Must include mappings for each robot type you support
-
-**Toe names** (used for foot sticking constraint):
-```python
-TOE_NAMES_BY_FORMAT = {
-    # ... existing formats ...
-    "myformat": ["LeftToe", "RightToe"],  # ← Add your toe joint names
-}
-```
-
-**Joint mappings** (human joint → robot joint):
-```python
-JOINTS_MAPPINGS = {
-    # ... existing mappings ...
-    ("myformat", "g1"): {  # ← Add for each robot type you support
-        "HumanJoint1": "robot_joint_1",
-        "HumanJoint2": "robot_joint_2",
-        # ... map all relevant joints
-    },
-    ("myformat", "t1"): {  # ← If supporting t1 robot
-        # ... mappings for t1
-    },
-}
-```
-
-### Step 3: Add Data Loading Logic (if needed)
-
-**Important**: If you processed your data to the `.npz` format in Step 1 (with `global_joint_positions` and `height` keys), you can **skip this step entirely**. The code automatically handles `.npz` files with this structure via a fallback mechanism.
-
-If your format needs special loading logic (different file extension, custom preprocessing, etc.), edit `examples/robot_retarget.py` in the `load_motion_data()` function. Add your format before the fallback `else` clause:
+If an old public name must remain accepted, add only a boundary alias:
 
 ```python
-def load_motion_data(...):
-    # ... existing code ...
-    elif data_format == "smplx":
-        npz_file = data_path / f"{task_name}.npz"
-        human_data = np.load(str(npz_file))
-        human_joints = human_data["global_joint_positions"]
-        human_height = human_data["height"]
-        smpl_scale = constants.ROBOT_HEIGHT / human_height
-    elif data_format == "myformat":
-        # Add your custom loading logic here
-        npy_path = data_path / f"{task_name}.npy"
-        human_joints = np.load(str(npy_path))
-        # ... any preprocessing ...
-        smpl_scale = constants.ROBOT_HEIGHT / default_human_height
-    else:
-        # Fallback: handles .npz files with global_joint_positions and height
-        # ... (automatic handling for standard .npz format)
+DATA_FORMAT_ALIASES["old_name"] = "myformat"
 ```
 
+Saved output should always use the canonical name.
 
-### Summary: What You Need to Edit
+## 3. Register the file and task contract
 
-**In `config_types/data_type.py`** (main configuration file):
-1. ✅ **Required**: Create `MYFORMAT_DEMO_JOINTS` constant
-2. ✅ **Required**: Add to `DEMO_JOINTS_REGISTRY`
-3. ✅ **Required**: Add to `TOE_NAMES_BY_FORMAT`
-4. ✅ **Required**: Add to `JOINTS_MAPPINGS`
+Add a `MotionFormatSpec` in `data_utils/motion_data.py`:
 
-**In `examples/robot_retarget.py`** (only if needed):
-7. ⚠️ **Optional**: Add loading logic in `load_motion_data()` (only if format needs special handling beyond standard `.npz` format)
+```python
+MOTION_FORMATS["myformat"] = MotionFormatSpec(
+    name="myformat",
+    suffixes=(".npz",),
+    task_types=frozenset({"robot_only"}),
+    root_joint="Pelvis",
+    orientation_mode="smpl",
+    default_fps=30.0,
+)
+```
+
+`orientation_mode` controls initial root orientation when the data does not
+store root quaternions:
+
+- `smpl`: estimate orientation from hips and shoulders;
+- `bvh`: use the BVH-style anatomical estimator;
+- `mocap`: use foot direction.
+
+Only list `object_interaction` when the adapter supplies object poses. Set
+`nested_files=True` only when one sequence is represented by a directory
+containing exactly one motion file.
+
+## 4. Implement and register the loader
+
+The loader reads only its declared file type, performs format-specific
+coordinate conversion, and delegates common validation to `_validate_motion`:
+
+```python
+def _load_myformat(
+    path: Path,
+    spec: MotionFormatSpec,
+    human_height: float | None,
+) -> HumanMotion:
+    with np.load(path, allow_pickle=False) as data:
+        _validate_joint_names(data, spec)
+        height = human_height if human_height is not None else _read_scalar(data, "height")
+        return _validate_motion(
+            joints=data["global_joint_positions"],
+            spec=spec,
+            source_path=path,
+            human_height=height,
+            fps=_read_scalar(data, "fps"),
+            root_quaternions=data.get("root_quaternions_wxyz"),
+        )
 
 
-### Ready to Run
+_LOADERS["myformat"] = _load_myformat
+```
 
-Once configured, you can use your custom format:
+Avoid `allow_pickle=True` for numeric motion files. Do not catch missing fields
+and reinterpret the file as another format.
+
+## 5. Test the adapter and full pipeline
+
+At minimum, add tests for:
+
+- canonical name and any aliases;
+- valid file loading;
+- joint count and joint-order rejection;
+- invalid FPS/height and NaN rejection;
+- coordinate and quaternion conventions;
+- single-file resolution and batch discovery;
+- supported and unsupported task combinations;
+- at least one short end-to-end retargeting result.
+
+The end-to-end output should have finite qpos, the correct FPS and canonical
+`source_data_format`, mapped skeleton arrays, and—when enabled—Interaction Mesh
+arrays:
 
 ```bash
 python examples/robot_retarget.py \
-  --data_path /path/to/your/data \
   --task-type robot_only \
-  --task-name your_sequence_name \
-  --data_format myformat \
-  --retargeter.debug \
-  --retargeter.visualize
+  --robot g1 \
+  --data-format myformat \
+  --data-path /path/to/converted \
+  --task-name example \
+  --save-dir /tmp/myformat-result \
+  --retargeter.save-interaction-mesh
+
+python viser_player.py \
+  --qpos-npz /tmp/myformat-result/example.npz \
+  --show-mapped-skeletons \
+  --show-interaction-mesh
 ```
+
+Finally, add the format to the support table and data-preparation section in
+`README.md`.

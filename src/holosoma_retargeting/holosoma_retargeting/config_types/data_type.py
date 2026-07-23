@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, TypedDict
+from typing import Any
 
 from holosoma_retargeting.config_types.robot import (
     RobotDefaults,
@@ -37,7 +37,10 @@ LAFAN_DEMO_JOINTS = [
     "LeftHand",
 ]
 
-NOETIX_LAFAN_DEMO_JOINTS = LAFAN_DEMO_JOINTS.copy()
+# Noetix has an independent source format and loader. Its normalized output
+# intentionally uses the same 22 target labels so the proven robot mapping can
+# be reused without classifying company data as public LAFAN data.
+NOETIX_MOCAP_DEMO_JOINTS = LAFAN_DEMO_JOINTS.copy()
 
 SMPLH_DEMO_JOINTS = [
     "Pelvis",
@@ -93,6 +96,7 @@ SMPLH_DEMO_JOINTS = [
     "R_Thumb2",
     "R_Thumb3",
 ]
+OMOMO_DEMO_JOINTS = SMPLH_DEMO_JOINTS
 
 MOCAP_DEMO_JOINTS = [
     "Hips",
@@ -175,26 +179,12 @@ SMPLX_DEMO_JOINTS = [
     "R_Wrist",
 ]
 
+AMASS_DEMO_JOINTS = SMPLX_DEMO_JOINTS
+GVHMR_DEMO_JOINTS = SMPLX_DEMO_JOINTS
+
 # Joint mappings - organized by (data_format, robot_type)
 JOINTS_MAPPINGS = {
     ("lafan", "g1"): {
-        "Spine1": "pelvis_contour_link",
-        "LeftUpLeg": "left_hip_pitch_link",
-        "RightUpLeg": "right_hip_pitch_link",
-        "LeftLeg": "left_knee_link",
-        "RightLeg": "right_knee_link",
-        "LeftArm": "left_shoulder_roll_link",
-        "RightArm": "right_shoulder_roll_link",
-        "LeftForeArm": "left_elbow_link",
-        "RightForeArm": "right_elbow_link",
-        "LeftFoot": "left_ankle_intermediate_1_link",
-        "RightFoot": "right_ankle_intermediate_1_link",
-        "LeftToeBase": "left_ankle_roll_sphere_5_link",
-        "RightToeBase": "right_ankle_roll_sphere_5_link",
-        "LeftHand": "left_rubber_hand_link",
-        "RightHand": "right_rubber_hand_link",
-    },
-    ("noetix_lafan", "g1"): {
         "Spine1": "pelvis_contour_link",
         "LeftUpLeg": "left_hip_pitch_link",
         "RightUpLeg": "right_hip_pitch_link",
@@ -245,7 +235,7 @@ JOINTS_MAPPINGS = {
         "LeftHand": "l_hand_sphere_link",
         "RightHand": "r_hand_sphere_link",
     },
-    ("smplh", "g1"): {
+    ("omomo", "g1"): {
         "Pelvis": "pelvis_contour_link",
         "L_Hip": "left_hip_pitch_link",
         "R_Hip": "right_hip_pitch_link",
@@ -262,7 +252,7 @@ JOINTS_MAPPINGS = {
         "L_Wrist": "left_rubber_hand_link",
         "R_Wrist": "right_rubber_hand_link",
     },
-    ("smplh", "t1"): {
+    ("omomo", "t1"): {
         "Pelvis": "Trunk",
         "L_Hip": "Hip_Pitch_Left",
         "R_Hip": "Hip_Pitch_Right",
@@ -279,7 +269,7 @@ JOINTS_MAPPINGS = {
         "L_Wrist": "left_hand_sphere_link",
         "R_Wrist": "right_hand_sphere_link",
     },
-    ("smplh", "e1"): {
+    ("omomo", "e1"): {
         "Pelvis": "base_link",
         "L_Hip": "l_leg_hip_pitch_link",
         "R_Hip": "r_leg_hip_pitch_link",
@@ -296,7 +286,7 @@ JOINTS_MAPPINGS = {
         "L_Wrist": "l_hand_sphere_link",
         "R_Wrist": "r_hand_sphere_link",
     },
-    ("smplx", "g1"): {
+    ("amass", "g1"): {
         "Pelvis": "pelvis_contour_link",
         "L_Hip": "left_hip_pitch_link",
         "R_Hip": "right_hip_pitch_link",
@@ -313,7 +303,7 @@ JOINTS_MAPPINGS = {
         "L_Wrist": "left_rubber_hand_link",
         "R_Wrist": "right_rubber_hand_link",
     },
-    ("smplx", "e1"): {
+    ("amass", "e1"): {
         "Pelvis": "base_link",
         "L_Hip": "l_leg_hip_pitch_link",
         "R_Hip": "r_leg_hip_pitch_link",
@@ -329,23 +319,6 @@ JOINTS_MAPPINGS = {
         "R_Foot": "r_foot_sphere_5_link",
         "L_Wrist": "l_hand_sphere_link",
         "R_Wrist": "r_hand_sphere_link",
-    },
-    ("noetix_lafan", "e1"): {
-        "Spine1": "base_link",
-        "LeftUpLeg": "l_leg_hip_pitch_link",
-        "RightUpLeg": "r_leg_hip_pitch_link",
-        "LeftLeg": "l_leg_knee_link",
-        "RightLeg": "r_leg_knee_link",
-        "LeftArm": "l_arm_shoulder_roll_link",
-        "RightArm": "r_arm_shoulder_roll_link",
-        "LeftForeArm": "l_arm_elbow_pitch_link",
-        "RightForeArm": "r_arm_elbow_pitch_link",
-        "LeftFoot": "l_leg_ankle_intermediate_1_link",
-        "RightFoot": "r_leg_ankle_intermediate_1_link",
-        "LeftToeBase": "l_foot_sphere_5_link",
-        "RightToeBase": "r_foot_sphere_5_link",
-        "LeftHand": "l_hand_sphere_link",
-        "RightHand": "r_hand_sphere_link",
     },
     ("mocap", "g1"): {
         "Spine1": "pelvis_contour_link",
@@ -400,62 +373,57 @@ JOINTS_MAPPINGS = {
     },
 }
 
+# Noetix is a separate company-collected dataset and has its own loader and
+# converter. Its normalized skeleton reuses only the LAFAN joint-name topology
+# and robot mapping. AMASS and GVHMR both use the first 22 SMPL-X body joints.
+for _robot_type in ("g1", "e1"):
+    JOINTS_MAPPINGS[("noetix_mocap", _robot_type)] = JOINTS_MAPPINGS[("lafan", _robot_type)].copy()
+    JOINTS_MAPPINGS[("gvhmr", _robot_type)] = JOINTS_MAPPINGS[("amass", _robot_type)].copy()
+
 # Data format specific constants
 TOE_NAMES_BY_FORMAT = {
     "lafan": ["LeftToeBase", "RightToeBase"],
-    "noetix_lafan": ["LeftToeBase", "RightToeBase"],
-    "smplh": ["L_Toe", "R_Toe"],
+    "noetix_mocap": ["LeftToeBase", "RightToeBase"],
+    "omomo": ["L_Toe", "R_Toe"],
     "mocap": ["LeftToeBase", "RightToeBase"],
-    "smplx": ["L_Foot", "R_Foot"],
+    "amass": ["L_Foot", "R_Foot"],
+    "gvhmr": ["L_Foot", "R_Foot"],
 }
 
 
-# Data format specific scaling/preprocessing constants
-class FormatConstants(TypedDict, total=False):
-    default_scale_factor: float | None
-    default_human_height: float | None
-
-
-DATA_FORMAT_CONSTANTS: dict[str, FormatConstants] = {
-    "lafan": {
-        "default_scale_factor": 1.27 / 1.7,
-    },
-    "mocap": {
-        "default_human_height": 1.78,
-    },
-}
-
-# Unified registry: Maps format name to demo joints
-# This is the SINGLE PLACE to add new formats - just add an entry here!
-# No need to update any Literal types - DataFormat is now str with runtime validation
+# Skeleton registry. File/task contracts and loaders live in data_utils/motion_data.py.
 DEMO_JOINTS_REGISTRY: dict[str, list[str]] = {
     "lafan": LAFAN_DEMO_JOINTS,
-    "noetix_lafan": NOETIX_LAFAN_DEMO_JOINTS,
-    "smplh": SMPLH_DEMO_JOINTS,
+    "noetix_mocap": NOETIX_MOCAP_DEMO_JOINTS,
+    "omomo": OMOMO_DEMO_JOINTS,
     "mocap": MOCAP_DEMO_JOINTS,
-    "smplx": SMPLX_DEMO_JOINTS,
+    "amass": AMASS_DEMO_JOINTS,
+    "gvhmr": GVHMR_DEMO_JOINTS,
 }
 
-# Type alias for data formats - use str to allow dynamic data formats via DEMO_JOINTS_REGISTRY
-# No need to update this when adding new formats - just add to DEMO_JOINTS_REGISTRY above
+DATA_FORMAT_ALIASES = {
+    "smplh": "omomo",
+    "smplx": "amass",
+    "noetix_lafan": "noetix_mocap",
+    "noetix-mocap": "noetix_mocap",
+}
+
 DataFormat = str
 
 
-def _validate_data_format(data_format: str) -> None:
-    """Validate that data_format exists in DEMO_JOINTS_REGISTRY."""
-    if data_format not in DEMO_JOINTS_REGISTRY:
+def normalize_data_format(data_format: str) -> str:
+    """Return the canonical user-facing name for a supported data format."""
+
+    normalized = DATA_FORMAT_ALIASES.get(data_format.lower(), data_format.lower())
+    if normalized not in DEMO_JOINTS_REGISTRY:
         available = ", ".join(sorted(DEMO_JOINTS_REGISTRY.keys()))
-        raise ValueError(
-            f"Invalid data_format: '{data_format}'. "
-            f"Available data formats: {available}. "
-            f"Add your format to DEMO_JOINTS_REGISTRY in config_types/data_type.py"
-        )
+        raise ValueError(f"Invalid data_format: '{data_format}'. Available data formats: {available}.")
+    return normalized
 
 
 @dataclass(frozen=True)
 class MotionDataConfig:
-    # Use str instead of Literal to allow dynamic data formats via DEMO_JOINTS_REGISTRY
-    data_format: str = "smplh"
+    data_format: str = "omomo"
     # Use str instead of Literal to allow dynamic robot types
     robot_type: str = "g1"
     robot_defaults: dict[str, RobotDefaults] = field(default_factory=_default_robot_defaults)
@@ -464,8 +432,7 @@ class MotionDataConfig:
 
     def __post_init__(self) -> None:
         """Validate data_format and robot_type."""
-        _validate_data_format(self.data_format)
-
+        object.__setattr__(self, "data_format", normalize_data_format(self.data_format))
         _validate_robot_type(self.robot_type, self.robot_defaults)
 
     # Optional overrides - if None, will use defaults from data_format
@@ -478,12 +445,6 @@ class MotionDataConfig:
         if self.demo_joints is not None:
             return self.demo_joints
 
-        if self.data_format not in DEMO_JOINTS_REGISTRY:
-            raise ValueError(
-                f"Unknown data_format: {self.data_format}. "
-                f"Available formats: {list(DEMO_JOINTS_REGISTRY.keys())}. "
-                f"Add your format to DEMO_JOINTS_REGISTRY in config_types/data_type.py"
-            )
         return DEMO_JOINTS_REGISTRY[self.data_format]
 
     @property
@@ -508,26 +469,10 @@ class MotionDataConfig:
             )
         return TOE_NAMES_BY_FORMAT[self.data_format]
 
-    @property
-    def default_scale_factor(self) -> float | None:
-        """Get default scale factor for this data format (None if calculated per subject)."""
-        format_constants: FormatConstants = DATA_FORMAT_CONSTANTS.get(self.data_format, {})
-        return format_constants.get("default_scale_factor")
-
-    @property
-    def default_human_height(self) -> float | None:
-        """Get default human height for this data format (None if not applicable)."""
-        if self.human_height is not None:
-            return self.human_height
-        format_constants: FormatConstants = DATA_FORMAT_CONSTANTS.get(self.data_format, {})
-        return format_constants.get("default_human_height")
-
     def legacy_constants(self) -> dict[str, Any]:
         """Return uppercase legacy constants for backward compatibility."""
         return {
             "DEMO_JOINTS": self.resolved_demo_joints,
             "JOINTS_MAPPING": self.resolved_joints_mapping,
             "TOE_NAMES": self.toe_names,
-            "DEFAULT_SCALE_FACTOR": self.default_scale_factor,
-            "DEFAULT_HUMAN_HEIGHT": self.default_human_height,
         }

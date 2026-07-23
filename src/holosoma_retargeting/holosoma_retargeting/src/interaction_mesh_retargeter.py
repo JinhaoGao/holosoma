@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 from types import ModuleType
 
@@ -123,7 +124,7 @@ class InteractionMeshRetargeter:
         self.task_constants = task_constants
         self.qpos_to_viser_joint_indices: np.ndarray | None = None
 
-        self.smplh_mapped_joint_indices = [self.demo_joints.index(name) for name in self.laplacian_match_links]
+        self.mapped_joint_indices = [self.demo_joints.index(name) for name in self.laplacian_match_links]
 
         # Setup weights and parameters
         self.laplacian_weights = 10
@@ -230,9 +231,9 @@ class InteractionMeshRetargeter:
     def _name_side(name: str) -> str | None:
         """Infer left/right side from common robot or mocap naming conventions."""
         normalized = name.lower().replace("-", "_")
-        if normalized.startswith("left") or normalized.startswith("l_") or "_left" in normalized:
+        if normalized.startswith(("left", "l_")) or "_left" in normalized:
             return "left"
-        if normalized.startswith("right") or normalized.startswith("r_") or "_right" in normalized:
+        if normalized.startswith(("right", "r_")) or "_right" in normalized:
             return "right"
         return None
 
@@ -501,6 +502,7 @@ class InteractionMeshRetargeter:
         q_nominal_list=None,
         original=True,
         dest_res_path=None,
+        fps=30.0,
     ):
         """
         The main function to retarget an entire motion sequence frame by frame.
@@ -540,10 +542,8 @@ class InteractionMeshRetargeter:
 
         def _clear_interaction_mesh_handles() -> None:
             for handle in interaction_mesh_handle_list:
-                try:
+                with suppress(Exception):
                     handle.remove()
-                except Exception:
-                    pass
             interaction_mesh_handle_list.clear()
 
         print(f"\nStarting motion retargeting for {num_frames} frames...")
@@ -555,7 +555,7 @@ class InteractionMeshRetargeter:
                 object_trans_demo = object_poses[i, :3]
 
                 # Get human joint positions and create interaction mesh in object frame
-                human_mapped_joints = human_joint_motions[i, self.smplh_mapped_joint_indices]
+                human_mapped_joints = human_joint_motions[i, self.mapped_joint_indices]
 
                 if self.object_name == "ground":
                     human_mapped_joints_in_object = human_mapped_joints
@@ -695,11 +695,16 @@ class InteractionMeshRetargeter:
             "qpos": np.array(retargeted_motions)[1:],
             "human_joints": human_joint_motions,
             "human_joint_names": np.asarray(self.demo_joints, dtype=str),
-            "mapped_human_joints": human_joint_motions[:, self.smplh_mapped_joint_indices],
+            "mapped_human_joints": human_joint_motions[:, self.mapped_joint_indices],
             "mapped_human_joint_names": np.asarray(mapped_human_joint_names, dtype=str),
             "mapped_robot_joints": np.asarray(mapped_robot_joints_w_list, dtype=np.float32),
             "mapped_robot_link_names": np.asarray(list(self.laplacian_match_links.values()), dtype=str),
-            "fps": 30,
+            "source_data_format": np.asarray(self.task_constants.SOURCE_DATA_FORMAT),
+            "robot_type": np.asarray(self.task_constants.ROBOT_TYPE),
+            "object_name": np.asarray(self.object_name),
+            "object_urdf": np.asarray(self.object_model_path or ""),
+            "contains_object_in_qpos": np.asarray(bool(self.object_model_path) and bool(self.has_dynamic_object)),
+            "fps": float(fps),
             "cost": cost,
         }
         if self.save_interaction_mesh:
@@ -725,22 +730,20 @@ class InteractionMeshRetargeter:
             def _clear_replay_overlay():
                 nonlocal replay_overlay_handles
                 for handle in replay_overlay_handles:
-                    try:
+                    with suppress(Exception):
                         handle.remove()
-                    except Exception:
-                        pass
                 replay_overlay_handles = []
 
             def _human_mapped_joints_at_frame(frame_float: float) -> np.ndarray:
                 if num_frames == 1:
-                    return human_joint_motions[0, self.smplh_mapped_joint_indices]
+                    return human_joint_motions[0, self.mapped_joint_indices]
 
                 frame_float = float(np.clip(frame_float, 0.0, num_frames - 1))
                 i0 = int(np.floor(frame_float))
                 i1 = min(i0 + 1, num_frames - 1)
                 u = frame_float - i0
                 human_frame = (1.0 - u) * human_joint_motions[i0] + u * human_joint_motions[i1]
-                return human_frame[self.smplh_mapped_joint_indices]
+                return human_frame[self.mapped_joint_indices]
 
             def _interaction_mesh_frame_index(frame_float: float) -> int:
                 return int(np.clip(round(float(frame_float)), 0, num_frames - 1))
@@ -794,7 +797,7 @@ class InteractionMeshRetargeter:
                 viser_object=self.viser_object,
                 object_base_frame=getattr(self, "object_base", None) if self.viser_object else None,
                 contains_object_in_qpos=bool(self.viser_object) and bool(self.has_dynamic_object),
-                initial_fps=30,
+                initial_fps=float(fps),
                 initial_interp_mult=2,
                 loop=False,
                 qpos_to_viser_joint_indices=self.qpos_to_viser_joint_indices,
@@ -1319,7 +1322,7 @@ class InteractionMeshRetargeter:
         for i in range(len(human_joint_motions)):
             object_pts_demo = obj_pts_demo[i]
             object_pts = obj_pts[i]
-            self.draw_keypoints(human_joint_motions[i, self.smplh_mapped_joint_indices], name="human")
+            self.draw_keypoints(human_joint_motions[i, self.mapped_joint_indices], name="human")
             self.draw_keypoints(object_pts_demo, name="object_demo", rgba=(1, 0, 0, 1))
             self.draw_keypoints(object_pts, name="object", rgba=(0, 1, 0, 1))
             self.draw_q(retargeted_motions[i])
@@ -1332,7 +1335,7 @@ class InteractionMeshRetargeter:
                 self.visualize_tetrahedra(
                     np.vstack(
                         [
-                            human_joint_motions[i, self.smplh_mapped_joint_indices],
+                            human_joint_motions[i, self.mapped_joint_indices],
                             object_pts_demo,
                         ]
                     ),
@@ -1500,9 +1503,6 @@ class InteractionMeshRetargeter:
 
         # Linear block: v_lin = xyz_dot
         T[dadr : dadr + 3, qadr : qadr + 3] = np.eye(3)
-
-        # Angular block: ω_* = 2 * E_*(q) * quat_dot
-        w, x, y, z = self.robot_data.qpos[qadr + 3 : qadr + 7]
 
         def get_e_world(qw, qx, qy, qz):
             return np.array(

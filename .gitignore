@@ -24,6 +24,9 @@ logs_eval
 # Retargeting demo datasets
 src/holosoma_retargeting/holosoma_retargeting/demo_data/
 
+# Licensed SMPL-X body model files (keep local; do not commit)
+src/holosoma_retargeting/holosoma_retargeting/models/smplx/*.npz
+
 # Isaacsim Converted Files
 src/holosoma/holosoma/data/robots/converted/
 src/holosoma/holosoma/data/robots/converted_rank*/
