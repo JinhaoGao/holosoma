@@ -157,7 +157,11 @@ def create_task_constants(
         task_constants.OBJECT_URDF_FILE = None
         task_constants.OBJECT_MESH_FILE = None
     elif task_type == "object_interaction":
-        obj_name = task_config.object_name or "largebox"
+        if task_config.object_name is None:
+            raise ValueError(
+                "object_interaction constants require a resolved object name"
+            )
+        obj_name = task_config.object_name
         object_asset = get_omomo_object_asset(obj_name)
         task_constants.OBJECT_NAME = obj_name
         task_constants.OBJECT_URDF_FILE = str(object_asset.urdf_path)

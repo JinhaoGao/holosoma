@@ -30,6 +30,10 @@ OMOMO_OBJECT_NAMES: tuple[str, ...] = (
 )
 
 _SEQUENCE_PATTERN = re.compile(r"^(?P<subject>sub[1-9][0-9]*)_(?P<object>[a-z][a-z0-9]*)_(?P<index>[0-9]{3})$")
+_RESULT_PATTERN = re.compile(
+    r"^(?P<sequence>sub[1-9][0-9]*_[a-z][a-z0-9]*_[0-9]{3})"
+    r"(?:_(?:original|augmented|trans_[0-9]+|rot_[0-9]+))?$"
+)
 
 
 @dataclass(frozen=True)
@@ -120,6 +124,79 @@ def parse_omomo_sequence_name(
         object_name=object_name,
         sequence_index=int(match.group("index")),
     )
+
+
+def parse_omomo_result_name(value: str | Path) -> OmomoSequenceName:
+    """Parse an OMOMO source or retargeting-result filename."""
+
+    stem = Path(value).stem
+    match = _RESULT_PATTERN.fullmatch(stem)
+    if match is None:
+        raise ValueError(
+            f"Invalid OMOMO result name {stem!r}; expected a canonical sequence "
+            "with an optional retargeting augmentation suffix"
+        )
+    return parse_omomo_sequence_name(match.group("sequence"))
+
+
+def resolve_omomo_result_object_name(
+    result_path: str | Path,
+    explicit_object_name: str | None = None,
+) -> str:
+    """Resolve an OMOMO result's object from metadata and its canonical filename."""
+
+    path = Path(result_path)
+    if explicit_object_name is not None and explicit_object_name not in OMOMO_OBJECT_NAMES:
+        raise ValueError(f"Unknown OMOMO object override: {explicit_object_name!r}")
+
+    metadata_object: str | None = None
+    if path.is_file() and path.suffix.lower() == ".npz":
+        with np.load(path, allow_pickle=False) as data:
+            if "object_name" in data:
+                raw_object = np.asarray(data["object_name"])
+                if raw_object.size != 1:
+                    raise ValueError(f"Result object_name metadata must be scalar: {path}")
+                value = str(raw_object.item())
+                if value:
+                    metadata_object = value
+                    if metadata_object not in OMOMO_OBJECT_NAMES:
+                        raise ValueError(
+                            f"Result {path} declares non-OMOMO object {metadata_object!r}"
+                        )
+
+    filename_object: str | None = None
+    try:
+        filename_object = parse_omomo_result_name(path).object_name
+    except ValueError:
+        pass
+
+    discovered = {
+        value
+        for value in (metadata_object, filename_object)
+        if value is not None
+    }
+    if len(discovered) > 1:
+        raise ValueError(
+            f"OMOMO result {path} has conflicting object metadata and filename: "
+            f"{', '.join(sorted(discovered))}"
+        )
+    inferred_object = next(iter(discovered), None)
+    if (
+        explicit_object_name is not None
+        and inferred_object is not None
+        and explicit_object_name != inferred_object
+    ):
+        raise ValueError(
+            f"OMOMO result {path} contains object {inferred_object!r}, "
+            f"but the explicit override is {explicit_object_name!r}"
+        )
+    resolved = explicit_object_name or inferred_object
+    if resolved is None:
+        raise ValueError(
+            f"Could not infer the OMOMO object for {path}; preserve result metadata, "
+            "use a canonical OMOMO filename, or pass an explicit object name"
+        )
+    return resolved
 
 
 def select_omomo_files(

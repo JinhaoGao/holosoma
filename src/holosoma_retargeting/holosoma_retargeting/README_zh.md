@@ -45,8 +45,9 @@ python examples/robot_retarget.py \
 python examples/robot_retarget.py \
   --data-path demo_data/OMOMO_new \
   --task-type object_interaction \
-  --task-name sub3_largebox_003 \
+  --task-name sub10_tripod_000 \
   --data-format omomo \
+  --robot e1 \
   --retargeter.debug \
   --retargeter.visualize
 
@@ -101,6 +102,8 @@ python examples/robot_retarget.py \
 ```
 
 使用 `--augmentation` 可运行物体交互或攀爬增强序列，但必须先生成相应的原始序列结果。
+OMOMO 物体交互会从标准的 `subN_object_NNN` 任务名自动推断物体类别。
+`--task-config.object-name` 不再是必需参数；若显式传入，它将用于检查任务名与配置是否一致。
 
 ## 批量动作重定向
 
@@ -115,13 +118,14 @@ python examples/parallel_robot_retarget.py \
   --save-dir demo_results_parallel/g1/robot_only/omomo \
   --task-config.object-name ground
 
-# 物体交互（OMOMO）
+# 在 G1 上处理全部 OMOMO 物体交互序列
 python examples/parallel_robot_retarget.py \
   --data-dir demo_data/OMOMO_new \
   --task-type object_interaction \
   --data-format omomo \
+  --robot g1 \
   --save-dir demo_results_parallel/g1/object_interaction/omomo \
-  --task-config.object-name largebox
+  --max-workers 4
 
 # 攀爬
 python examples/parallel_robot_retarget.py \
@@ -145,7 +149,30 @@ python examples/parallel_robot_retarget.py \
   --retargeter.save-interaction-mesh
 ```
 
-为物体交互或攀爬批处理增加 `--augmentation` 后，会同时处理原始和增强序列。已经存在的输出文件会被跳过。
+为物体交互或攀爬批处理增加 `--augmentation` 后，会同时处理原始和增强序列。已经存在的输出文件默认会被跳过，只有传入 `--overwrite-existing` 才会覆盖。OMOMO 批处理默认先检查数据、身高表和物体资产，并在结果目录写入 `batch_report.json`。
+
+目前物体目录完整支持 `clothesstand`、`floorlamp`、`largebox`、`largetable`、`monitor`、`plasticbox`、`smallbox`、`smalltable`、`suitcase`、`trashcan`、`tripod`、`whitechair` 和 `woodchair`。省略 `--object-names` 会处理全部类别，也可以精确选择子集。建议先用 `--dry-run` 验证全部输入并生成清单，此时不会启动优化：
+
+```bash
+# 检查十三类物体并生成完整清单
+python examples/parallel_robot_retarget.py \
+  --data-dir demo_data/OMOMO_new \
+  --task-type object_interaction \
+  --data-format omomo \
+  --robot g1 \
+  --save-dir demo_results_parallel/g1/object_interaction/omomo \
+  --dry-run
+
+# 在 E1 上断点续跑指定类别
+python examples/parallel_robot_retarget.py \
+  --data-dir demo_data/OMOMO_new \
+  --task-type object_interaction \
+  --data-format omomo \
+  --robot e1 \
+  --object-names tripod suitcase whitechair \
+  --save-dir demo_results_parallel/e1/object_interaction/omomo \
+  --max-workers 4
+```
 
 ## 数据准备
 
@@ -160,6 +187,23 @@ Holosoma 官方流水线使用 InterMimic 预处理后的数据，其格式与�
 3. 将 `height_dict.pkl` 放在 `OMOMO_new` 的上级目录。也可以传入 `--motion-data-config.human-height HEIGHT` 显式指定身高。
 
 动作文件应为 `.pt` 张量。
+
+长时间批处理前，可以单独检查完整数据目录、被试身高表和十三类内置资产：
+
+```bash
+python data_utils/preflight_omomo.py demo_data/OMOMO_new \
+  --asset-root models \
+  --output demo_results_parallel/omomo_preflight.json
+```
+
+发布前可以让 G1/E1 与每类物体各执行两帧真实优化。该命令会生成并校验 26 个结果 NPZ：
+
+```bash
+python data_utils/validate_omomo_retargeting.py demo_data/OMOMO_new \
+  --robots g1 e1 \
+  --frames 2 \
+  --output-dir demo_results_validation/omomo_g1_e1
+```
 
 ### LAFAN
 
@@ -375,6 +419,7 @@ python evaluation/eval_retargeting.py \
 ```
 
 纯机器人评估会使用每个新结果中保存的预处理人体骨架。因此，修改 `--data-format` 和对应路径后，同一命令也可用于 LAFAN、AMASS、Noetix-mocap 和 GVHMR。
+对于 OMOMO 机器人—物体结果，评估器会根据每个 NPZ 的元数据和标准文件名分别解析物体；当结果目录包含多个物体类别时，不要传入 `--object-name`。
 
 ## 为 RL 全身跟踪策略准备数据
 
@@ -401,7 +446,6 @@ mjpython data_conversion/convert_data_format_mj.py \
   --output-fps 50 \
   --output-name converted_res/object_interaction/sub3_largebox_003_mj_w_obj.npz \
   --data-format omomo \
-  --object-name largebox \
   --has-dynamic-object \
   --once
 ```
@@ -430,14 +474,16 @@ python data_conversion/convert_data_format_mj.py \
 
 ```bash
 python data_conversion/convert_data_format_mj.py \
-  --input-file ./demo_results/g1/object_interaction/omomo/sub3_largebox_003_original.npz \
+  --input-file ./demo_results/e1/object_interaction/omomo/sub10_tripod_000_original.npz \
+  --robot e1 \
   --output-fps 50 \
-  --output-name converted_res/object_interaction/sub3_largebox_003_mj_w_obj.npz \
+  --output-name converted_res/object_interaction/sub10_tripod_000_mj_w_obj.npz \
   --data-format omomo \
-  --object-name largebox \
   --has-dynamic-object \
   --once
 ```
+
+OMOMO 动态物体转换会从结果元数据或标准文件名自动推断类别，并拒绝与之冲突的显式覆盖参数。
 
 ### OmniRetarget 数据
 

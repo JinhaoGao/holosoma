@@ -62,8 +62,9 @@ python examples/robot_retarget.py \
 python examples/robot_retarget.py \
   --data-path demo_data/OMOMO_new \
   --task-type object_interaction \
-  --task-name sub3_largebox_003 \
+  --task-name sub10_tripod_000 \
   --data-format omomo \
+  --robot e1 \
   --retargeter.debug \
   --retargeter.visualize
 
@@ -119,6 +120,9 @@ python examples/robot_retarget.py \
 
 Add `--augmentation` to run an augmented object-interaction or climbing
 sequence. The corresponding original sequence must be generated first.
+For OMOMO object interaction, the object category is inferred from the
+canonical `subN_object_NNN` task name. An explicit
+`--task-config.object-name` is optional and is treated as a consistency check.
 
 ## Batch Processing for Motion Retargeting
 
@@ -133,13 +137,14 @@ python examples/parallel_robot_retarget.py \
   --save-dir demo_results_parallel/g1/robot_only/omomo \
   --task-config.object-name ground
 
-# Object interaction (OMOMO)
+# All OMOMO object-interaction sequences on G1
 python examples/parallel_robot_retarget.py \
   --data-dir demo_data/OMOMO_new \
   --task-type object_interaction \
   --data-format omomo \
+  --robot g1 \
   --save-dir demo_results_parallel/g1/object_interaction/omomo \
-  --task-config.object-name largebox
+  --max-workers 4
 
 # Climbing
 python examples/parallel_robot_retarget.py \
@@ -165,7 +170,36 @@ python examples/parallel_robot_retarget.py \
 ```
 
 Add `--augmentation` to process both original and augmented
-object-interaction/climbing sequences. Existing output files are skipped.
+object-interaction/climbing sequences. Existing output files are skipped unless
+`--overwrite-existing` is set. OMOMO batches run a dataset/height/asset
+preflight by default and write `batch_report.json` under the save directory.
+
+The supported OMOMO catalog is `clothesstand`, `floorlamp`, `largebox`,
+`largetable`, `monitor`, `plasticbox`, `smallbox`, `smalltable`, `suitcase`,
+`trashcan`, `tripod`, `whitechair`, and `woodchair`. Omit `--object-names` to
+process all categories, or select an exact subset. Use `--dry-run` first to
+validate all inputs and write the manifest without starting optimization:
+
+```bash
+# Preflight and manifest for all thirteen categories
+python examples/parallel_robot_retarget.py \
+  --data-dir demo_data/OMOMO_new \
+  --task-type object_interaction \
+  --data-format omomo \
+  --robot g1 \
+  --save-dir demo_results_parallel/g1/object_interaction/omomo \
+  --dry-run
+
+# Resume a selected subset on E1
+python examples/parallel_robot_retarget.py \
+  --data-dir demo_data/OMOMO_new \
+  --task-type object_interaction \
+  --data-format omomo \
+  --robot e1 \
+  --object-names tripod suitcase whitechair \
+  --save-dir demo_results_parallel/e1/object_interaction/omomo \
+  --max-workers 4
+```
 
 ## Data Preparation
 
@@ -184,6 +218,25 @@ format differs from the original OMOMO release.
    pass `--motion-data-config.human-height HEIGHT`.
 
 The motion files should be `.pt` tensors.
+
+Validate the complete directory, the subject-height table, and all thirteen
+package assets before a long run:
+
+```bash
+python data_utils/preflight_omomo.py demo_data/OMOMO_new \
+  --asset-root models \
+  --output demo_results_parallel/omomo_preflight.json
+```
+
+For a release-level smoke test, run two real optimizer frames for every
+G1/E1-object pair. This creates and validates 26 result NPZ files:
+
+```bash
+python data_utils/validate_omomo_retargeting.py demo_data/OMOMO_new \
+  --robots g1 e1 \
+  --frames 2 \
+  --output-dir demo_results_validation/omomo_g1_e1
+```
 
 ### LAFAN
 
@@ -439,6 +492,9 @@ python evaluation/eval_retargeting.py \
 Robot-only evaluation uses the preprocessed human skeleton saved in each new
 result. Therefore, the same command also supports LAFAN, AMASS, Noetix-mocap,
 and GVHMR when `--data-format` and the paths are changed.
+For OMOMO robot-object results, evaluation resolves the object independently
+for every NPZ from saved metadata and the canonical filename. Do not pass
+`--object-name` for a directory containing multiple object categories.
 
 ## Prepare Data for Training RL Whole-Body Tracking Policy
 
@@ -466,7 +522,6 @@ mjpython data_conversion/convert_data_format_mj.py \
   --output-fps 50 \
   --output-name converted_res/object_interaction/sub3_largebox_003_mj_w_obj.npz \
   --data-format omomo \
-  --object-name largebox \
   --has-dynamic-object \
   --once
 ```
@@ -495,14 +550,17 @@ python data_conversion/convert_data_format_mj.py \
 
 ```bash
 python data_conversion/convert_data_format_mj.py \
-  --input-file ./demo_results/g1/object_interaction/omomo/sub3_largebox_003_original.npz \
+  --input-file ./demo_results/e1/object_interaction/omomo/sub10_tripod_000_original.npz \
+  --robot e1 \
   --output-fps 50 \
-  --output-name converted_res/object_interaction/sub3_largebox_003_mj_w_obj.npz \
+  --output-name converted_res/object_interaction/sub10_tripod_000_mj_w_obj.npz \
   --data-format omomo \
-  --object-name largebox \
   --has-dynamic-object \
   --once
 ```
+
+Dynamic OMOMO conversion infers the category from result metadata or the
+canonical filename and rejects conflicting explicit overrides.
 
 ### OmniRetarget Data
 

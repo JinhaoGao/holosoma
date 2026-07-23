@@ -79,6 +79,30 @@ class ResultVisualizationTests(unittest.TestCase):
             "gvhmr",
         )
 
+    def test_runtime_config_resolves_catalog_object_from_result_metadata(self):
+        metadata = {
+            "robot_type": "e1",
+            "object_name": "tripod",
+            "object_urdf": "",
+            "contains_object_in_qpos": True,
+        }
+        config = _resolve_runtime_config(
+            ViserConfig(qpos_npz="sub2_tripod_019_original.npz"),
+            metadata,
+        )
+        self.assertEqual(config.robot_urdf, "models/e1/e1_23dof.urdf")
+        self.assertTrue(config.object_urdf.endswith("models/tripod/tripod.urdf"))
+
+    def test_runtime_config_infers_legacy_result_object_from_filename(self):
+        config = _resolve_runtime_config(
+            ViserConfig(
+                qpos_npz="sub2_whitechair_019_original.npz",
+                robot_type="g1",
+            ),
+            {},
+        )
+        self.assertTrue(config.object_urdf.endswith("models/whitechair/whitechair.urdf"))
+
     def test_mesh_opacity_preserves_opaque_materials_and_clamps_translucency(self):
         self.assertIsNone(_mesh_color_override(1.0))
         self.assertEqual(_mesh_color_override(0.25), (0.7, 0.7, 0.7, 0.25))

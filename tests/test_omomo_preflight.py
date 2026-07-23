@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -17,8 +18,10 @@ if str(PACKAGE_ROOT) not in sys.path:
 
 from holosoma_retargeting.data_utils.omomo import (  # noqa: E402
     OMOMO_OBJECT_NAMES,
+    parse_omomo_result_name,
     parse_omomo_sequence_name,
     preflight_omomo_dataset,
+    resolve_omomo_result_object_name,
     select_omomo_files,
 )
 
@@ -51,6 +54,26 @@ class OmomoSequenceNameTests(unittest.TestCase):
                 select_omomo_files(directory, ["largebox"]),
                 [directory / "sub1_largebox_001.pt"],
             )
+
+    def test_result_names_and_metadata_resolve_the_same_object(self):
+        self.assertEqual(
+            parse_omomo_result_name("sub2_woodchair_019_trans_2.npz").object_name,
+            "woodchair",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result_path = Path(tmpdir) / "sub2_woodchair_019_original.npz"
+            np.savez(result_path, object_name=np.asarray("woodchair"))
+            self.assertEqual(
+                resolve_omomo_result_object_name(result_path),
+                "woodchair",
+            )
+
+    def test_result_object_resolution_rejects_disagreement(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result_path = Path(tmpdir) / "sub2_woodchair_019_original.npz"
+            np.savez(result_path, object_name=np.asarray("tripod"))
+            with self.assertRaisesRegex(ValueError, "conflicting"):
+                resolve_omomo_result_object_name(result_path)
 
 
 class OmomoPreflightTests(unittest.TestCase):

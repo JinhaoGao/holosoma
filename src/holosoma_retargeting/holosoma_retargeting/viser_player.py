@@ -2,6 +2,7 @@
 # viser_player.py
 from __future__ import annotations
 
+import re
 import sys
 import threading
 import time
@@ -28,6 +29,11 @@ from holosoma_retargeting.config_types.data_type import (  # noqa: E402
 )
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 from holosoma_retargeting.config_types.viser import ViserConfig  # noqa: E402
+from holosoma_retargeting.data_utils.object_assets import get_omomo_object_asset  # noqa: E402
+from holosoma_retargeting.data_utils.omomo import (  # noqa: E402
+    OMOMO_OBJECT_NAMES,
+    resolve_omomo_result_object_name,
+)
 from holosoma_retargeting.src.utils import interaction_mesh_edges_from_tetrahedra  # noqa: E402
 from holosoma_retargeting.src.viser_utils import (  # noqa: E402
     actuated_joint_names_from_mujoco_xml,
@@ -109,6 +115,23 @@ def _resolve_runtime_config(config: ViserConfig, metadata: dict[str, object]) ->
     saved_object_urdf = metadata.get("object_urdf")
     if object_urdf is None and saved_object_urdf:
         object_urdf = str(saved_object_urdf)
+    if object_urdf is None and metadata.get("contains_object_in_qpos") is not False:
+        object_name = metadata.get("object_name")
+        if object_name in OMOMO_OBJECT_NAMES:
+            object_urdf = str(get_omomo_object_asset(str(object_name)).urdf_path)
+        else:
+            result_stem = Path(config.qpos_npz).stem
+            dynamic_name_hint = re.search(
+                r"_(?:original|augmented|trans_[0-9]+|rot_[0-9]+)$",
+                result_stem,
+            )
+            if config.assume_object_in_qpos is True or dynamic_name_hint:
+                try:
+                    inferred_object = resolve_omomo_result_object_name(config.qpos_npz)
+                except ValueError:
+                    pass
+                else:
+                    object_urdf = str(get_omomo_object_asset(inferred_object).urdf_path)
 
     return replace(
         config,

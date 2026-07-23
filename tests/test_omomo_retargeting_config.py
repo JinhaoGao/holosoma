@@ -52,6 +52,15 @@ class OmomoObjectResolutionTests(unittest.TestCase):
 class OmomoRetargetingObjectSetupTests(unittest.TestCase):
     ROBOTS = {"g1": 29, "e1": 23}
 
+    def test_object_constants_require_resolved_category(self):
+        with self.assertRaisesRegex(ValueError, "resolved object name"):
+            create_task_constants(
+                RobotConfig(robot_type="g1"),
+                MotionDataConfig(data_format="omomo", robot_type="g1"),
+                TaskConfig(),
+                "object_interaction",
+            )
+
     def test_all_objects_setup_for_g1_and_e1(self):
         for robot_name, robot_dof in self.ROBOTS.items():
             robot_config = RobotConfig(robot_type=robot_name)

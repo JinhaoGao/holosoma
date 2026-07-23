@@ -15,8 +15,8 @@ class TaskConfig:
     """
 
     # Object name
-    # Auto-determined based on task_type if None: "largebox" for object_interaction,
-    # "multi_boxes" for climbing, "ground" for robot_only
+    # Inferred from canonical OMOMO task names for object_interaction;
+    # defaults to "multi_boxes" for climbing and "ground" for robot_only.
     object_name: str | None = None
     object_scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
     """Target object scale in x, y, z for object_interaction tasks."""

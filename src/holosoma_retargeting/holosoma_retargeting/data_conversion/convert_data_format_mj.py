@@ -20,6 +20,14 @@ if str(src_root) not in sys.path:
 from holosoma_retargeting.config_types.data_conversion import DataConversionConfig  # noqa: E402
 from holosoma_retargeting.config_types.data_type import MotionDataConfig  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
+from holosoma_retargeting.data_utils.object_assets import (  # noqa: E402
+    create_omomo_object_scene,
+    get_omomo_object_asset,
+)
+from holosoma_retargeting.data_utils.omomo import (  # noqa: E402
+    OMOMO_OBJECT_NAMES,
+    resolve_omomo_result_object_name,
+)
 
 DynamicState = Tuple[
     torch.Tensor,
@@ -61,7 +69,23 @@ def create_task_constants(
     if object_name is not None:
         namespace.OBJECT_NAME = object_name
 
-    if namespace.OBJECT_NAME != "ground":
+    if namespace.OBJECT_NAME in OMOMO_OBJECT_NAMES:
+        object_asset = get_omomo_object_asset(namespace.OBJECT_NAME)
+        robot_xml_path = Path(namespace.ROBOT_URDF_FILE).with_suffix(".xml")
+        if not robot_xml_path.is_absolute():
+            robot_xml_path = Path(__file__).resolve().parents[1] / robot_xml_path
+        namespace.OBJECT_URDF_FILE = str(object_asset.urdf_path)
+        namespace.OBJECT_MESH_FILE = str(object_asset.mesh_path)
+        namespace.OBJECT_URDF_TEMPLATE = str(
+            object_asset.mesh_path.parent.parent / "templates" / "omomo_object.urdf.jinja"
+        )
+        namespace.SCENE_XML_FILE = str(
+            create_omomo_object_scene(
+                robot_xml_path,
+                namespace.OBJECT_NAME,
+            )
+        )
+    elif namespace.OBJECT_NAME != "ground":
         namespace.OBJECT_URDF_FILE = f"models/{namespace.OBJECT_NAME}/{namespace.OBJECT_NAME}.urdf"
         namespace.OBJECT_MESH_FILE = f"models/{namespace.OBJECT_NAME}/{namespace.OBJECT_NAME}.obj"
         namespace.OBJECT_URDF_TEMPLATE = f"models/templates/{namespace.OBJECT_NAME}.urdf.jinja"
@@ -75,6 +99,26 @@ def create_task_constants(
         namespace.SCENE_XML_FILE = namespace.ROBOT_URDF_FILE.replace(".urdf", ".xml")
 
     return namespace
+
+
+def resolve_conversion_object_name(
+    input_file: str | Path,
+    data_format: str,
+    has_dynamic_object: bool,
+    explicit_object_name: str | None,
+) -> str | None:
+    """Resolve the conversion object without relying on a largebox default."""
+
+    if has_dynamic_object and data_format == "omomo":
+        return resolve_omomo_result_object_name(
+            input_file,
+            explicit_object_name=explicit_object_name,
+        )
+    if has_dynamic_object and explicit_object_name is None:
+        raise ValueError(
+            "Dynamic-object conversion for non-OMOMO data requires an explicit object name"
+        )
+    return explicit_object_name
 
 
 def quat_conjugate(q):  # (...,4) [w,x,y,z]
@@ -394,9 +438,12 @@ def run_simulator(args_cli: DataConversionConfig):
         robot_dof=robot_config.ROBOT_DOF,
     )
 
-    object_name = args_cli.object_name
-    if object_name is None:
-        object_name = "largebox" if has_dynamic_object else None
+    object_name = resolve_conversion_object_name(
+        args_cli.input_file,
+        motion_config.data_format,
+        has_dynamic_object,
+        args_cli.object_name,
+    )
 
     constants = create_task_constants(
         robot_config,
@@ -409,7 +456,7 @@ def run_simulator(args_cli: DataConversionConfig):
     robot_model_path = constants.ROBOT_URDF_FILE
     if object_name == "ground":
         robot_xml_path = robot_model_path.replace(".urdf", ".xml")
-    elif object_name == "multi_boxes":
+    elif constants.SCENE_XML_FILE:
         robot_xml_path = constants.SCENE_XML_FILE
     else:
         if object_name is None:
@@ -447,6 +494,9 @@ def run_simulator(args_cli: DataConversionConfig):
     if has_dynamic_object:
         log = {
             "fps": [args_cli.output_fps],
+            "object_name": object_name,
+            "robot_type": robot_config.robot_type,
+            "source_data_format": motion_config.data_format,
             "joint_pos": [],
             "joint_vel": [],
             "body_pos_w": [],
