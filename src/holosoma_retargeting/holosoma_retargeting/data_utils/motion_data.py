@@ -13,6 +13,7 @@ from holosoma_retargeting.config_types.data_type import (
     DEMO_JOINTS_REGISTRY,
     normalize_data_format,
 )
+from holosoma_retargeting.data_utils.omomo import parse_omomo_sequence_name
 
 OrientationMode = Literal["bvh", "smpl", "mocap"]
 
@@ -164,7 +165,11 @@ def discover_motion_files(
                 selected_by_sequence.setdefault(path.stem, path)
     files = list(selected_by_sequence.values())
     if spec.name == "omomo" and object_name:
-        files = [path for path in files if object_name in path.stem]
+        files = [
+            path
+            for path in files
+            if parse_omomo_sequence_name(path, require_known_object=False).object_name == object_name
+        ]
     return sorted(files)
 
 
