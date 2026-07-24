@@ -182,16 +182,25 @@ class RetargetingEvaluator:
         self.constants = constants
 
     def _bake_object_mesh_from_xml(self):
-        """Bake world-frame triangle soup for geoms whose name contains self.object_name (mesh geoms only)."""
+        """Bake the visual object mesh in world coordinates."""
         m, d = self.robot_model, self.robot_data
         mujoco.mj_forward(m, d)
 
         obj_Vs, obj_Fs, v_acc = [], [], 0
+        visual_name = f"{self.object_name}_visual"
+        geom_names = [
+            mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, gid) or ""
+            for gid in range(m.ngeom)
+        ]
+        has_separate_visual = visual_name in geom_names
         for gid in range(m.ngeom):
             if m.geom_type[gid] != mujoco.mjtGeom.mjGEOM_MESH:
                 continue  # mesh-only
-            name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, gid) or ""
-            if self.object_name not in name:
+            name = geom_names[gid]
+            if has_separate_visual:
+                if name != visual_name:
+                    continue
+            elif self.object_name not in name:
                 continue
             Vw, F = _world_mesh_from_geom(m, d, gid, name)  # your helper
             if Vw is None or F is None or Vw.size == 0 or F.size == 0:
@@ -511,10 +520,19 @@ class RetargetingEvaluator:
 
         preserved = []
 
-        obj_gids = [
+        collision_prefix = f"{self.object_name}_collision_"
+        collision_gids = [
             g
             for g in range(self.robot_model.ngeom)
-            if self.object_name in (mujoco.mj_id2name(self.robot_model, mujoco.mjtObj.mjOBJ_GEOM, g) or "")
+            if (
+                mujoco.mj_id2name(self.robot_model, mujoco.mjtObj.mjOBJ_GEOM, g) or ""
+            ).startswith(collision_prefix)
+        ]
+        obj_gids = collision_gids or [
+            g
+            for g in range(self.robot_model.ngeom)
+            if self.object_name
+            in (mujoco.mj_id2name(self.robot_model, mujoco.mjtObj.mjOBJ_GEOM, g) or "")
         ]
 
         for _q, demo_joints in zip(q_trajectory, human_joints_motion):

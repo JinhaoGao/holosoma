@@ -36,6 +36,7 @@ class OmomoObjectAsset:
 
     name: str
     mesh_path: Path
+    collision_mesh_paths: tuple[Path, ...]
     urdf_path: Path
     mesh_sha256: str
 
@@ -47,9 +48,25 @@ class OmomoObjectAsset:
 
     @property
     def mesh_name(self) -> str:
-        """MuJoCo mesh asset name."""
+        """MuJoCo visual-mesh asset name."""
 
-        return f"{self.name}_mesh"
+        return f"{self.name}_visual_mesh"
+
+    @property
+    def visual_geom_name(self) -> str:
+        """MuJoCo visual-only geom name."""
+
+        return f"{self.name}_visual"
+
+    def collision_mesh_name(self, index: int) -> str:
+        """MuJoCo mesh asset name for one convex collision part."""
+
+        return f"{self.name}_collision_mesh_{index:03d}"
+
+    def collision_geom_name(self, index: int) -> str:
+        """MuJoCo geom name for one convex collision part."""
+
+        return f"{self.name}_collision_{index:03d}"
 
     @property
     def joint_name(self) -> str:
@@ -66,6 +83,7 @@ class ObjectAssetValidation:
     vertex_count: int
     face_count: int
     extents: tuple[float, float, float]
+    collision_part_count: int
     sha256_matches: bool
 
 
@@ -87,9 +105,13 @@ def get_omomo_object_asset(
         raise ValueError(f"Unknown OMOMO object {object_name!r}; supported objects: {supported}")
     root = Path(models_root).expanduser() if models_root is not None else default_models_root()
     object_dir = root / object_name
+    collision_mesh_paths = tuple(
+        sorted((object_dir / "collision").glob(f"{object_name}_collision_*.obj"))
+    )
     return OmomoObjectAsset(
         name=object_name,
         mesh_path=object_dir / f"{object_name}.obj",
+        collision_mesh_paths=collision_mesh_paths,
         urdf_path=object_dir / f"{object_name}.urdf",
         mesh_sha256=OMOMO_MESH_SHA256[object_name],
     )
@@ -123,6 +145,10 @@ def validate_omomo_object_asset(
         raise FileNotFoundError(f"OMOMO object mesh not found: {asset.mesh_path}")
     if not asset.urdf_path.is_file():
         raise FileNotFoundError(f"OMOMO object URDF not found: {asset.urdf_path}")
+    if not asset.collision_mesh_paths:
+        raise FileNotFoundError(
+            f"OMOMO convex collision meshes not found: {asset.mesh_path.parent / 'collision'}"
+        )
 
     sha256_matches = _sha256(asset.mesh_path) == asset.mesh_sha256
     if verify_hash and not sha256_matches:
@@ -144,11 +170,32 @@ def validate_omomo_object_asset(
             f"OMOMO object mesh extents are not plausible meters: {asset.name}={extents_array.tolist()}"
         )
 
+    for collision_path in asset.collision_mesh_paths:
+        if not collision_path.is_file():
+            raise FileNotFoundError(f"OMOMO collision mesh not found: {collision_path}")
+        collision_mesh = trimesh.load(collision_path, force="mesh", process=False)
+        collision_vertices = np.asarray(collision_mesh.vertices)
+        collision_faces = np.asarray(collision_mesh.faces)
+        if (
+            collision_vertices.ndim != 2
+            or collision_vertices.shape[1] != 3
+            or len(collision_vertices) < 4
+            or collision_faces.ndim != 2
+            or collision_faces.shape[1] != 3
+            or len(collision_faces) < 4
+        ):
+            raise ValueError(f"OMOMO collision mesh is invalid: {collision_path}")
+        if not np.isfinite(collision_vertices).all():
+            raise ValueError(f"OMOMO collision mesh contains NaN or Inf: {collision_path}")
+        if not collision_mesh.is_watertight or not collision_mesh.is_convex:
+            raise ValueError(f"OMOMO collision mesh must be a watertight convex hull: {collision_path}")
+
     return ObjectAssetValidation(
         object_name=asset.name,
         vertex_count=len(vertices),
         face_count=len(faces),
         extents=tuple(float(value) for value in extents_array),
+        collision_part_count=len(asset.collision_mesh_paths),
         sha256_matches=sha256_matches,
     )
 
@@ -219,6 +266,19 @@ def create_omomo_object_scene(
             "scale": scale_value,
         },
     )
+    for index, collision_mesh_path in enumerate(asset.collision_mesh_paths):
+        collision_reference = Path(
+            os.path.relpath(collision_mesh_path.resolve(), mesh_dir)
+        ).as_posix()
+        ET.SubElement(
+            asset_element,
+            "mesh",
+            {
+                "name": asset.collision_mesh_name(index),
+                "file": collision_reference,
+                "scale": scale_value,
+            },
+        )
 
     body = ET.SubElement(worldbody, "body", {"name": asset.body_name})
     ET.SubElement(body, "freejoint", {"name": asset.joint_name})
@@ -235,19 +295,34 @@ def create_omomo_object_scene(
         body,
         "geom",
         {
-            "name": asset.name,
+            "name": asset.visual_geom_name,
             "type": "mesh",
             "mesh": asset.mesh_name,
-            "contype": "1",
-            "conaffinity": "1",
+            "contype": "0",
+            "conaffinity": "0",
             "pos": "0 0 0",
             "quat": "1 0 0 0",
             "rgba": "0.7 0.8 0.9 0.7",
-            "friction": "0.9 0.5 0.5",
-            "solref": "0.02 1",
-            "solimp": "0.9 0.95 0.001",
         },
     )
+    for index in range(len(asset.collision_mesh_paths)):
+        ET.SubElement(
+            body,
+            "geom",
+            {
+                "name": asset.collision_geom_name(index),
+                "type": "mesh",
+                "mesh": asset.collision_mesh_name(index),
+                "contype": "1",
+                "conaffinity": "1",
+                "pos": "0 0 0",
+                "quat": "1 0 0 0",
+                "rgba": "0 0 0 0",
+                "friction": "0.9 0.5 0.5",
+                "solref": "0.02 1",
+                "solimp": "0.9 0.95 0.001",
+            },
+        )
 
     scale_suffix = ""
     if scale_value != "1 1 1":
@@ -283,12 +358,17 @@ def create_scaled_omomo_object_urdf(
     )
 
     tree = ET.parse(asset.urdf_path)  # noqa: S314
-    mesh_reference = asset.mesh_path.resolve().as_posix()
     mesh_elements = tree.getroot().findall(".//mesh")
     if not mesh_elements:
         raise ValueError(f"OMOMO object URDF contains no mesh elements: {asset.urdf_path}")
     for mesh in mesh_elements:
-        mesh.set("filename", mesh_reference)
+        filename = mesh.get("filename")
+        if not filename:
+            raise ValueError(f"OMOMO object URDF mesh has no filename: {asset.urdf_path}")
+        source_reference = Path(filename)
+        if not source_reference.is_absolute():
+            source_reference = (asset.urdf_path.parent / source_reference).resolve()
+        mesh.set("filename", source_reference.as_posix())
         mesh.set("scale", scale_value)
     tree.write(destination, encoding="utf-8", xml_declaration=True)
     return destination

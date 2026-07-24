@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
+import trimesh
 import yourdfpy
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -40,14 +42,54 @@ class OmomoObjectCatalogTests(unittest.TestCase):
             with self.subTest(object_name=result.object_name):
                 self.assertGreater(result.vertex_count, 3)
                 self.assertGreater(result.face_count, 3)
+                self.assertGreater(result.collision_part_count, 0)
                 self.assertTrue(result.sha256_matches)
                 self.assertTrue(np.all(np.asarray(result.extents) > 1e-3))
 
-    def test_every_object_urdf_loads_with_one_named_link(self):
+    def test_every_object_urdf_loads_with_visual_and_convex_collisions(self):
         for asset in get_all_omomo_object_assets():
             with self.subTest(object_name=asset.name):
                 model = yourdfpy.URDF.load(asset.urdf_path, load_meshes=False)
                 self.assertIn(asset.body_name, model.link_map)
+                root = ET.parse(asset.urdf_path).getroot()  # noqa: S314
+                self.assertEqual(len(root.findall(".//visual")), 1)
+                self.assertEqual(
+                    len(root.findall(".//collision")),
+                    len(asset.collision_mesh_paths),
+                )
+
+    def test_clothesstand_collision_is_not_the_global_convex_hull(self):
+        asset = next(
+            asset
+            for asset in get_all_omomo_object_assets()
+            if asset.name == "clothesstand"
+        )
+        visual_mesh = trimesh.load(asset.mesh_path, force="mesh", process=False)
+        collision_volume = sum(
+            abs(trimesh.load(path, force="mesh", process=False).volume)
+            for path in asset.collision_mesh_paths
+        )
+        global_hull_volume = abs(visual_mesh.convex_hull.volume)
+        self.assertLess(collision_volume / global_hull_volume, 0.2)
+
+    def test_collision_manifest_covers_the_catalog(self):
+        models_root = default_models_root()
+        manifest = json.loads(
+            (models_root / "omomo_collision_manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(manifest["generator"]["name"], "CoACD")
+        self.assertEqual(set(manifest["objects"]), set(OMOMO_OBJECT_NAMES))
+        for asset in get_all_omomo_object_assets(models_root=models_root):
+            with self.subTest(object_name=asset.name):
+                record = manifest["objects"][asset.name]
+                self.assertEqual(
+                    record["collision_part_count"],
+                    len(asset.collision_mesh_paths),
+                )
+                self.assertEqual(
+                    {models_root / item["file"] for item in record["parts"]},
+                    set(asset.collision_mesh_paths),
+                )
 
 
 class OmomoObjectSceneTests(unittest.TestCase):
@@ -76,9 +118,34 @@ class OmomoObjectSceneTests(unittest.TestCase):
                             0,
                         )
                         self.assertGreaterEqual(
-                            mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, object_name),
+                            mujoco.mj_name2id(
+                                model,
+                                mujoco.mjtObj.mjOBJ_GEOM,
+                                f"{object_name}_visual",
+                            ),
                             0,
                         )
+                        asset = next(
+                            item
+                            for item in get_all_omomo_object_assets(models_root=models_root)
+                            if item.name == object_name
+                        )
+                        visual_id = mujoco.mj_name2id(
+                            model,
+                            mujoco.mjtObj.mjOBJ_GEOM,
+                            asset.visual_geom_name,
+                        )
+                        self.assertEqual(int(model.geom_contype[visual_id]), 0)
+                        self.assertEqual(int(model.geom_conaffinity[visual_id]), 0)
+                        for index in range(len(asset.collision_mesh_paths)):
+                            collision_id = mujoco.mj_name2id(
+                                model,
+                                mujoco.mjtObj.mjOBJ_GEOM,
+                                asset.collision_geom_name(index),
+                            )
+                            self.assertGreaterEqual(collision_id, 0)
+                            self.assertEqual(int(model.geom_contype[collision_id]), 1)
+                            self.assertEqual(int(model.geom_conaffinity[collision_id]), 1)
                         joint_id = mujoco.mj_name2id(
                             model,
                             mujoco.mjtObj.mjOBJ_JOINT,
@@ -98,9 +165,18 @@ class OmomoObjectSceneTests(unittest.TestCase):
                 output_dir=tmpdir,
             )
             root = ET.parse(scene_path).getroot()  # noqa: S314
-            mesh = root.find("./asset/mesh[@name='smallbox_mesh']")
+            mesh = root.find("./asset/mesh[@name='smallbox_visual_mesh']")
             self.assertIsNotNone(mesh)
             self.assertEqual(mesh.get("scale"), "0.5 1 1.5")
+            collision_meshes = [
+                item
+                for item in root.findall("./asset/mesh")
+                if item.get("name", "").startswith("smallbox_collision_mesh_")
+            ]
+            self.assertTrue(collision_meshes)
+            self.assertTrue(
+                all(item.get("scale") == "0.5 1 1.5" for item in collision_meshes)
+            )
 
             urdf_path = create_scaled_omomo_object_urdf(
                 "smallbox",
@@ -110,8 +186,27 @@ class OmomoObjectSceneTests(unittest.TestCase):
             )
             urdf_root = ET.parse(urdf_path).getroot()  # noqa: S314
             urdf_meshes = urdf_root.findall(".//mesh")
-            self.assertEqual(len(urdf_meshes), 2)
+            smallbox_asset = next(
+                asset
+                for asset in get_all_omomo_object_assets(models_root=models_root)
+                if asset.name == "smallbox"
+            )
+            self.assertEqual(
+                len(urdf_meshes),
+                1 + len(smallbox_asset.collision_mesh_paths),
+            )
             self.assertTrue(all(item.get("scale") == "0.5 1 1.5" for item in urdf_meshes))
+            self.assertEqual(
+                Path(urdf_meshes[0].get("filename", "")),
+                smallbox_asset.mesh_path.resolve(),
+            )
+            self.assertEqual(
+                {
+                    Path(item.get("filename", ""))
+                    for item in urdf_meshes[1:]
+                },
+                {path.resolve() for path in smallbox_asset.collision_mesh_paths},
+            )
             yourdfpy.URDF.load(urdf_path)
 
 

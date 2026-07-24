@@ -22,11 +22,13 @@
         <color rgba="0.7 0.8 0.9 0.7"/>
       </material>
     </visual>
-    <collision name="{{object_name}}">
+{% for collision_mesh_filename in collision_mesh_filenames %}
+    <collision name="{{object_name}}_collision_{{'%03d' % loop.index0}}">
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="{{mesh_filename}}" scale="{{scale_x}} {{scale_y}} {{scale_z}}"/>
+        <mesh filename="{{collision_mesh_filename}}" scale="{{scale_x}} {{scale_y}} {{scale_z}}"/>
       </geometry>
     </collision>
+{% endfor %}
   </link>
 </robot>

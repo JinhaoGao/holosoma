@@ -1,18 +1,98 @@
-<?xml version="1.0" ?>
+<?xml version='1.0' encoding='utf-8'?>
 <robot name="tripod">
-  <dynamics damping="0.5" friction="0.9"/>
+  <dynamics damping="0.5" friction="0.9" />
   <link name="tripod_link">
     <inertial>
-      <mass value="0.1"/>
-      <origin xyz="0 0 0"/>
-      <inertia ixx="0.002" ixy="0" ixz="0" iyy="0.002" iyz="0" izz="0.002"/>
+      <mass value="0.1" />
+      <origin xyz="0 0 0" />
+      <inertia ixx="0.002" ixy="0" ixz="0" iyy="0.002" iyz="0" izz="0.002" />
     </inertial>
+    <contact>
+      <lateral_friction value="0.9" />
+      <rolling_friction value="0.5" />
+      <stiffness value="30000" />
+      <damping value="1000" />
+    </contact>
     <visual>
-      <geometry><mesh filename="tripod.obj" scale="1 1 1"/></geometry>
-      <material name="mat"><color rgba="0.7 0.8 0.9 0.7"/></material>
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="tripod.obj" scale="1 1 1" />
+      </geometry>
+      <material name="mat">
+        <color rgba="0.7 0.8 0.9 0.7" />
+      </material>
     </visual>
-    <collision name="tripod">
-      <geometry><mesh filename="tripod.obj" scale="1 1 1"/></geometry>
+    <collision name="tripod_collision_000">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="collision/tripod_collision_000.obj" scale="1 1 1" />
+      </geometry>
+    </collision>
+    <collision name="tripod_collision_001">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="collision/tripod_collision_001.obj" scale="1 1 1" />
+      </geometry>
+    </collision>
+    <collision name="tripod_collision_002">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="collision/tripod_collision_002.obj" scale="1 1 1" />
+      </geometry>
+    </collision>
+    <collision name="tripod_collision_003">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="collision/tripod_collision_003.obj" scale="1 1 1" />
+      </geometry>
+    </collision>
+    <collision name="tripod_collision_004">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="collision/tripod_collision_004.obj" scale="1 1 1" />
+      </geometry>
+    </collision>
+    <collision name="tripod_collision_005">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="collision/tripod_collision_005.obj" scale="1 1 1" />
+      </geometry>
+    </collision>
+    <collision name="tripod_collision_006">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="collision/tripod_collision_006.obj" scale="1 1 1" />
+      </geometry>
+    </collision>
+    <collision name="tripod_collision_007">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="collision/tripod_collision_007.obj" scale="1 1 1" />
+      </geometry>
+    </collision>
+    <collision name="tripod_collision_008">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="collision/tripod_collision_008.obj" scale="1 1 1" />
+      </geometry>
+    </collision>
+    <collision name="tripod_collision_009">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="collision/tripod_collision_009.obj" scale="1 1 1" />
+      </geometry>
+    </collision>
+    <collision name="tripod_collision_010">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="collision/tripod_collision_010.obj" scale="1 1 1" />
+      </geometry>
+    </collision>
+    <collision name="tripod_collision_011">
+      <origin rpy="0 0 0" xyz="0 0 0" />
+      <geometry>
+        <mesh filename="collision/tripod_collision_011.obj" scale="1 1 1" />
+      </geometry>
     </collision>
   </link>
 </robot>
