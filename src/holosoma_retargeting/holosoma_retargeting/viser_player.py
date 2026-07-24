@@ -29,6 +29,9 @@ from holosoma_retargeting.config_types.data_type import (  # noqa: E402
 )
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 from holosoma_retargeting.config_types.viser import ViserConfig  # noqa: E402
+from holosoma_retargeting.data_utils.hand_skeleton import (  # noqa: E402
+    build_hand_visualization_spec,
+)
 from holosoma_retargeting.data_utils.object_assets import get_omomo_object_asset  # noqa: E402
 from holosoma_retargeting.data_utils.omomo import (  # noqa: E402
     OMOMO_OBJECT_NAMES,
@@ -60,6 +63,7 @@ def load_npz(npz_path: str):
             "object_name": _npz_scalar(data, "object_name"),
             "object_urdf": _npz_scalar(data, "object_urdf"),
             "contains_object_in_qpos": _npz_scalar(data, "contains_object_in_qpos"),
+            "object_keypoints": _load_object_keypoints_npz(data),
         }
         interaction_mesh = _load_interaction_mesh_npz(data)
     return qpos, fps, human_joints, metadata, interaction_mesh
@@ -82,6 +86,42 @@ def _load_interaction_mesh_npz(data) -> dict[str, np.ndarray | int] | None:
         "tetrahedra": np.asarray(data["interaction_tetrahedra"], dtype=np.int32),
         "tetrahedra_counts": np.asarray(data["interaction_tetrahedra_counts"], dtype=np.int32),
         "num_human_vertices": int(np.asarray(data["interaction_num_human_vertices"]).item()),
+    }
+
+
+def _load_object_keypoints_npz(data) -> dict[str, np.ndarray] | None:
+    required_keys = (
+        "object_points_demo_world",
+        "object_points_target_world",
+    )
+    if all(key in data for key in required_keys):
+        result = {
+            "demo_world": np.asarray(data["object_points_demo_world"], dtype=np.float32),
+            "target_world": np.asarray(data["object_points_target_world"], dtype=np.float32),
+        }
+        if "object_points_demo_local" in data:
+            result["demo_local"] = np.asarray(data["object_points_demo_local"], dtype=np.float32)
+        if "object_points_target_local" in data:
+            result["target_local"] = np.asarray(data["object_points_target_local"], dtype=np.float32)
+        return result
+
+    legacy_keys = (
+        "interaction_source_vertices_w",
+        "interaction_target_vertices_w",
+        "interaction_num_human_vertices",
+    )
+    if not all(key in data for key in legacy_keys):
+        return None
+    num_human_vertices = int(np.asarray(data["interaction_num_human_vertices"]).item())
+    return {
+        "demo_world": np.asarray(
+            data["interaction_source_vertices_w"][:, num_human_vertices:],
+            dtype=np.float32,
+        ),
+        "target_world": np.asarray(
+            data["interaction_target_vertices_w"][:, num_human_vertices:],
+            dtype=np.float32,
+        ),
     }
 
 
@@ -325,6 +365,10 @@ class MappedSkeletonOverlay:
             np.asarray(mapped_robot_joints, dtype=np.float32) if mapped_robot_joints is not None else None
         )
         self.mapped_edges = _mapped_skeleton_edges(self.human_joint_names)
+        self.hand_visualization_spec = build_hand_visualization_spec(
+            self.demo_joints,
+            self.human_joint_names,
+        )
         self.line_width = float(line_width)
         self.visible = True
         self._lock = threading.Lock()
@@ -333,6 +377,9 @@ class MappedSkeletonOverlay:
         self._sphere = trimesh.primitives.Sphere(radius=float(point_radius))
         self._sphere_vertices = self._sphere.vertices.astype(np.float32)
         self._sphere_faces = self._sphere.faces.astype(np.int32)
+        self._hand_sphere = trimesh.primitives.Sphere(radius=float(point_radius) * 0.6)
+        self._hand_sphere_vertices = self._hand_sphere.vertices.astype(np.float32)
+        self._hand_sphere_faces = self._hand_sphere.faces.astype(np.int32)
 
         self.robot_model = mujoco.MjModel.from_xml_path(str(robot_xml_path))
         self.robot_data = mujoco.MjData(self.robot_model)
@@ -360,7 +407,11 @@ class MappedSkeletonOverlay:
                 return
 
             self._clear_locked()
-            human_points = self._human_points(frame_float)
+            human_frame = self._human_frame(frame_float)
+            human_points = np.asarray(
+                human_frame[self.human_joint_indices],
+                dtype=np.float32,
+            )
             robot_points = self._robot_points(q, frame_float)
             self._handles.extend(
                 [
@@ -386,6 +437,30 @@ class MappedSkeletonOverlay:
                 self._handles.append(human_skeleton)
             if robot_skeleton is not None:
                 self._handles.append(robot_skeleton)
+            hand_spec = self.hand_visualization_spec
+            if hand_spec.keypoint_indices and hand_spec.edge_indices:
+                hand_points = np.asarray(
+                    human_frame[np.asarray(hand_spec.keypoint_indices, dtype=int)],
+                    dtype=np.float32,
+                )
+                self._handles.append(
+                    self._draw_points(
+                        "/overlays/mapped/human_hand_kpts",
+                        hand_points,
+                        color=(64, 64, 255),
+                        vertices=self._hand_sphere_vertices,
+                        faces=self._hand_sphere_faces,
+                    )
+                )
+                hand_skeleton = self._draw_skeleton(
+                    "/overlays/mapped/human_hand_skeleton",
+                    human_frame,
+                    list(hand_spec.edge_indices),
+                    color=np.array([0.25, 0.25, 1.0]),
+                    line_width=self.line_width * 0.75,
+                )
+                if hand_skeleton is not None:
+                    self._handles.append(hand_skeleton)
 
     def _clear_locked(self) -> None:
         for handle in self._handles:
@@ -393,9 +468,11 @@ class MappedSkeletonOverlay:
                 handle.remove()
         self._handles.clear()
 
-    def _human_points(self, frame_float: float) -> np.ndarray:
-        human_frame = _interpolate_sequence(self.human_joints, frame_float)
-        return np.asarray(human_frame[self.human_joint_indices], dtype=np.float32)
+    def _human_frame(self, frame_float: float) -> np.ndarray:
+        return np.asarray(
+            _interpolate_sequence(self.human_joints, frame_float),
+            dtype=np.float32,
+        )
 
     def _robot_points(self, q: np.ndarray, frame_float: float) -> np.ndarray:
         if self.mapped_robot_joints is not None:
@@ -412,11 +489,19 @@ class MappedSkeletonOverlay:
         mujoco.mj_forward(self.robot_model, self.robot_data)
         return self.robot_data.xpos[np.asarray(self.robot_body_ids, dtype=int)].copy().astype(np.float32)
 
-    def _draw_points(self, name: str, points: np.ndarray, color: tuple[int, int, int]):
+    def _draw_points(
+        self,
+        name: str,
+        points: np.ndarray,
+        color: tuple[int, int, int],
+        *,
+        vertices: np.ndarray | None = None,
+        faces: np.ndarray | None = None,
+    ):
         return self.server.scene.add_batched_meshes_simple(
             name,
-            vertices=self._sphere_vertices,
-            faces=self._sphere_faces,
+            vertices=self._sphere_vertices if vertices is None else vertices,
+            faces=self._sphere_faces if faces is None else faces,
             batched_positions=points,
             batched_wxyzs=np.tile(np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), (points.shape[0], 1)),
             batched_colors=color,
@@ -437,6 +522,86 @@ class MappedSkeletonOverlay:
         segments = np.asarray([[points[i], points[j]] for i, j in edges], dtype=np.float32)
         colors = np.tile(color.reshape(1, 1, 3), (segments.shape[0], 2, 1))
         return self.server.scene.add_line_segments(name, points=segments, colors=colors, line_width=line_width)
+
+
+class ObjectKeypointOverlay:
+    """Draw saved source/demo and target object samples with retargeting colors."""
+
+    def __init__(
+        self,
+        server: viser.ViserServer,
+        keypoint_data: dict[str, np.ndarray],
+        point_radius: float,
+    ) -> None:
+        self.server = server
+        self.demo_world = np.asarray(keypoint_data["demo_world"], dtype=np.float32)
+        self.target_world = np.asarray(keypoint_data["target_world"], dtype=np.float32)
+        if (
+            self.demo_world.ndim != 3
+            or self.target_world.ndim != 3
+            or self.demo_world.shape != self.target_world.shape
+            or self.demo_world.shape[-1] != 3
+        ):
+            raise ValueError("Saved object keypoints must have matching (frames, points, 3) shapes.")
+        self.visible = True
+        self._lock = threading.Lock()
+        self._handles: list[object] = []
+        sphere = trimesh.primitives.Sphere(radius=float(point_radius))
+        self._sphere_vertices = sphere.vertices.astype(np.float32)
+        self._sphere_faces = sphere.faces.astype(np.int32)
+
+    def set_visible(self, visible: bool) -> None:
+        with self._lock:
+            self.visible = bool(visible)
+            if not self.visible:
+                self._clear_locked()
+
+    def draw(self, frame_float: float) -> None:
+        with self._lock:
+            if not self.visible:
+                return
+            self._clear_locked()
+            demo_points = _interpolate_sequence(self.demo_world, frame_float)
+            target_points = _interpolate_sequence(self.target_world, frame_float)
+            self._handles.extend(
+                [
+                    self._draw_points(
+                        "/overlays/object_keypoints/demo_scaled",
+                        demo_points,
+                        color=(255, 0, 0),
+                    ),
+                    self._draw_points(
+                        "/overlays/object_keypoints/target",
+                        target_points,
+                        color=(0, 255, 255),
+                    ),
+                ]
+            )
+
+    def _clear_locked(self) -> None:
+        for handle in self._handles:
+            with suppress(Exception):
+                handle.remove()
+        self._handles.clear()
+
+    def _draw_points(
+        self,
+        name: str,
+        points: np.ndarray,
+        color: tuple[int, int, int],
+    ):
+        return self.server.scene.add_batched_meshes_simple(
+            name,
+            vertices=self._sphere_vertices,
+            faces=self._sphere_faces,
+            batched_positions=np.asarray(points, dtype=np.float32),
+            batched_wxyzs=np.tile(
+                np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+                (points.shape[0], 1),
+            ),
+            batched_colors=color,
+            opacity=1.0,
+        )
 
 
 class InteractionMeshOverlay:
@@ -628,6 +793,34 @@ def _build_interaction_mesh_overlay(
     return overlay
 
 
+def _build_object_keypoint_overlay(
+    config: ViserConfig,
+    server: viser.ViserServer,
+    npz_metadata: dict[str, object],
+) -> ObjectKeypointOverlay | None:
+    if not config.show_object_keypoints:
+        return None
+    keypoint_data = npz_metadata.get("object_keypoints")
+    if not isinstance(keypoint_data, dict):
+        print(
+            "[viser_player] --show-object-keypoints requested, but qpos npz does not "
+            "contain saved demo/target object keypoints. Re-run retargeting with the "
+            "current interaction mesh retargeter."
+        )
+        return None
+
+    overlay = ObjectKeypointOverlay(
+        server=server,
+        keypoint_data=keypoint_data,
+        point_radius=config.object_keypoint_radius,
+    )
+    print(
+        "[viser_player] Object keypoint overlay enabled | "
+        f"frames={overlay.demo_world.shape[0]}, points={overlay.demo_world.shape[1]}"
+    )
+    return overlay
+
+
 def make_player(
     config: ViserConfig,
     qpos: np.ndarray,
@@ -681,6 +874,7 @@ def make_player(
     server.scene.add_grid("/grid", width=config.grid_width, height=config.grid_height, position=(0.0, 0.0, 0.0))
 
     mapped_skeleton_overlay = _build_mapped_skeleton_overlay(config, server, human_joints, npz_metadata or {})
+    object_keypoint_overlay = _build_object_keypoint_overlay(config, server, npz_metadata or {})
     interaction_mesh_overlay = _build_interaction_mesh_overlay(config, server, interaction_mesh)
 
     # Figure robot DOF from actuated limits in ViserUrdf
@@ -719,6 +913,11 @@ def make_player(
             if mapped_skeleton_overlay is not None
             else None
         )
+        show_object_keypoints_cb = (
+            server.gui.add_checkbox("Show object keypoints", initial_value=True)
+            if object_keypoint_overlay is not None
+            else None
+        )
         show_interaction_mesh_cb = (
             server.gui.add_checkbox("Show interaction mesh", initial_value=True)
             if interaction_mesh_overlay is not None
@@ -728,6 +927,7 @@ def make_player(
     updating_robot_mesh_checkbox = {"flag": False}
     updating_object_mesh_checkbox = {"flag": False}
     updating_skeleton_checkbox = {"flag": False}
+    updating_object_keypoints_checkbox = {"flag": False}
     updating_interaction_mesh_checkbox = {"flag": False}
     last_rendered_frame: dict[str, np.ndarray | float | None] = {"q": None, "frame": None}
 
@@ -807,6 +1007,31 @@ def make_player(
             callback=lambda: _set_mapped_skeleton_visibility(not bool(show_mapped_skeletons_cb.value)),
         )
 
+    if show_object_keypoints_cb is not None:
+
+        def _set_object_keypoint_visibility(visible: bool, *, sync_checkbox: bool = True) -> None:
+            if sync_checkbox:
+                updating_object_keypoints_checkbox["flag"] = True
+                try:
+                    show_object_keypoints_cb.value = bool(visible)
+                finally:
+                    updating_object_keypoints_checkbox["flag"] = False
+            object_keypoint_overlay.set_visible(bool(visible))
+            if visible and last_rendered_frame["frame"] is not None:
+                object_keypoint_overlay.draw(float(last_rendered_frame["frame"]))
+
+        @show_object_keypoints_cb.on_update
+        def _(_):
+            if not updating_object_keypoints_checkbox["flag"]:
+                _set_object_keypoint_visibility(bool(show_object_keypoints_cb.value), sync_checkbox=False)
+
+        register_keyboard_shortcut(
+            server,
+            "Display: Toggle Object Keypoints",
+            hotkey="k",
+            callback=lambda: _set_object_keypoint_visibility(not bool(show_object_keypoints_cb.value)),
+        )
+
     if show_interaction_mesh_cb is not None:
 
         def _set_interaction_mesh_visibility(visible: bool, *, sync_checkbox: bool = True) -> None:
@@ -837,6 +1062,8 @@ def make_player(
         last_rendered_frame["frame"] = float(frame_float)
         if mapped_skeleton_overlay is not None:
             mapped_skeleton_overlay.draw(q, frame_float)
+        if object_keypoint_overlay is not None:
+            object_keypoint_overlay.draw(frame_float)
         if interaction_mesh_overlay is not None:
             interaction_mesh_overlay.draw(frame_float)
 
@@ -856,7 +1083,11 @@ def make_player(
         qpos_to_viser_joint_indices=qpos_to_viser_joint_indices,
         on_frame=(
             _draw_frame_overlay
-            if (mapped_skeleton_overlay is not None or interaction_mesh_overlay is not None)
+            if (
+                mapped_skeleton_overlay is not None
+                or object_keypoint_overlay is not None
+                or interaction_mesh_overlay is not None
+            )
             else None
         ),
     )

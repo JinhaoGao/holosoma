@@ -147,6 +147,10 @@ class OmomoAcceptanceHarnessTests(unittest.TestCase):
                 ),
                 robot_type=np.asarray(config.robot),
                 object_name=np.asarray(object_name),
+                object_points_demo_local=np.zeros((100, 3), dtype=np.float32),
+                object_points_target_local=np.zeros((100, 3), dtype=np.float32),
+                object_points_demo_world=np.zeros((2, 100, 3), dtype=np.float32),
+                object_points_target_world=np.zeros((2, 100, 3), dtype=np.float32),
             )
 
         with tempfile.TemporaryDirectory() as tmpdir:

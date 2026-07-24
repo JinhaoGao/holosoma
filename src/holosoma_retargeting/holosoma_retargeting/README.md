@@ -428,6 +428,7 @@ python examples/robot_retarget.py \
   --task-name sub3_largebox_003 \
   --data-format omomo \
   --retargeter.visualize \
+  --retargeter.debug \
   --retargeter.mesh-opacity 0.4 \
   --retargeter.show-interaction-mesh \
   --retargeter.save-interaction-mesh \
@@ -441,6 +442,7 @@ Replay all overlays with:
 python viser_player.py \
   --qpos-npz demo_results/g1/object_interaction/omomo/sub3_largebox_003_original.npz \
   --show-mapped-skeletons \
+  --show-object-keypoints \
   --show-interaction-mesh \
   --interaction-mesh-mode both \
   --interaction-mesh-edges cross \
@@ -448,16 +450,29 @@ python viser_player.py \
   --object-mesh-opacity 0.25
 ```
 
+For OMOMO, `--show-mapped-skeletons` augments the original 15 blue mapped
+joints with smaller blue points and lines for both complete SMPL-H finger
+chains. The finger joints are diagnostic only; they are not added to the
+Interaction Mesh and do not change optimization. `--show-object-keypoints`
+draws the exact per-frame object points saved during retargeting: red is the
+demo object normalized with the human height, and cyan is the object at the
+target asset scale. Because the result stores the world-space points actually
+used by that run, replay does not resample the object surface.
+
 `--mesh-opacity` provides a shared opacity. `--robot-mesh-opacity` and
-`--object-mesh-opacity` override it independently. Skeleton point/line size and
-Interaction Mesh line width are controlled by `--skeleton-point-radius`,
-`--skeleton-line-width`, and `--interaction-mesh-line-width`.
+`--object-mesh-opacity` override it independently. Skeleton point/line size,
+object point size, and Interaction Mesh line width are controlled by
+`--skeleton-point-radius`, `--skeleton-line-width`,
+`--object-keypoint-radius`, and `--interaction-mesh-line-width`.
 
 ## Result NPZ Contract
 
 New retargeting results contain `qpos`, `fps`, `cost`, the full and mapped human
 skeletons, mapped robot skeleton positions, and
-`source_data_format`/`robot_type`/object metadata. If
+`source_data_format`/`robot_type`/object metadata. Object-interaction results
+also always contain `object_points_demo_local`, `object_points_target_local`,
+`object_points_demo_world`, and `object_points_target_world`, which preserve
+the demo/target-scale local samples and their per-frame world coordinates. If
 `--retargeter.save-interaction-mesh` is enabled, per-frame source/target
 vertices and tetrahedra are included as well.
 

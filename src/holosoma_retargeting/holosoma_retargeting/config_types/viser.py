@@ -63,6 +63,9 @@ class ViserConfig:
     show_mapped_skeletons: bool = False
     """Whether to show saved human mapped skeleton and retargeted robot mapped skeleton."""
 
+    show_object_keypoints: bool = False
+    """Whether to show saved demo/target object keypoints."""
+
     show_interaction_mesh: bool = False
     """Whether to show saved source/target interaction mesh overlays."""
 
@@ -98,6 +101,9 @@ class ViserConfig:
 
     skeleton_point_radius: float = 0.02
     """Radius for mapped skeleton keypoint spheres."""
+
+    object_keypoint_radius: float = 0.02
+    """Radius for saved demo/target object keypoint spheres."""
 
     skeleton_line_width: float = 2.0
     """Line width for mapped skeleton edges."""

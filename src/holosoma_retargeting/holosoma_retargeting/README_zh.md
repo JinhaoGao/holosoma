@@ -365,6 +365,7 @@ python examples/robot_retarget.py \
   --task-name sub3_largebox_003 \
   --data-format omomo \
   --retargeter.visualize \
+  --retargeter.debug \
   --retargeter.mesh-opacity 0.4 \
   --retargeter.show-interaction-mesh \
   --retargeter.save-interaction-mesh \
@@ -378,6 +379,7 @@ python examples/robot_retarget.py \
 python viser_player.py \
   --qpos-npz demo_results/g1/object_interaction/omomo/sub3_largebox_003_original.npz \
   --show-mapped-skeletons \
+  --show-object-keypoints \
   --show-interaction-mesh \
   --interaction-mesh-mode both \
   --interaction-mesh-edges cross \
@@ -385,11 +387,13 @@ python viser_player.py \
   --object-mesh-opacity 0.25
 ```
 
-`--mesh-opacity` 提供共同透明度；`--robot-mesh-opacity` 和 `--object-mesh-opacity` 可分别覆盖。骨架点/线尺寸以及 Interaction Mesh 线宽分别由 `--skeleton-point-radius`、`--skeleton-line-width` 和 `--interaction-mesh-line-width` 控制。
+OMOMO 的 `--show-mapped-skeletons` 会在原有 15 个蓝色映射关节之外，以较小的蓝色点和线补全 SMPL-H 两只手的五指关节链。这些手指关节只用于诊断显示，不会加入 Interaction Mesh，也不会改变优化结果。`--show-object-keypoints` 会显示重定向时保存的逐帧物体点：红色为随人体身高一起归一化的示范物体点，青色为目标资产尺度下的物体点。结果保存的是当次重定向实际使用的世界坐标，因此回放无需重新采样物体表面。
+
+`--mesh-opacity` 提供共同透明度；`--robot-mesh-opacity` 和 `--object-mesh-opacity` 可分别覆盖。骨架点/线尺寸、物体点尺寸以及 Interaction Mesh 线宽分别由 `--skeleton-point-radius`、`--skeleton-line-width`、`--object-keypoint-radius` 和 `--interaction-mesh-line-width` 控制。
 
 ## 结果 NPZ 约定
 
-新重定向结果包含 `qpos`、`fps`、`cost`、完整及映射后的人体骨架、映射机器人骨架位置，以及 `source_data_format`、`robot_type` 和物体元数据。启用 `--retargeter.save-interaction-mesh` 后，还会包含逐帧源/目标顶点和四面体。
+新重定向结果包含 `qpos`、`fps`、`cost`、完整及映射后的人体骨架、映射机器人骨架位置，以及 `source_data_format`、`robot_type` 和物体元数据。物体交互结果还会始终保存 `object_points_demo_local`、`object_points_target_local`、`object_points_demo_world` 和 `object_points_target_world`，分别表示示范/目标尺度下的局部采样点及其逐帧世界坐标。启用 `--retargeter.save-interaction-mesh` 后，还会包含逐帧源/目标顶点和四面体。
 
 纯机器人 qpos 使用 `[root_xyz, root_wxyz, robot_dof]`；动态物体 qpos 会追加 `[object_xyz, object_wxyz]`。
 

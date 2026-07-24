@@ -18,6 +18,7 @@ from tqdm import tqdm
 from viser.extras import ViserUrdf  # type: ignore[import-not-found]
 
 from holosoma_retargeting.config_types.retargeter import FootLockConfig, SelfCollisionConfig
+from holosoma_retargeting.data_utils.hand_skeleton import build_hand_visualization_spec
 
 # Add src to path for direct execution
 src_path = Path(__file__).parent.parent / "src"
@@ -125,6 +126,10 @@ class InteractionMeshRetargeter:
         self.qpos_to_viser_joint_indices: np.ndarray | None = None
 
         self.mapped_joint_indices = [self.demo_joints.index(name) for name in self.laplacian_match_links]
+        self._hand_visualization_spec = build_hand_visualization_spec(
+            self.demo_joints,
+            list(self.laplacian_match_links),
+        )
 
         # Setup weights and parameters
         self.laplacian_weights = 10
@@ -532,8 +537,8 @@ class InteractionMeshRetargeter:
         retargeted_motions = [q]
 
         tetrahedra = []
-        obj_pts_demo_list = []  # scaled object pts
-        obj_pts_list = []  # original size object pts
+        obj_pts_demo_list = []  # source/demo object pts after human-scale normalization
+        obj_pts_list = []  # target object pts at the retargeting asset scale
         interaction_source_vertices_w_list = []
         interaction_target_vertices_w_list = []
         mapped_robot_joints_w_list = []
@@ -569,24 +574,31 @@ class InteractionMeshRetargeter:
                 )
                 tetrahedra.append(source_tetrahedra)
 
+                object_quat = object_poses_augmented[i, 3:]
+                object_trans = object_poses_augmented[i, :3]
+                obj_pts_demo = transform_points_local_to_world(
+                    object_quat_demo, object_trans_demo, object_points_local_demo
+                )
+                obj_pts = transform_points_local_to_world(
+                    object_quat,
+                    object_trans,
+                    object_points_local,
+                )
+                obj_pts_demo_list.append(obj_pts_demo.astype(np.float32))
+                obj_pts_list.append(obj_pts.astype(np.float32))
+
                 source_vertices_w = None
                 target_vertices_w = None
-                materialize_object_points = self.debug or collect_interaction_mesh
-                if materialize_object_points:
-                    object_quat = object_poses_augmented[i, 3:]
-                    object_trans = object_poses_augmented[i, :3]
-                    obj_pts_demo = transform_points_local_to_world(
-                        object_quat_demo, object_trans_demo, object_points_local_demo
-                    )
-                    obj_pts = transform_points_local_to_world(object_quat, object_trans, object_points_local)
-                    if collect_interaction_mesh:
-                        source_vertices_w = np.vstack([human_mapped_joints, obj_pts_demo])
+                if collect_interaction_mesh:
+                    source_vertices_w = np.vstack([human_mapped_joints, obj_pts_demo])
 
                 if self.debug:
                     # Only for visualization
-                    obj_pts_demo_list.append(obj_pts_demo)
-                    obj_pts_list.append(obj_pts)
                     human_kpts_handle_list = self.draw_keypoints(human_mapped_joints, name="human_kpts")  # 15 X 3
+                    human_hand_handle_list = self.draw_human_hand_skeleton(
+                        human_joint_motions[i],
+                        name="human_hands",
+                    )
                     obj_kpts_demo_handle_list = self.draw_keypoints(
                         obj_pts_demo, name="object_demo_kpts", rgba=(1, 0, 0, 1)
                     )  # 100 X 3
@@ -684,6 +696,10 @@ class InteractionMeshRetargeter:
                 handle.remove()
             human_skeleton_handle_list.clear()
 
+            for handle in human_hand_handle_list:
+                handle.remove()
+            human_hand_handle_list.clear()
+
             for handle in robot_skeleton_handle_list:
                 handle.remove()
             robot_skeleton_handle_list.clear()
@@ -704,6 +720,10 @@ class InteractionMeshRetargeter:
             "object_name": np.asarray(self.object_name),
             "object_urdf": np.asarray(self.object_model_path or ""),
             "contains_object_in_qpos": np.asarray(bool(self.object_model_path) and bool(self.has_dynamic_object)),
+            "object_points_demo_local": np.asarray(object_points_local_demo, dtype=np.float32),
+            "object_points_target_local": np.asarray(object_points_local, dtype=np.float32),
+            "object_points_demo_world": np.asarray(obj_pts_demo_list, dtype=np.float32),
+            "object_points_target_world": np.asarray(obj_pts_list, dtype=np.float32),
             "fps": float(fps),
             "cost": cost,
         }
@@ -734,16 +754,24 @@ class InteractionMeshRetargeter:
                         handle.remove()
                 replay_overlay_handles = []
 
-            def _human_mapped_joints_at_frame(frame_float: float) -> np.ndarray:
+            def _human_joints_at_frame(frame_float: float) -> np.ndarray:
                 if num_frames == 1:
-                    return human_joint_motions[0, self.mapped_joint_indices]
+                    return human_joint_motions[0]
 
                 frame_float = float(np.clip(frame_float, 0.0, num_frames - 1))
                 i0 = int(np.floor(frame_float))
                 i1 = min(i0 + 1, num_frames - 1)
                 u = frame_float - i0
-                human_frame = (1.0 - u) * human_joint_motions[i0] + u * human_joint_motions[i1]
-                return human_frame[self.mapped_joint_indices]
+                return (1.0 - u) * human_joint_motions[i0] + u * human_joint_motions[i1]
+
+            def _object_points_at_frame(points: list[np.ndarray], frame_float: float) -> np.ndarray:
+                if num_frames == 1:
+                    return points[0]
+                frame_float = float(np.clip(frame_float, 0.0, num_frames - 1))
+                i0 = int(np.floor(frame_float))
+                i1 = min(i0 + 1, num_frames - 1)
+                u = frame_float - i0
+                return (1.0 - u) * points[i0] + u * points[i1]
 
             def _interaction_mesh_frame_index(frame_float: float) -> int:
                 return int(np.clip(round(float(frame_float)), 0, num_frames - 1))
@@ -752,7 +780,8 @@ class InteractionMeshRetargeter:
                 _clear_replay_overlay()
 
                 if self.debug:
-                    human_mapped_joints = _human_mapped_joints_at_frame(frame_float)
+                    human_frame = _human_joints_at_frame(frame_float)
+                    human_mapped_joints = human_frame[self.mapped_joint_indices]
                     robot_link_positions = self._get_robot_link_positions(q, self.laplacian_match_links.values())
                     replay_overlay_handles.extend(self.draw_keypoints(human_mapped_joints, name="replay_human_kpts"))
                     replay_overlay_handles.extend(
@@ -763,6 +792,12 @@ class InteractionMeshRetargeter:
                         )
                     )
                     replay_overlay_handles.extend(
+                        self.draw_human_hand_skeleton(
+                            human_frame,
+                            name="replay_human_hands",
+                        )
+                    )
+                    replay_overlay_handles.extend(
                         self.draw_keypoints(robot_link_positions, name="replay_robot_kpts", rgba=(0, 1, 0, 1))
                     )
                     replay_overlay_handles.extend(
@@ -770,6 +805,20 @@ class InteractionMeshRetargeter:
                             robot_link_positions,
                             name="replay_robot_skeleton",
                             rgba=(0, 1, 0, 1),
+                        )
+                    )
+                    replay_overlay_handles.extend(
+                        self.draw_keypoints(
+                            _object_points_at_frame(obj_pts_demo_list, frame_float),
+                            name="replay_object_demo_kpts",
+                            rgba=(1, 0, 0, 1),
+                        )
+                    )
+                    replay_overlay_handles.extend(
+                        self.draw_keypoints(
+                            _object_points_at_frame(obj_pts_list, frame_float),
+                            name="replay_object_target_kpts",
+                            rgba=(0, 1, 1, 1),
                         )
                     )
 
@@ -1202,13 +1251,13 @@ class InteractionMeshRetargeter:
             self.object_base.position = object_pos
             self.object_base.wxyz = object_quat  # Assuming quaternion is in wxyz order
 
-    def draw_keypoints(self, p, name="keypoint", rgba=(0, 0, 1, 1)):
+    def draw_keypoints(self, p, name="keypoint", rgba=(0, 0, 1, 1), radius=0.02):
         """Draw keypoints in visualization."""
         if not hasattr(self, "server"):
             return []
 
         # Create a sphere mesh using trimesh
-        sphere = trimesh.primitives.Sphere(radius=0.02)
+        sphere = trimesh.primitives.Sphere(radius=float(radius))
         vertices = sphere.vertices
         faces = sphere.faces
 
@@ -1243,6 +1292,44 @@ class InteractionMeshRetargeter:
             kpts_handle_list.append(kpts_handle)
 
         return kpts_handle_list
+
+    def draw_human_hand_skeleton(
+        self,
+        human_joints: np.ndarray,
+        *,
+        name: str,
+        rgba=(0.25, 0.25, 1.0, 1.0),
+    ) -> list[object]:
+        """Draw visual-only SMPL-H finger joints without adding optimization anchors."""
+
+        if not hasattr(self, "server"):
+            return []
+        points = np.asarray(human_joints, dtype=float)
+        spec = self._hand_visualization_spec
+        if points.ndim != 2 or not spec.keypoint_indices or not spec.edge_indices:
+            return []
+
+        handles = self.draw_keypoints(
+            points[np.asarray(spec.keypoint_indices, dtype=int)],
+            name=f"{name}_kpts",
+            rgba=rgba,
+            radius=0.012,
+        )
+        segments = np.asarray(
+            [[points[start], points[end]] for start, end in spec.edge_indices],
+            dtype=np.float32,
+        )
+        color = np.asarray(rgba[:3], dtype=float)
+        colors = np.tile(color, (segments.shape[0], 2, 1))
+        handles.append(
+            self.server.scene.add_line_segments(
+                f"/{name}_skeleton",
+                points=segments,
+                colors=colors,
+                line_width=1.5,
+            )
+        )
+        return handles
 
     def _mapped_skeleton_edges(self) -> list[tuple[int, int]]:
         """Build skeleton edges in the current JOINTS_MAPPING key order."""

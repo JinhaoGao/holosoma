@@ -124,6 +124,20 @@ def _validate_result(
             raise ValueError("Saved robot_type metadata does not match the run")
         if str(np.asarray(result["object_name"]).item()) != object_name:
             raise ValueError("Saved object_name metadata does not match the run")
+        expected_object_shapes = {
+            "object_points_demo_local": (100, 3),
+            "object_points_target_local": (100, 3),
+            "object_points_demo_world": (frame_count, 100, 3),
+            "object_points_target_world": (frame_count, 100, 3),
+        }
+        for key, expected_shape in expected_object_shapes.items():
+            points = np.asarray(result[key])
+            if points.shape != expected_shape:
+                raise ValueError(
+                    f"Unexpected {key} shape {points.shape}; expected {expected_shape}"
+                )
+            if not np.isfinite(points).all():
+                raise ValueError(f"{key} contains NaN or Inf")
     return qpos.shape
 
 
