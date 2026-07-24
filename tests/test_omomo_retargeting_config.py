@@ -94,7 +94,11 @@ class OmomoRetargetingObjectSetupTests(unittest.TestCase):
                     model = mujoco.MjModel.from_xml_path(constants.SCENE_XML_FILE)
                     self.assertEqual(model.nq, 7 + robot_dof + 7)
                     self.assertGreaterEqual(
-                        mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, object_name),
+                        mujoco.mj_name2id(
+                            model,
+                            mujoco.mjtObj.mjOBJ_GEOM,
+                            f"{object_name}_visual",
+                        ),
                         0,
                     )
                     retargeter = InteractionMeshRetargeter(
@@ -131,6 +135,40 @@ class OmomoRetargetingObjectSetupTests(unittest.TestCase):
         np.testing.assert_allclose(demo_points, unscaled * 0.8)
         self.assertIn("scaled_0.5_1_1.5", Path(object_urdf).stem)
         self.assertIn("scaled_0.5_1_1.5", Path(constants.SCENE_XML_FILE).stem)
+
+
+class ObjectNonPenetrationToggleTests(unittest.TestCase):
+    def test_toggle_controls_object_pairs_but_not_ground_pairs(self):
+        retargeter = InteractionMeshRetargeter.__new__(InteractionMeshRetargeter)
+        retargeter.object_name = "clothesstand"
+
+        retargeter.activate_obj_non_penetration = True
+        self.assertTrue(
+            retargeter._environment_collision_pair_is_active(
+                "left_hand_collision",
+                "clothesstand_collision_000",
+            )
+        )
+
+        retargeter.activate_obj_non_penetration = False
+        self.assertFalse(
+            retargeter._environment_collision_pair_is_active(
+                "left_hand_collision",
+                "clothesstand_collision_000",
+            )
+        )
+        self.assertTrue(
+            retargeter._environment_collision_pair_is_active(
+                "left_foot_collision",
+                "ground",
+            )
+        )
+        self.assertFalse(
+            retargeter._environment_collision_pair_is_active(
+                "clothesstand_collision_000",
+                "ground",
+            )
+        )
 
 
 if __name__ == "__main__":

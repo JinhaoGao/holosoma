@@ -1441,15 +1441,9 @@ class InteractionMeshRetargeter:
                 return False
             if contype[g2] == 0 and conaff[g2] == 0:
                 return False
-            if self.object_name in self._geom_names[g1] and "ground" in self._geom_names[g2]:
-                return False
-            if "ground" in self._geom_names[g1] and self.object_name in self._geom_names[g2]:
-                return False
-            return (
-                self.object_name in self._geom_names[g1]
-                or self.object_name in self._geom_names[g2]
-                or "ground" in self._geom_names[g1]
-                or "ground" in self._geom_names[g2]
+            return self._environment_collision_pair_is_active(
+                self._geom_names[g1],
+                self._geom_names[g2],
             )
 
         for g1, g2 in candidates:
@@ -1471,6 +1465,25 @@ class InteractionMeshRetargeter:
                 #     self._geom_names[g1], self._geom_names[g2], fromto=fromto)
 
         return Js, phis
+
+    def _environment_collision_pair_is_active(self, geom1_name: str, geom2_name: str) -> bool:
+        """Select ground pairs and, when enabled, object pairs for hard constraints."""
+
+        geom1_lower = geom1_name.lower()
+        geom2_lower = geom2_name.lower()
+        geom1_is_ground = "ground" in geom1_lower
+        geom2_is_ground = "ground" in geom2_lower
+        has_dynamic_object = self.object_name not in {"", "ground"}
+        geom1_is_object = has_dynamic_object and self.object_name in geom1_name
+        geom2_is_object = has_dynamic_object and self.object_name in geom2_name
+
+        if (geom1_is_object and geom2_is_ground) or (geom1_is_ground and geom2_is_object):
+            return False
+        if geom1_is_ground or geom2_is_ground:
+            return True
+        if geom1_is_object or geom2_is_object:
+            return self.activate_obj_non_penetration
+        return False
 
     def _world_to_body_frame(self, p_w: np.ndarray, body_idx: int) -> np.ndarray:
         """Transform point from world frame to body frame."""
