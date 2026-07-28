@@ -31,6 +31,8 @@ ORIENTATION_JOINTS = (
     "RightLeg",
     "LeftFoot",
     "RightFoot",
+    "LeftToeBase",
+    "RightToeBase",
     "LeftArm",
     "RightArm",
     "LeftForeArm",
@@ -84,6 +86,8 @@ PROFILE_WEIGHTS: dict[str, dict[str, float]] = {
         "RightLeg": 0.75,
         "LeftFoot": 2.0,
         "RightFoot": 2.0,
+        "LeftToeBase": 2.0,
+        "RightToeBase": 2.0,
         "LeftArm": 1.0,
         "RightArm": 1.0,
         "LeftForeArm": 1.5,
@@ -123,7 +127,7 @@ def orientation_weights_for_variant(
     variant: str,
     weight_scale: float,
 ) -> dict[str, float]:
-    """Expand one relative profile into all 13 diagnostic-link weights."""
+    """Expand one relative profile into all 15 diagnostic-link weights."""
 
     if variant not in PROFILE_WEIGHTS:
         raise ValueError(f"Unknown orientation ablation variant {variant!r}; available: {sorted(PROFILE_WEIGHTS)}")

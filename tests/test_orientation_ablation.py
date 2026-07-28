@@ -124,7 +124,7 @@ class OrientationAblationTests(unittest.TestCase):
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 self.assertEqual(manifest["status"], "planned")
                 self.assertEqual(manifest["variant"], variant)
-                self.assertEqual(len(manifest["orientation_weights"]), 13)
+                self.assertEqual(len(manifest["orientation_weights"]), 15)
             summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
             self.assertEqual(set(summary["runs"]), {"baseline", "full"})
             self.assertEqual(summary["comparisons_to_baseline"], {})

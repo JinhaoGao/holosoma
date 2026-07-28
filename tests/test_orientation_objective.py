@@ -92,7 +92,7 @@ class OrientationObjectiveTests(unittest.TestCase):
             with_jacobians=False,
         )
 
-        self.assertEqual(alignments.shape, (13, 3, 3))
+        self.assertEqual(alignments.shape, (15, 3, 3))
         np.testing.assert_allclose(alignments, robot_matrices, atol=1e-12)
         np.testing.assert_allclose(targets[0], robot_matrices, atol=1e-12)
         np.testing.assert_allclose(targets[1], robot_matrices, atol=1e-12)

@@ -382,6 +382,8 @@ ORIENTATION_JOINTS_MAPPINGS: dict[tuple[str, str], dict[str, str]] = {
         "RightLeg": "r_leg_knee_link",
         "LeftFoot": "l_leg_ankle_roll_link",
         "RightFoot": "r_leg_ankle_roll_link",
+        "LeftToeBase": "l_foot_sphere_5_link",
+        "RightToeBase": "r_foot_sphere_5_link",
         "LeftArm": "l_arm_shoulder_yaw_link",
         "RightArm": "r_arm_shoulder_yaw_link",
         "LeftForeArm": "l_arm_elbow_pitch_link",

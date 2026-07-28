@@ -394,7 +394,7 @@ joint/link pair, `R_align = R_human,T^T R_robot,T` and
 skeleton faces world +Y, while E1 qpos0 faces +X, so the E1 reference root is
 rotated +90 degrees about world Z and its shoulder-roll joints are set to
 `+pi/2` on the left and `-pi/2` on the right. This forms a geometric robot
-T-pose instead of the E1 model's arms-down qpos0. MuJoCo FK then derives all 13
+T-pose instead of the E1 model's arms-down qpos0. MuJoCo FK then derives all 15
 fixed link offsets and automatically captures the E1 elbow/hand links' fixed
 frame rotations.
 The legacy `first_frame` mode remains available only for reproducibility,
@@ -405,7 +405,7 @@ The `shoulders_feet` ablation profile assigns the same requested weight to
 shoulder-yaw bodies and the two ankle-roll bodies; all other orientation
 weights remain zero.
 
-The `full_equal` profile tracks all 13 configured links with exactly the same
+The `full_equal` profile tracks all 15 configured links with exactly the same
 requested weight. This differs from `full`, which retains nonuniform relative
 coefficients for the legs, feet, forearms, and hands.
 
@@ -429,7 +429,7 @@ python examples/run_orientation_ablation.py \
 
 Each run records a manifest and saves target/robot link quaternions, per-link
 geodesic errors, mapped-position errors, and SQP diagnostics. The baseline
-stores the same 13-link diagnostics with zero weights while adding no
+stores the same 15-link diagnostics with zero weights while adding no
 orientation term to the optimization. Use `--frame-start` and `--frame-count`
 for fast windowed tuning before confirming selected settings on the complete
 sequence. The converted source frames can be inspected with:

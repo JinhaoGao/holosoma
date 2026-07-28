@@ -314,11 +314,11 @@ python data_utils/convert_noetix_bvh.py \
 
 ### Noetix E1 朝向跟踪与消融
 
-朝向跟踪是独立于位置 Interaction Mesh 的软目标。它参考 GMR 的全局刚体 FrameTask 和逐 link 固定旋转偏置，为人体关节和机器人 link 建立 T-pose 帧对齐，同时保留本项目原有的 SQP、碰撞和接触约束。默认的 `t_pose` 模式使用 `R_align = R_human,T^T R_robot,T`，每帧目标为 `R_target(t) = R_human(t) R_align`，再最小化 SO(3) 测地误差 `Log(R_target R_robot^T)`。Noetix 零旋转 T-pose 的人体局部帧为单位阵，但骨架解剖前向是世界 `+Y`；E1 零位模型前向是 `+X` 且双臂自然下垂，所以机器人 T-pose 参考根节点先绕世界 Z 轴旋转 `+90°`，左、右肩 roll 再分别设为 `+π/2` 和 `−π/2`，由此形成真正的几何 T-pose，而不是直接把 E1 的 qpos0 当成 T-pose。随后通过实际 MJCF 正向运动学为全部 13 个 link 推导偏置，肘部和手部还会自动包含 E1 模型固定的 link frame 旋转。`first_frame` 仅为复现旧结果保留，不再作为默认值，因为动作第一帧通常不是 T-pose，会把第一帧姿态错误地烘焙进永久偏置。
+朝向跟踪是独立于位置 Interaction Mesh 的软目标。它参考 GMR 的全局刚体 FrameTask 和逐 link 固定旋转偏置，为人体关节和机器人 link 建立 T-pose 帧对齐，同时保留本项目原有的 SQP、碰撞和接触约束。默认的 `t_pose` 模式使用 `R_align = R_human,T^T R_robot,T`，每帧目标为 `R_target(t) = R_human(t) R_align`，再最小化 SO(3) 测地误差 `Log(R_target R_robot^T)`。Noetix 零旋转 T-pose 的人体局部帧为单位阵，但骨架解剖前向是世界 `+Y`；E1 零位模型前向是 `+X` 且双臂自然下垂，所以机器人 T-pose 参考根节点先绕世界 Z 轴旋转 `+90°`，左、右肩 roll 再分别设为 `+π/2` 和 `−π/2`，由此形成真正的几何 T-pose，而不是直接把 E1 的 qpos0 当成 T-pose。随后通过实际 MJCF 正向运动学为全部 15 个 link 推导偏置，肘部和手部还会自动包含 E1 模型固定的 link frame 旋转。`first_frame` 仅为复现旧结果保留，不再作为默认值，因为动作第一帧通常不是 T-pose，会把第一帧姿态错误地烘焙进永久偏置。
 
 `shoulders_feet` 消融配置会为 `LeftArm`、`RightArm`、`LeftFoot` 和 `RightFoot` 设置相同的指定权重。在 E1 上它们分别对应左右肩 yaw link 和左右脚 ankle-roll link，其他朝向权重保持为零。
 
-`full_equal` 配置会用完全相同的指定权重跟踪全部 13 个 link。它与已有的 `full` 不同，后者为腿、脚、前臂和手保留了不相同的相对系数。
+`full_equal` 配置会用完全相同的指定权重跟踪全部 15 个 link。它与已有的 `full` 不同，后者为腿、脚、前臂和手保留了不相同的相对系数。
 
 可复现实验入口固定使用 `breaking+hippop.bvh_Skeleton1`，并生成 baseline、root、feet、gmr_legs、shoulders、upper 和 full 七组结果、每次运行的 manifest 以及统一 `summary.json`。其中 `gmr_legs` 对应 GMR E1 主任务实际启用旋转代价的髋、膝和足链，`shoulders` 只对 `LeftArm/RightArm → l/r_arm_shoulder_yaw_link` 加入朝向代价，其他十一个诊断 link 的权重严格为零。本项目沿用 GMR 的逐 link 偏置设计，但从 Noetix T-pose 和本项目实际 E1 MJCF 自动推导偏置，不照搬另一套模型的四元数或数值权重：
 
@@ -332,7 +332,7 @@ python examples/run_orientation_ablation.py \
   --overwrite
 ```
 
-baseline 会为相同的 13 个 link 保存朝向诊断，但所有朝向权重均为零，不向优化问题加入旋转项。结果文件保存目标/机器人 link 四元数、逐 link 测地误差、朝向代价、映射位置误差以及 SQP 诊断，可直接比较朝向改善是否以位置、收敛或约束退化为代价。可用 `--frame-start` 和 `--frame-count` 对相同输入切片做快速权重搜索，再对完整序列复核选中的配置。
+baseline 会为相同的 15 个 link 保存朝向诊断，但所有朝向权重均为零，不向优化问题加入旋转项。结果文件保存目标/机器人 link 四元数、逐 link 测地误差、朝向代价、映射位置误差以及 SQP 诊断，可直接比较朝向改善是否以位置、收敛或约束退化为代价。可用 `--frame-start` 和 `--frame-count` 对相同输入切片做快速权重搜索，再对完整序列复核选中的配置。
 
 转换后可直接检查源 BVH 的全局关节坐标轴：
 
