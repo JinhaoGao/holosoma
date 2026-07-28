@@ -149,7 +149,25 @@ python examples/parallel_robot_retarget.py \
   --retargeter.save-interaction-mesh
 ```
 
-为物体交互或攀爬批处理增加 `--augmentation` 后，会同时处理原始和增强序列。已经存在的输出文件默认会被跳过，只有传入 `--overwrite-existing` 才会覆盖。OMOMO 批处理默认先检查数据、身高表和物体资产，并在结果目录写入 `batch_report.json`。
+为物体交互或攀爬批处理增加 `--augmentation` 后，会同时处理原始和增强序列。对 OMOMO 物体交互，每条动作都会生成 `original`、`trans_0`、`trans_1`、`trans_2`、`rot_0` 和 `rot_1` 六个结果；三种平移分别为初始人体朝向物体的局部坐标 `[0.2, 0, 0]`、`[0, 0.2, 0]` 和 `[0, -0.2, 0]` 米，随后会转换到世界坐标。两种旋转分别为绕 Z 轴 `+45°` 和 `-45°`，并分别附带 `[0, 0.2, 0]` 和 `[0, -0.2, 0]` 米局部平移。完整扰动在物体开始运动之前保持不变，之后按指数逐渐衰减。增强是在原始重定向结果的机器人初始/名义轨迹基础上重新求解，不是简单变换已经输出的 qpos。
+
+增强配置不按动作语义做白名单筛选；只要序列能通过数据和物体资产预检，所选物体类别下的每条 `object_interaction` 动作都会尝试全部五种增强。比如覆盖重算全部 largebox，并同时保存缩放前后物体点云和 Interaction Mesh：
+
+```bash
+python examples/parallel_robot_retarget.py \
+  --data-dir demo_data/OMOMO_new \
+  --task-type object_interaction \
+  --data-format omomo \
+  --robot g1 \
+  --object-names largebox \
+  --save-dir demo_results_parallel/g1/object_interaction/omomo \
+  --max-workers 4 \
+  --augmentation \
+  --overwrite-existing \
+  --retargeter.save-interaction-mesh
+```
+
+已经存在的输出文件默认会被跳过，只有传入 `--overwrite-existing` 才会覆盖。OMOMO 批处理默认先检查数据、身高表和物体资产，并在结果目录写入 `batch_report.json`。
 
 目前物体目录完整支持 `clothesstand`、`floorlamp`、`largebox`、`largetable`、`monitor`、`plasticbox`、`smallbox`、`smalltable`、`suitcase`、`trashcan`、`tripod`、`whitechair` 和 `woodchair`。省略 `--object-names` 会处理全部类别，也可以精确选择子集。建议先用 `--dry-run` 验证全部输入并生成清单，此时不会启动优化：
 
@@ -298,6 +316,40 @@ python data_utils/convert_gvhmr.py \
 
 转换器会分批执行 SMPL-X 正向运动学，将 GVHMR 的右手系 Y-up 世界坐标转换为右手系 Z-up，计算与体型对应的人体身高，并以 `wxyz` 顺序写入根节点四元数。
 
+## 重定向前检查原始人体动作
+
+统一的原始动作查看器可用于判断接触或姿态问题究竟已经存在于源数据中，还是由后续归一化与重定向引入：
+
+```bash
+# OMOMO 物体交互：完整 52 关节骨架和随原始位姿运动的物体 mesh
+python examples/raw_human_motion_viewer.py \
+  --motion-path demo_data/OMOMO_new/sub3_largebox_003.pt
+
+# 攀爬：完整 53 关节骨架和静态原始 multi_boxes.obj
+python examples/raw_human_motion_viewer.py \
+  --motion-path demo_data/climb/mocap_climb_seq_0
+
+# 没有场景 mesh 的纯人体动作
+python examples/raw_human_motion_viewer.py \
+  --motion-path demo_data/lafan/dance1_subject1.npy
+```
+
+查看器支持 `omomo`、`mocap`、`lafan`、`amass`、`gvhmr` 和 `noetix_mocap`，会根据所选文件自动识别数据格式，并根据数据内容及相邻资源推断任务类型。也可以同时传入数据集目录和 `--sequence`，例如 `--motion-path demo_data/OMOMO_new --sequence sub3_largebox_003`。如果希望忽略 OMOMO 文件中的物体并作为纯人体动作检查，请显式传入 `--task-type robot_only`；也可以通过 `--mesh-path PATH` 覆盖自动查找到的 mesh。
+
+该工具会刻意绕过 `preprocess_motion_data`，不执行脚底高度平移、机器人身高缩放、数据增强或重定向。OMOMO mesh 使用原始逐帧物体位姿，攀爬 mesh 使用源文件中的静态坐标，没有对应 mesh 时只显示完整骨架。这里的“原始”指注册适配器刚输出的数据；格式所必需的解码仍会执行，例如 LAFAN 坐标转换和 mocap 声明的时间采样。加入 `--dry-run` 可以只检查并汇总场景，而不启动 Viser。
+
+键盘操作与其他 Viser 查看器保持一致：
+
+| 按键 | 操作 |
+| --- | --- |
+| `Space` | 播放或暂停 |
+| `[` / `]` | 上一帧或下一帧 |
+| `Home` / `End` | 第一帧或最后一帧 |
+| `K` | 显示或隐藏全部人体关键点 |
+| `.` | 显示或隐藏完整骨架 |
+| `L` | 显示或隐藏关节名称 |
+| `O` | 显示或隐藏原始物体或地形 mesh |
+
 ## 检查已保存重定向结果的可视化
 
 新结果会保存机器人、数据格式、物体、FPS、骨架和 qpos 布局元数据，因此通常只需向查看器提供结果路径：
@@ -387,13 +439,22 @@ python viser_player.py \
   --object-mesh-opacity 0.25
 ```
 
+同屏比较一条原始结果及其五种增强时，可以把六个结果中的任意一个传给增强查看器：
+
+```bash
+python augmentation_viser_player.py \
+  --qpos-npz demo_results_parallel/g1/object_interaction/omomo/sub3_largebox_003_original.npz
+```
+
+该查看器会自动发现同目录下匹配的六个文件，用不同颜色同步显示每组机器人 mesh、人体映射骨架、机器人映射骨架和物体 mesh，并允许逐组开关。所有结果仍然保存 Interaction Mesh；为避免六组四面体边叠加遮挡场景，这个同屏查看器刻意不加载或绘制 Interaction Mesh。需要检查某一组的 Interaction Mesh 时，继续使用上面的 `viser_player.py --show-interaction-mesh` 单独回放对应 `.npz`。
+
 OMOMO 的 `--show-mapped-skeletons` 会在原有 15 个蓝色映射关节之外，以较小的蓝色点和线补全 SMPL-H 两只手的五指关节链。这些手指关节只用于诊断显示，不会加入 Interaction Mesh，也不会改变优化结果。`--show-object-keypoints` 会显示重定向时保存的逐帧物体点：红色为随人体身高一起归一化的示范物体点，青色为目标资产尺度下的物体点。结果保存的是当次重定向实际使用的世界坐标，因此回放无需重新采样物体表面。
 
 `--mesh-opacity` 提供共同透明度；`--robot-mesh-opacity` 和 `--object-mesh-opacity` 可分别覆盖。骨架点/线尺寸、物体点尺寸以及 Interaction Mesh 线宽分别由 `--skeleton-point-radius`、`--skeleton-line-width`、`--object-keypoint-radius` 和 `--interaction-mesh-line-width` 控制。
 
 ## 结果 NPZ 约定
 
-新重定向结果包含 `qpos`、`fps`、`cost`、完整及映射后的人体骨架、映射机器人骨架位置，以及 `source_data_format`、`robot_type` 和物体元数据。物体交互结果还会始终保存 `object_points_demo_local`、`object_points_target_local`、`object_points_demo_world` 和 `object_points_target_world`，分别表示示范/目标尺度下的局部采样点及其逐帧世界坐标。启用 `--retargeter.save-interaction-mesh` 后，还会包含逐帧源/目标顶点和四面体。
+新重定向结果包含 `qpos`、`fps`、`cost`、完整及映射后的人体骨架、映射机器人骨架位置，以及 `source_data_format`、`robot_type` 和物体元数据。物体交互结果还会始终保存 `object_points_demo_local`、`object_points_target_local`、`object_points_demo_world` 和 `object_points_target_world`，分别表示示范/目标尺度下的局部采样点及其逐帧世界坐标。启用 `--retargeter.save-interaction-mesh` 后，还会包含逐帧源/目标顶点和四面体。若默认 1 mm 脚部固定约束使某帧不可行，求解器会先仅对该帧使用 `foot_sticking_fallback_tolerance` 重试，再仅释放该帧的脚部固定约束；实际回退和释放帧分别保存在 `foot_sticking_fallback_frames` 与 `foot_sticking_release_frames`。若此前轨迹已经进入局部释放也无法恢复的不可行状态，则从第 0 帧开始关闭脚部固定并重跑完整序列，其他约束仍保持启用；结果通过 `foot_sticking_enabled_for_saved_trajectory` 和 `foot_sticking_full_sequence_retry_frame` 记录这一情况。机器人—物体非穿透约束默认不会被释放。只有显式启用 `--retargeter.release-object-non-penetration-on-infeasible` 时，最后一级局部回退才会释放失败帧的机器人—物体约束并继续保留地面防穿透；这类结果应视为降级结果而不是碰撞验收通过，并通过 `object_non_penetration_release_frames` 记录对应帧。
 
 纯机器人 qpos 使用 `[root_xyz, root_wxyz, robot_dof]`；动态物体 qpos 会追加 `[object_xyz, object_wxyz]`。
 
