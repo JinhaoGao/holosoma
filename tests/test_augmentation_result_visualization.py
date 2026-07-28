@@ -26,6 +26,7 @@ from holosoma_retargeting.augmentation_viser_player import (  # noqa: E402
 from holosoma_retargeting.examples.ablation_viser_player import (  # noqa: E402
     AblationViserConfig,
     ComparisonScene,
+    comparison_color,
     interpolate_human_points,
     interpolate_orientation_quaternions,
     load_comparison_results,
@@ -298,13 +299,20 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
             atol=1e-6,
         )
 
-    def test_mesh_visibility_does_not_hide_orientation_overlay(self):
+    def test_robot_group_toggle_controls_mesh_skeleton_and_axes(self):
         robot = SimpleNamespace(show_visual=True)
         object_visual = SimpleNamespace(show_visual=True)
         orientation_overlay = SimpleNamespace(enabled=True)
-        human_skeleton = SimpleNamespace(
-            visible=True,
-            set_visible=lambda _: None,
+        orientation_overlay.set_enabled = lambda enabled: setattr(
+            orientation_overlay,
+            "enabled",
+            enabled,
+        )
+        robot_skeleton = SimpleNamespace(enabled=True)
+        robot_skeleton.set_enabled = lambda enabled: setattr(
+            robot_skeleton,
+            "enabled",
+            enabled,
         )
         scene = ComparisonScene(
             label="shoulders",
@@ -315,17 +323,22 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
             robot_root=object(),
             object_visual=object_visual,
             object_root=object(),
-            human_skeleton=human_skeleton,
+            robot_skeleton=robot_skeleton,
             orientation_overlay=orientation_overlay,
         )
 
-        scene.set_mesh_visible(False)
+        scene.set_enabled(False)
 
-        self.assertFalse(scene.mesh_visible)
+        self.assertFalse(scene.enabled)
         self.assertFalse(robot.show_visual)
         self.assertFalse(object_visual.show_visual)
-        self.assertTrue(orientation_overlay.enabled)
-        self.assertTrue(human_skeleton.visible)
+        self.assertFalse(robot_skeleton.enabled)
+        self.assertFalse(orientation_overlay.enabled)
+
+    def test_robot_groups_use_classic_red_green_blue_order(self):
+        self.assertEqual(comparison_color(0), (220, 53, 69))
+        self.assertEqual(comparison_color(1), (25, 135, 84))
+        self.assertEqual(comparison_color(2), (13, 110, 253))
 
     def test_loads_and_interpolates_complete_noetix_human_skeleton(self):
         joint_names = (
@@ -354,25 +367,23 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
         )
         points = np.zeros((2, len(joint_names), 3), dtype=np.float32)
         points[1, :, 0] = 2.0
+        mapped_joint_names = ("Spine1", "LeftArm", "RightArm")
         with tempfile.TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "result.npz"
             np.savez(
                 path,
                 human_joints=points,
                 human_joint_names=np.asarray(joint_names),
+                mapped_human_joint_names=np.asarray(mapped_joint_names),
             )
 
             skeleton = load_human_skeleton(path, expected_frames=2)
 
-        index = {name: i for i, name in enumerate(joint_names)}
-        self.assertIn(
-            (index["Hips"], index["Spine"]),
-            skeleton.edges,
-        )
-        self.assertIn(
-            (index["Spine2"], index["LeftShoulder"]),
-            skeleton.edges,
-        )
+        self.assertEqual(skeleton.joint_names, mapped_joint_names)
+        self.assertEqual(skeleton.points.shape, (2, 3, 3))
+        self.assertEqual(skeleton.full_points.shape, (2, 22, 3))
+        self.assertIn((0, 1), skeleton.edges)
+        self.assertIn((0, 2), skeleton.edges)
         np.testing.assert_allclose(
             interpolate_human_points(skeleton.points, 0.5)[:, 0],
             1.0,

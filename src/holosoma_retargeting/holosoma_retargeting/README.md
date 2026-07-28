@@ -432,13 +432,13 @@ python examples/ablation_viser_player.py \
   --show-orientation-error-labels
 ```
 
-The player renders each result as one synchronized group containing the full
-original human skeleton, the robot mesh, and the tracked-link axes at the same
-world position. The human is a skeleton only, with no human mesh, and
-`--x-offset` separates groups. Short opaque RGB arrows are calibrated target
-frames and longer opaque RGB arrows are actual robot-link frames; red, green,
-and blue are local X, Y, and Z. Each group's robot mesh, human skeleton, and
-orientation axes have independent viewer controls. Use
+The player uses one shared human-reference layer plus one layer per robot
+result. The black human skeleton contains only mapped keypoints used by the
+retargeting position objective, with calibrated target frames located on the
+human joints. Each robot layer combines a translucent mesh, darker same-color
+mapped skeleton, and actual link frames under one visibility control. Robot
+layers use classic red, green, and blue colors in input order, while
+`--x-offset` separates all layers. RGB arrows are local X, Y, and Z. Use
 `--variants baseline shoulders --weight-scales 0.01 0.025 0.05` to tune only
 the shoulder orientation objective.
 
