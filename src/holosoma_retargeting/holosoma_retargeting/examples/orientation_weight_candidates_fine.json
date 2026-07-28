@@ -1,0 +1,125 @@
+{
+  "baseline": {},
+  "uniform_0p1": {"all": 0.1},
+  "uniform_0p2": {"all": 0.2},
+  "uniform_0p3": {"all": 0.3},
+  "uniform_0p5": {"all": 0.5},
+  "no_root_hips_0p1": {
+    "all": 0.1,
+    "root": 0.0,
+    "hips": 0.0
+  },
+  "no_root_hips_0p2": {
+    "all": 0.2,
+    "root": 0.0,
+    "hips": 0.0
+  },
+  "no_root_hips_0p3": {
+    "all": 0.3,
+    "root": 0.0,
+    "hips": 0.0
+  },
+  "distal_a": {
+    "root": 0.0,
+    "hips": 0.01,
+    "knees": 0.05,
+    "ankles": 0.1,
+    "toes": 0.1,
+    "shoulders": 0.2,
+    "forearms": 0.1,
+    "hands": 0.1
+  },
+  "distal_b": {
+    "root": 0.0,
+    "hips": 0.01,
+    "knees": 0.05,
+    "ankles": 0.2,
+    "toes": 0.2,
+    "shoulders": 0.3,
+    "forearms": 0.2,
+    "hands": 0.2
+  },
+  "distal_c": {
+    "root": 0.0,
+    "hips": 0.03,
+    "knees": 0.1,
+    "ankles": 0.2,
+    "toes": 0.2,
+    "shoulders": 0.2,
+    "forearms": 0.2,
+    "hands": 0.1
+  },
+  "upper_focus": {
+    "root": 0.0,
+    "hips": 0.01,
+    "knees": 0.03,
+    "ankles": 0.1,
+    "toes": 0.1,
+    "shoulders": 0.3,
+    "forearms": 0.2,
+    "hands": 0.1
+  },
+  "lower_focus": {
+    "root": 0.0,
+    "hips": 0.01,
+    "knees": 0.1,
+    "ankles": 0.3,
+    "toes": 0.3,
+    "shoulders": 0.1,
+    "forearms": 0.1,
+    "hands": 0.1
+  },
+  "shoulder_focus": {
+    "root": 0.0,
+    "hips": 0.01,
+    "knees": 0.05,
+    "ankles": 0.15,
+    "toes": 0.15,
+    "shoulders": 0.5,
+    "forearms": 0.15,
+    "hands": 0.1
+  },
+  "arm_distal": {
+    "root": 0.0,
+    "hips": 0.01,
+    "knees": 0.05,
+    "ankles": 0.15,
+    "toes": 0.15,
+    "shoulders": 0.2,
+    "forearms": 0.3,
+    "hands": 0.2
+  },
+  "smooth_balanced": {
+    "root": 0.0,
+    "hips": 0.01,
+    "knees": 0.03,
+    "ankles": 0.08,
+    "toes": 0.08,
+    "shoulders": 0.12,
+    "forearms": 0.08,
+    "hands": 0.08
+  },
+  "tapered": {
+    "root": 0.01,
+    "hips": 0.02,
+    "knees": 0.05,
+    "ankles": 0.15,
+    "toes": 0.15,
+    "shoulders": 0.25,
+    "forearms": 0.2,
+    "hands": 0.15
+  },
+  "shoulders_0p3": {"shoulders": 0.3},
+  "feet_0p3": {"ankles": 0.3, "toes": 0.3},
+  "upper_0p3": {"shoulders": 0.3, "forearms": 0.3, "hands": 0.3},
+  "mixed_a": {
+    "root": 0.03,
+    "hips": 0.1,
+    "knees": 0.1,
+    "ankles": 0.1,
+    "toes": 0.03,
+    "shoulders": 0.1,
+    "forearms": 0.03,
+    "hands": 0.03
+  }
+}
