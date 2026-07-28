@@ -23,15 +23,19 @@ from holosoma_retargeting.config_types.data_type import MotionDataConfig  # noqa
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 from holosoma_retargeting.data_conversion.convert_data_format_mj import (  # noqa: E402
     create_task_constants as create_conversion_constants,
+)
+from holosoma_retargeting.data_conversion.convert_data_format_mj import (  # noqa: E402
     resolve_conversion_object_name,
 )
 from holosoma_retargeting.data_utils.omomo import OMOMO_OBJECT_NAMES  # noqa: E402
-from holosoma_retargeting.evaluation.eval_retargeting import (  # noqa: E402
-    _evaluate_single_task,
-    create_task_constants as create_evaluation_constants,
-)
 from holosoma_retargeting.data_utils.validate_omomo_retargeting import (  # noqa: E402
     run_acceptance,
+)
+from holosoma_retargeting.evaluation.eval_retargeting import (  # noqa: E402
+    _evaluate_single_task,
+)
+from holosoma_retargeting.evaluation.eval_retargeting import (  # noqa: E402
+    create_task_constants as create_evaluation_constants,
 )
 
 

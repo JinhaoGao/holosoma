@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import trimesh
-
 from holosoma_retargeting.data_utils.omomo import OMOMO_OBJECT_NAMES
 
 OMOMO_MESH_SHA256: dict[str, str] = {
@@ -220,6 +220,28 @@ def _scale_text(scale: tuple[float, float, float]) -> str:
     return " ".join(f"{value:g}" for value in values)
 
 
+def _atomic_write_xml(tree: ET.ElementTree, destination: Path) -> None:
+    """Publish generated XML without exposing a partial file to other workers."""
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            tree.write(temporary_file, encoding="utf-8", xml_declaration=True)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        temporary_path.replace(destination)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def create_omomo_object_scene(
     robot_xml_path: str | Path,
     object_name: str,
@@ -328,7 +350,7 @@ def create_omomo_object_scene(
     if scale_value != "1 1 1":
         scale_suffix = f"_scaled_{scale[0]:g}_{scale[1]:g}_{scale[2]:g}"
     destination = destination_dir / f"{robot_xml.stem}_w_{object_name}{scale_suffix}.xml"
-    tree.write(destination, encoding="utf-8", xml_declaration=True)
+    _atomic_write_xml(tree, destination)
     return destination
 
 
@@ -370,5 +392,5 @@ def create_scaled_omomo_object_urdf(
             source_reference = (asset.urdf_path.parent / source_reference).resolve()
         mesh.set("filename", source_reference.as_posix())
         mesh.set("scale", scale_value)
-    tree.write(destination, encoding="utf-8", xml_declaration=True)
+    _atomic_write_xml(tree, destination)
     return destination

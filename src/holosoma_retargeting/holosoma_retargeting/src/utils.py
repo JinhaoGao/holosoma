@@ -339,7 +339,9 @@ def augment_object_poses(
         rotation_list[object_moving_frame_idx:] = rotation_initial * np.exp(
             (object_moving_frame_idx - np.arange(object_moving_frame_idx, N)) / rotation_tau
         )
-        rotation = R.from_euler("z", rotation_list)
+        # SciPy 1.17 requires one explicit angle column for batched
+        # single-axis Euler rotations; older versions accept this shape too.
+        rotation = R.from_euler("z", rotation_list[:, None])
         object_quat = R.from_quat(object_poses[:, :4], scalar_first=True)
         object_quat_rotated = (rotation * object_quat).as_quat(scalar_first=True)
         object_poses_augmented[:, :4] = object_quat_rotated

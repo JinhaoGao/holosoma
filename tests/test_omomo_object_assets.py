@@ -1,4 +1,4 @@
-# ruff: noqa: PT009, PT027
+# ruff: noqa: PT009
 
 from __future__ import annotations
 
@@ -7,7 +7,9 @@ import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import mujoco
 import numpy as np
@@ -21,6 +23,7 @@ if str(PACKAGE_ROOT) not in sys.path:
 
 from holosoma_retargeting.data_utils.object_assets import (  # noqa: E402
     OMOMO_MESH_SHA256,
+    _atomic_write_xml,
     create_omomo_object_scene,
     create_scaled_omomo_object_urdf,
     default_models_root,
@@ -97,6 +100,35 @@ class OmomoObjectSceneTests(unittest.TestCase):
         "g1": ("g1/g1_29dof.xml", 29),
         "e1": ("e1/e1_23dof.xml", 23),
     }
+
+    def test_generated_xml_is_published_atomically(self):
+        started = Event()
+        release = Event()
+
+        class SlowTree:
+            def write(self, target, *, encoding, xml_declaration):
+                self.assertions = (encoding, xml_declaration)
+                target.write(b"<new")
+                target.flush()
+                started.set()
+                if not release.wait(timeout=5):
+                    raise TimeoutError("Test did not release the delayed XML writer")
+                target.write(b" />")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            destination = Path(tmpdir) / "scene.xml"
+            destination.write_text("<old />", encoding="utf-8")
+            tree = SlowTree()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_atomic_write_xml, tree, destination)
+                self.assertTrue(started.wait(timeout=5))
+                self.assertEqual(destination.read_text(encoding="utf-8"), "<old />")
+                release.set()
+                future.result(timeout=5)
+
+            self.assertEqual(ET.parse(destination).getroot().tag, "new")  # noqa: S314
+            self.assertEqual(tree.assertions, ("utf-8", True))
+            self.assertFalse(list(destination.parent.glob(".scene.xml.*.tmp")))
 
     def test_all_g1_and_e1_object_scenes_compile(self):
         models_root = default_models_root()

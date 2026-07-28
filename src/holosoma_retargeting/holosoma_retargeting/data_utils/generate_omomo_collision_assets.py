@@ -15,13 +15,12 @@ from pathlib import Path
 
 import numpy as np
 import trimesh
-from trimesh.exchange.obj import export_obj
-
 from holosoma_retargeting.data_utils.object_assets import (
     OMOMO_MESH_SHA256,
     default_models_root,
 )
 from holosoma_retargeting.data_utils.omomo import OMOMO_OBJECT_NAMES
+from trimesh.exchange.obj import export_obj
 
 COACD_VERSION = "1.0.11"
 COACD_PARAMETERS: dict[str, object] = {

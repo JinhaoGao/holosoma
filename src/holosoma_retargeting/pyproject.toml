@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "holosoma-retargeting"
 version = "0.1.0"
 description = "Retargeting utilities for converting human motions to robot motions."
-readme = "README.md"
-requires-python = ">=3.10"
+readme = "holosoma_retargeting/README.md"
+requires-python = ">=3.11"
 authors = [
     { name = "Amazon FAR Team" },
 ]

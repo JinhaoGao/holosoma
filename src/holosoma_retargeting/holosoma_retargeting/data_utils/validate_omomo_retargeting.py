@@ -10,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.config_types.retargeting import RetargetingConfig
 from holosoma_retargeting.config_types.robot import RobotConfig
