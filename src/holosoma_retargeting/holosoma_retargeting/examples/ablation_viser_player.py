@@ -80,19 +80,25 @@ class AblationViserConfig:
     """Human joint names whose target and robot frames are shown. Empty means all."""
 
     show_target_orientation_axes: bool = True
-    """Show the calibrated target link frames with pale RGB axes."""
+    """Show the calibrated target link frames with short opaque RGB arrows."""
 
     show_robot_orientation_axes: bool = True
-    """Show the actual robot link frames with saturated RGB axes."""
+    """Show the actual robot link frames with opaque RGB arrows."""
 
     show_orientation_error_labels: bool = False
     """Show each selected joint's SO(3) geodesic error in degrees."""
 
-    orientation_axis_length: float = 0.12
+    orientation_axis_length: float = 0.10
     """Length of each orientation axis in scene units."""
 
-    orientation_axis_line_width: float = 3.0
-    """Line width of the orientation axes."""
+    orientation_axis_shaft_radius: float = 0.006
+    """Radius of each solid orientation arrow shaft."""
+
+    orientation_axis_head_radius: float = 0.013
+    """Radius of each solid orientation arrow head."""
+
+    orientation_axis_head_length: float = 0.024
+    """Length of each solid orientation arrow head."""
 
 
 @dataclass(frozen=True)
@@ -156,7 +162,7 @@ class OrientationOverlay:
         self.target_axes.points = orientation_axis_segments(
             origins,
             target_quaternions,
-            self.axis_length,
+            self.axis_length * _TARGET_AXIS_LENGTH_SCALE,
         )
         self.robot_axes.points = orientation_axis_segments(
             origins,
@@ -193,15 +199,15 @@ class ComparisonScene:
     object_visual: ViserUrdf | None
     object_root: object | None
     orientation_overlay: OrientationOverlay | None
-    enabled: bool = True
+    mesh_visible: bool = True
 
-    def set_enabled(self, enabled: bool) -> None:
-        self.enabled = bool(enabled)
-        self.robot.show_visual = self.enabled
+    def set_mesh_visible(self, visible: bool) -> None:
+        """Toggle meshes without changing independent orientation overlays."""
+
+        self.mesh_visible = bool(visible)
+        self.robot.show_visual = self.mesh_visible
         if self.object_visual is not None:
-            self.object_visual.show_visual = self.enabled
-        if self.orientation_overlay is not None:
-            self.orientation_overlay.set_enabled(self.enabled)
+            self.object_visual.show_visual = self.mesh_visible
 
 
 _ORIENTATION_KEYS = (
@@ -213,14 +219,11 @@ _ORIENTATION_KEYS = (
     "orientation_errors_rad",
 )
 
-_ROBOT_AXIS_COLORS = np.asarray(
-    ((235, 45, 45), (45, 210, 65), (45, 95, 245)),
+_AXIS_COLORS = np.asarray(
+    ((255, 0, 0), (0, 255, 0), (0, 0, 255)),
     dtype=np.uint8,
 )
-_TARGET_AXIS_COLORS = np.asarray(
-    ((255, 170, 170), (165, 255, 180), (165, 195, 255)),
-    dtype=np.uint8,
-)
+_TARGET_AXIS_LENGTH_SCALE = 0.78
 
 
 def load_orientation_diagnostics(
@@ -409,7 +412,7 @@ def orientation_axis_segments(
     quaternions_wxyz: np.ndarray,
     axis_length: float,
 ) -> np.ndarray:
-    """Convert joint origins and frame rotations to RGB axis line segments."""
+    """Convert joint origins and frame rotations to RGB arrow endpoints."""
 
     origins_array = np.asarray(origins, dtype=float)
     if (
@@ -526,34 +529,30 @@ def _make_orientation_overlay(
         0,
         joint_indices,
     ]
-    target_axes = server.scene.add_line_segments(
+    target_axes = server.scene.add_arrows(
         f"{namespace}/orientation/target_axes",
         points=orientation_axis_segments(
             origins,
             target_quaternions,
-            config.orientation_axis_length,
+            config.orientation_axis_length * _TARGET_AXIS_LENGTH_SCALE,
         ),
-        colors=np.repeat(
-            np.tile(_TARGET_AXIS_COLORS, (len(joint_indices), 1))[:, None, :],
-            2,
-            axis=1,
-        ),
-        line_width=config.orientation_axis_line_width,
+        colors=np.tile(_AXIS_COLORS, (len(joint_indices), 1)),
+        shaft_radius=config.orientation_axis_shaft_radius,
+        head_radius=config.orientation_axis_head_radius,
+        head_length=config.orientation_axis_head_length,
         visible=config.show_target_orientation_axes,
     )
-    robot_axes = server.scene.add_line_segments(
+    robot_axes = server.scene.add_arrows(
         f"{namespace}/orientation/robot_axes",
         points=orientation_axis_segments(
             origins,
             robot_quaternions,
             config.orientation_axis_length,
         ),
-        colors=np.repeat(
-            np.tile(_ROBOT_AXIS_COLORS, (len(joint_indices), 1))[:, None, :],
-            2,
-            axis=1,
-        ),
-        line_width=config.orientation_axis_line_width,
+        colors=np.tile(_AXIS_COLORS, (len(joint_indices), 1)),
+        shaft_radius=config.orientation_axis_shaft_radius,
+        head_radius=config.orientation_axis_head_radius,
+        head_length=config.orientation_axis_head_length,
         visible=config.show_robot_orientation_axes,
     )
     error_labels = []
@@ -613,12 +612,26 @@ def make_ablation_player(
         or config.orientation_axis_length <= 0.0
     ):
         raise ValueError("orientation_axis_length must be finite and positive")
-    if (
-        not np.isfinite(config.orientation_axis_line_width)
-        or config.orientation_axis_line_width <= 0.0
+    arrow_dimensions = {
+        "orientation_axis_shaft_radius": config.orientation_axis_shaft_radius,
+        "orientation_axis_head_radius": config.orientation_axis_head_radius,
+        "orientation_axis_head_length": config.orientation_axis_head_length,
+    }
+    invalid_arrow_dimensions = {
+        name: value
+        for name, value in arrow_dimensions.items()
+        if not np.isfinite(value) or value <= 0.0
+    }
+    if invalid_arrow_dimensions:
+        raise ValueError(
+            "Orientation arrow dimensions must be finite and positive: "
+            f"{invalid_arrow_dimensions}"
+        )
+    if config.orientation_axis_head_length >= (
+        config.orientation_axis_length * _TARGET_AXIS_LENGTH_SCALE
     ):
         raise ValueError(
-            "orientation_axis_line_width must be finite and positive"
+            "orientation_axis_head_length must be shorter than the target arrows"
         )
     orientation_diagnostics = [
         load_orientation_diagnostics(
@@ -631,7 +644,7 @@ def make_ablation_player(
     if any(item is not None for item in orientation_diagnostics):
         if robot_xml is None:
             raise FileNotFoundError(
-                "A MuJoCo robot XML is required to position orientation axes; "
+                "A MuJoCo robot XML is required to position orientation arrows; "
                 "pass --robot-mujoco-xml."
             )
         robot_fk_model = mujoco.MjModel.from_xml_path(str(robot_xml))
@@ -744,8 +757,6 @@ def make_ablation_player(
     if robot_dof is None:
         raise RuntimeError("No comparison results were loaded.")
 
-    last_frame = {"value": 0.0}
-
     def _render_scene(
         scene: ComparisonScene,
         q: np.ndarray,
@@ -767,10 +778,7 @@ def make_ablation_player(
             scene.orientation_overlay.update(q, frame_float)
 
     def _render_comparison(driver_q: np.ndarray, frame_float: float) -> None:
-        last_frame["value"] = float(frame_float)
         for index, scene in enumerate(scenes):
-            if not scene.enabled:
-                continue
             q = (
                 driver_q
                 if index == 0
@@ -787,26 +795,14 @@ def make_ablation_player(
         for scene in scenes:
             color_hex = "#" + "".join(f"{channel:02x}" for channel in scene.color)
             checkbox = server.gui.add_checkbox(
-                f"{scene.label} ({color_hex})",
+                f"Mesh: {scene.label} ({color_hex})",
                 initial_value=True,
             )
 
             def _register_visibility_callback(scene_ref: ComparisonScene, checkbox_ref) -> None:
                 @checkbox_ref.on_update
                 def _(_event) -> None:
-                    scene_ref.set_enabled(bool(checkbox_ref.value))
-                    if scene_ref.enabled:
-                        q = interpolate_qpos(
-                            scene_ref.result.qpos,
-                            last_frame["value"],
-                            robot_dof,
-                            contains_object=contains_object,
-                        )
-                        _render_scene(
-                            scene_ref,
-                            q,
-                            last_frame["value"],
-                        )
+                    scene_ref.set_mesh_visible(bool(checkbox_ref.value))
 
             _register_visibility_callback(scene, checkbox)
 
@@ -817,12 +813,33 @@ def make_ablation_player(
     ]
     if overlays:
         with server.gui.add_folder("Orientation diagnostics"):
+            for scene in scenes:
+                if scene.orientation_overlay is None:
+                    continue
+                overlay_checkbox = server.gui.add_checkbox(
+                    f"Arrows: {scene.label}",
+                    initial_value=True,
+                )
+
+                def _register_overlay_callback(
+                    overlay_ref: OrientationOverlay,
+                    checkbox_ref,
+                ) -> None:
+                    @checkbox_ref.on_update
+                    def _(_event) -> None:
+                        overlay_ref.set_enabled(bool(checkbox_ref.value))
+
+                _register_overlay_callback(
+                    scene.orientation_overlay,
+                    overlay_checkbox,
+                )
+
             target_checkbox = server.gui.add_checkbox(
-                "Target axes (pale RGB)",
+                "Target arrows (short RGB)",
                 initial_value=config.show_target_orientation_axes,
             )
             robot_checkbox = server.gui.add_checkbox(
-                "Robot axes (saturated RGB)",
+                "Robot arrows (long RGB)",
                 initial_value=config.show_robot_orientation_axes,
             )
             labels_checkbox = server.gui.add_checkbox(
@@ -879,11 +896,12 @@ def make_ablation_player(
                 for index in scene.orientation_overlay.joint_indices
             )
             print(
-                f"    orientation axes: joints={selected_names}, "
-                "target=pale RGB, robot=saturated RGB"
+                f"    orientation arrows: joints={selected_names}, "
+                "target=short opaque RGB arrows, "
+                "robot=long opaque RGB arrows"
             )
         else:
-            print("    orientation axes: unavailable in this legacy result")
+            print("    orientation arrows: unavailable in this legacy result")
     print("Open the viewer URL printed above. Close the process (Ctrl+C) to exit.")
     return server
 

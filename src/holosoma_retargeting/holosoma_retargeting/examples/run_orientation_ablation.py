@@ -39,6 +39,8 @@ ORIENTATION_JOINTS = (
     "RightHand",
 )
 
+# These are relative per-link coefficients. The CLI's --weight-scales values
+# multiply them to produce the actual weights passed into the SQP objective.
 PROFILE_WEIGHTS: dict[str, dict[str, float]] = {
     "baseline": {},
     "root": {
@@ -124,6 +126,8 @@ def orientation_weights_for_variant(
     variant: str,
     weight_scale: float,
 ) -> dict[str, float]:
+    """Expand one relative profile into all 13 diagnostic-link weights."""
+
     if variant not in PROFILE_WEIGHTS:
         raise ValueError(
             f"Unknown orientation ablation variant {variant!r}; "

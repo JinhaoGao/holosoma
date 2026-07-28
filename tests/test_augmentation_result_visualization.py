@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -24,6 +25,7 @@ from holosoma_retargeting.augmentation_viser_player import (  # noqa: E402
 )
 from holosoma_retargeting.examples.ablation_viser_player import (  # noqa: E402
     AblationViserConfig,
+    ComparisonScene,
     interpolate_orientation_quaternions,
     load_comparison_results,
     load_orientation_diagnostics,
@@ -299,6 +301,29 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
             [0.0, 1.0, 0.0],
             atol=1e-6,
         )
+
+    def test_mesh_visibility_does_not_hide_orientation_overlay(self):
+        robot = SimpleNamespace(show_visual=True)
+        object_visual = SimpleNamespace(show_visual=True)
+        orientation_overlay = SimpleNamespace(enabled=True)
+        scene = ComparisonScene(
+            label="shoulders",
+            result=object(),
+            color=(255, 255, 255),
+            offset=np.zeros(3),
+            robot=robot,
+            robot_root=object(),
+            object_visual=object_visual,
+            object_root=object(),
+            orientation_overlay=orientation_overlay,
+        )
+
+        scene.set_mesh_visible(False)
+
+        self.assertFalse(scene.mesh_visible)
+        self.assertFalse(robot.show_visual)
+        self.assertFalse(object_visual.show_visual)
+        self.assertTrue(orientation_overlay.enabled)
 
 
 if __name__ == "__main__":

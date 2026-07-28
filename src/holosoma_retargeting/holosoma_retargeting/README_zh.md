@@ -351,7 +351,7 @@ python examples/ablation_viser_player.py \
   --show-orientation-error-labels
 ```
 
-播放器中的浅色 RGB 坐标轴是标定后的目标 link frame，深色 RGB 坐标轴是机器人实际 link frame，红、绿、蓝分别表示局部 X、Y、Z 轴；两套轴越重合，朝向跟踪越准确。界面中的 `Target axes`、`Robot axes` 和 `SO(3) error labels` 可随时开关。要只加强肩膀，可运行 `--variants baseline shoulders --weight-scales 0.01 0.025 0.05` 搜索权重，再用上面的 `--orientation-joints LeftArm RightArm` 对照显示候选结果。
+播放器中的短 RGB 实心箭头是标定后的目标 link frame，较长的 RGB 实心箭头是机器人实际 link frame，红、绿、蓝分别表示局部 X、Y、Z 轴；两套箭头越重合，朝向跟踪越准确。界面中的 mesh、每组结果的箭头、全局目标箭头、全局机器人箭头和 `SO(3) error labels` 均可独立开关。要只加强肩膀，可运行 `--variants baseline shoulders --weight-scales 0.01 0.025 0.05` 搜索权重，再用上面的 `--orientation-joints LeftArm RightArm` 对照显示候选结果。
 
 ### GVHMR
 

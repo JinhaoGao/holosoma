@@ -432,8 +432,9 @@ python examples/ablation_viser_player.py \
   --show-orientation-error-labels
 ```
 
-Pale RGB axes are calibrated target frames and saturated RGB axes are actual
-robot-link frames; red, green, and blue are local X, Y, and Z. Use
+Short opaque RGB arrows are calibrated target frames and longer opaque RGB
+arrows are actual robot-link frames; red, green, and blue are local X, Y, and
+Z. Meshes and orientation arrows have independent viewer controls. Use
 `--variants baseline shoulders --weight-scales 0.01 0.025 0.05` to tune only
 the shoulder orientation objective.
 
