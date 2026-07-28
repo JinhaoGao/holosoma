@@ -26,6 +26,9 @@ from holosoma_retargeting.augmentation_viser_player import (
     interpolate_qpos,
     load_variant_result,
 )
+from holosoma_retargeting.examples.raw_human_motion_viewer import (
+    build_skeleton_edges,
+)
 from holosoma_retargeting.src.viser_utils import (
     actuated_joint_names_from_mujoco_xml,
     build_joint_order_indices,
@@ -70,6 +73,15 @@ class AblationViserConfig:
     object_mesh_opacity: float = 0.45
     """Opacity of object meshes when object poses are present."""
 
+    show_human_skeleton: bool = True
+    """Show the original human skeleton inside every comparison group."""
+
+    human_skeleton_line_width: float = 5.0
+    """Line width of the original human skeleton."""
+
+    human_joint_point_size: float = 0.025
+    """Point size of the original human skeleton joints."""
+
     grid_width: float = 8.0
     """Viewer grid width."""
 
@@ -113,6 +125,37 @@ class OrientationDiagnostics:
     errors_rad: np.ndarray
 
 
+@dataclass(frozen=True)
+class HumanSkeletonTrajectory:
+    """Full source-human joint trajectory saved in one result file."""
+
+    joint_names: tuple[str, ...]
+    points: np.ndarray
+    edges: tuple[tuple[int, int], ...]
+
+
+@dataclass
+class HumanSkeletonOverlay:
+    """Persistent Viser handles for one group's source-human skeleton."""
+
+    trajectory: HumanSkeletonTrajectory
+    offset: np.ndarray
+    joints_handle: object
+    bones_handle: object
+    visible: bool = True
+
+    def set_visible(self, visible: bool) -> None:
+        self.visible = bool(visible)
+        self.joints_handle.visible = self.visible
+        self.bones_handle.visible = self.visible
+
+    def update(self, frame_float: float) -> None:
+        points = interpolate_human_points(self.trajectory.points, frame_float) + self.offset
+        self.joints_handle.points = points.astype(np.float32)
+        edge_indices = np.asarray(self.trajectory.edges, dtype=np.int32)
+        self.bones_handle.points = points[edge_indices].astype(np.float32)
+
+
 @dataclass
 class OrientationOverlay:
     """Viser and MuJoCo state for rendering saved orientation diagnostics."""
@@ -144,10 +187,7 @@ class OrientationOverlay:
 
     def update(self, q: np.ndarray, frame_float: float) -> None:
         if q.shape[0] < self.model.nq:
-            raise ValueError(
-                f"qpos has {q.shape[0]} values but the orientation FK model "
-                f"requires {self.model.nq}"
-            )
+            raise ValueError(f"qpos has {q.shape[0]} values but the orientation FK model requires {self.model.nq}")
         self.data.qpos[:] = q[: self.model.nq]
         mujoco.mj_forward(self.model, self.data)
         origins = np.asarray(self.data.xpos[self.body_ids]) + self.offset
@@ -177,13 +217,8 @@ class OrientationOverlay:
             source_index = int(self.joint_indices[local_index])
             joint_name = self.diagnostics.human_joint_names[source_index]
             weight = float(self.diagnostics.weights[source_index])
-            label.position = origins[local_index] + np.asarray(
-                [0.0, 0.0, 1.15 * self.axis_length]
-            )
-            label.text = (
-                f"{joint_name}: {np.degrees(errors[local_index]):.1f}° "
-                f"(w={weight:g})"
-            )
+            label.position = origins[local_index] + np.asarray([0.0, 0.0, 1.15 * self.axis_length])
+            label.text = f"{joint_name}: {np.degrees(errors[local_index]):.1f}° (w={weight:g})"
 
 
 @dataclass
@@ -198,6 +233,7 @@ class ComparisonScene:
     robot_root: object
     object_visual: ViserUrdf | None
     object_root: object | None
+    human_skeleton: HumanSkeletonOverlay
     orientation_overlay: OrientationOverlay | None
     mesh_visible: bool = True
 
@@ -208,6 +244,11 @@ class ComparisonScene:
         self.robot.show_visual = self.mesh_visible
         if self.object_visual is not None:
             self.object_visual.show_visual = self.mesh_visible
+
+    def set_skeleton_visible(self, visible: bool) -> None:
+        """Toggle the source-human skeleton without changing mesh or arrows."""
+
+        self.human_skeleton.set_visible(visible)
 
 
 _ORIENTATION_KEYS = (
@@ -224,6 +265,85 @@ _AXIS_COLORS = np.asarray(
     dtype=np.uint8,
 )
 _TARGET_AXIS_LENGTH_SCALE = 0.78
+_HUMAN_SKELETON_COLOR = np.asarray((255, 214, 64), dtype=np.uint8)
+
+
+def load_human_skeleton(
+    path: Path,
+    expected_frames: int,
+) -> HumanSkeletonTrajectory:
+    """Load the complete source skeleton rather than only mapped joints."""
+
+    with np.load(path, allow_pickle=False) as data:
+        if "human_joints" not in data or "human_joint_names" not in data:
+            raise KeyError(f"{path} must contain human_joints and human_joint_names")
+        points = np.asarray(data["human_joints"], dtype=np.float32)
+        joint_names = tuple(str(name) for name in np.asarray(data["human_joint_names"]).tolist())
+    expected_shape = (expected_frames, len(joint_names), 3)
+    if points.shape != expected_shape:
+        raise ValueError(f"{path} human_joints shape {points.shape} != {expected_shape}")
+    if not joint_names or len(set(joint_names)) != len(joint_names):
+        raise ValueError(f"{path} human_joint_names must be non-empty and unique")
+    if not np.isfinite(points).all():
+        raise ValueError(f"{path} human_joints contain non-finite values")
+    return HumanSkeletonTrajectory(
+        joint_names=joint_names,
+        points=points,
+        edges=build_skeleton_edges(joint_names),
+    )
+
+
+def interpolate_human_points(
+    points: np.ndarray,
+    frame_float: float,
+) -> np.ndarray:
+    """Linearly interpolate a ``(frames, joints, 3)`` skeleton sequence."""
+
+    values = np.asarray(points, dtype=float)
+    if values.ndim != 3 or values.shape[-1] != 3 or values.shape[0] == 0:
+        raise ValueError("human skeleton sequence must have shape (frames, joints, 3)")
+    clipped_frame = float(np.clip(frame_float, 0.0, values.shape[0] - 1))
+    frame0 = int(np.floor(clipped_frame))
+    frame1 = min(frame0 + 1, values.shape[0] - 1)
+    fraction = clipped_frame - frame0
+    return (1.0 - fraction) * values[frame0] + fraction * values[frame1]
+
+
+def _make_human_skeleton_overlay(
+    *,
+    server,
+    namespace: str,
+    trajectory: HumanSkeletonTrajectory,
+    offset: np.ndarray,
+    config: AblationViserConfig,
+) -> HumanSkeletonOverlay:
+    points = trajectory.points[0] + offset
+    point_colors = np.tile(
+        _HUMAN_SKELETON_COLOR,
+        (len(trajectory.joint_names), 1),
+    )
+    joints_handle = server.scene.add_point_cloud(
+        f"{namespace}/human/joints",
+        points=points,
+        colors=point_colors,
+        point_size=config.human_joint_point_size,
+        point_shape="circle",
+        visible=config.show_human_skeleton,
+    )
+    bones_handle = server.scene.add_line_segments(
+        f"{namespace}/human/skeleton",
+        points=points[np.asarray(trajectory.edges, dtype=np.int32)],
+        colors=_HUMAN_SKELETON_COLOR,
+        line_width=config.human_skeleton_line_width,
+        visible=config.show_human_skeleton,
+    )
+    return HumanSkeletonOverlay(
+        trajectory=trajectory,
+        offset=offset,
+        joints_handle=joints_handle,
+        bones_handle=bones_handle,
+        visible=config.show_human_skeleton,
+    )
 
 
 def load_orientation_diagnostics(
@@ -238,21 +358,9 @@ def load_orientation_diagnostics(
             return None
         missing = tuple(key for key in _ORIENTATION_KEYS if key not in data.files)
         if missing:
-            raise ValueError(
-                f"{path} has incomplete orientation diagnostics; missing {missing}"
-            )
-        human_joint_names = tuple(
-            str(name)
-            for name in np.asarray(
-                data["orientation_human_joint_names"]
-            ).tolist()
-        )
-        robot_link_names = tuple(
-            str(name)
-            for name in np.asarray(
-                data["orientation_robot_link_names"]
-            ).tolist()
-        )
+            raise ValueError(f"{path} has incomplete orientation diagnostics; missing {missing}")
+        human_joint_names = tuple(str(name) for name in np.asarray(data["orientation_human_joint_names"]).tolist())
+        robot_link_names = tuple(str(name) for name in np.asarray(data["orientation_robot_link_names"]).tolist())
         weights = np.asarray(data["orientation_weights"], dtype=float)
         target_quaternions = np.asarray(
             data["orientation_target_quaternions_wxyz"],
@@ -266,35 +374,19 @@ def load_orientation_diagnostics(
 
     joint_count = len(human_joint_names)
     if not human_joint_names or len(set(human_joint_names)) != joint_count:
-        raise ValueError(
-            f"{path} orientation human joint names must be non-empty and unique"
-        )
+        raise ValueError(f"{path} orientation human joint names must be non-empty and unique")
     if len(robot_link_names) != joint_count:
-        raise ValueError(
-            f"{path} has {joint_count} human orientation joints but "
-            f"{len(robot_link_names)} robot links"
-        )
+        raise ValueError(f"{path} has {joint_count} human orientation joints but {len(robot_link_names)} robot links")
     expected_quaternion_shape = (expected_frames, joint_count, 4)
     expected_error_shape = (expected_frames, joint_count)
     if weights.shape != (joint_count,):
-        raise ValueError(
-            f"{path} orientation_weights shape {weights.shape} != {(joint_count,)}"
-        )
+        raise ValueError(f"{path} orientation_weights shape {weights.shape} != {(joint_count,)}")
     if target_quaternions.shape != expected_quaternion_shape:
-        raise ValueError(
-            f"{path} target quaternion shape {target_quaternions.shape} "
-            f"!= {expected_quaternion_shape}"
-        )
+        raise ValueError(f"{path} target quaternion shape {target_quaternions.shape} != {expected_quaternion_shape}")
     if robot_quaternions.shape != expected_quaternion_shape:
-        raise ValueError(
-            f"{path} robot quaternion shape {robot_quaternions.shape} "
-            f"!= {expected_quaternion_shape}"
-        )
+        raise ValueError(f"{path} robot quaternion shape {robot_quaternions.shape} != {expected_quaternion_shape}")
     if errors.shape != expected_error_shape:
-        raise ValueError(
-            f"{path} orientation error shape {errors.shape} "
-            f"!= {expected_error_shape}"
-        )
+        raise ValueError(f"{path} orientation error shape {errors.shape} != {expected_error_shape}")
     arrays = (weights, target_quaternions, robot_quaternions, errors)
     if not all(np.isfinite(array).all() for array in arrays):
         raise ValueError(f"{path} orientation diagnostics contain non-finite values")
@@ -324,18 +416,10 @@ def orientation_joint_indices(
         raise ValueError("orientation_joints must not contain duplicate names")
     if not requested_joint_names:
         return np.arange(len(diagnostics.human_joint_names), dtype=np.int32)
-    name_to_index = {
-        name: index
-        for index, name in enumerate(diagnostics.human_joint_names)
-    }
-    missing = tuple(
-        name for name in requested_joint_names if name not in name_to_index
-    )
+    name_to_index = {name: index for index, name in enumerate(diagnostics.human_joint_names)}
+    missing = tuple(name for name in requested_joint_names if name not in name_to_index)
     if missing:
-        raise ValueError(
-            f"Unknown orientation joints {missing}; available: "
-            f"{diagnostics.human_joint_names}"
-        )
+        raise ValueError(f"Unknown orientation joints {missing}; available: {diagnostics.human_joint_names}")
     return np.asarray(
         [name_to_index[name] for name in requested_joint_names],
         dtype=np.int32,
@@ -350,9 +434,7 @@ def interpolate_orientation_quaternions(
 
     values = np.asarray(quaternions_wxyz, dtype=float)
     if values.ndim != 3 or values.shape[-1] != 4 or values.shape[0] == 0:
-        raise ValueError(
-            "orientation quaternion sequence must have shape (frames, joints, 4)"
-        )
+        raise ValueError("orientation quaternion sequence must have shape (frames, joints, 4)")
     clipped_frame = float(np.clip(frame_float, 0.0, values.shape[0] - 1))
     frame0 = int(np.floor(clipped_frame))
     frame1 = min(frame0 + 1, values.shape[0] - 1)
@@ -360,10 +442,7 @@ def interpolate_orientation_quaternions(
     if frame0 == frame1:
         return values[frame0].copy()
     return np.stack(
-        [
-            _slerp(values[frame0, index], values[frame1, index], fraction)
-            for index in range(values.shape[1])
-        ],
+        [_slerp(values[frame0, index], values[frame1, index], fraction) for index in range(values.shape[1])],
         axis=0,
     )
 
@@ -376,9 +455,7 @@ def interpolate_orientation_errors(
 
     values = np.asarray(errors_rad, dtype=float)
     if values.ndim != 2 or values.shape[0] == 0:
-        raise ValueError(
-            "orientation error sequence must have shape (frames, joints)"
-        )
+        raise ValueError("orientation error sequence must have shape (frames, joints)")
     clipped_frame = float(np.clip(frame_float, 0.0, values.shape[0] - 1))
     frame0 = int(np.floor(clipped_frame))
     frame1 = min(frame0 + 1, values.shape[0] - 1)
@@ -415,11 +492,7 @@ def orientation_axis_segments(
     """Convert joint origins and frame rotations to RGB arrow endpoints."""
 
     origins_array = np.asarray(origins, dtype=float)
-    if (
-        origins_array.ndim != 2
-        or origins_array.shape[1] != 3
-        or origins_array.shape[0] != len(quaternions_wxyz)
-    ):
+    if origins_array.ndim != 2 or origins_array.shape[1] != 3 or origins_array.shape[0] != len(quaternions_wxyz):
         raise ValueError("origins and quaternions must have matching joint counts")
     if not np.isfinite(axis_length) or axis_length <= 0.0:
         raise ValueError("orientation axis length must be finite and positive")
@@ -484,10 +557,7 @@ def _make_orientation_overlay(
     config: AblationViserConfig,
 ) -> OrientationOverlay:
     data = mujoco.MjData(model)
-    selected_link_names = tuple(
-        diagnostics.robot_link_names[int(index)]
-        for index in joint_indices
-    )
+    selected_link_names = tuple(diagnostics.robot_link_names[int(index)] for index in joint_indices)
     body_ids = np.asarray(
         [
             mujoco.mj_name2id(
@@ -509,15 +579,9 @@ def _make_orientation_overlay(
         if body_id < 0
     )
     if missing_links:
-        raise ValueError(
-            f"Orientation robot links are absent from the MuJoCo model: "
-            f"{missing_links}"
-        )
+        raise ValueError(f"Orientation robot links are absent from the MuJoCo model: {missing_links}")
     if initial_q.shape[0] < model.nq:
-        raise ValueError(
-            f"qpos has {initial_q.shape[0]} values but the orientation FK "
-            f"model requires {model.nq}"
-        )
+        raise ValueError(f"qpos has {initial_q.shape[0]} values but the orientation FK model requires {model.nq}")
     data.qpos[:] = initial_q[: model.nq]
     mujoco.mj_forward(model, data)
     origins = np.asarray(data.xpos[body_ids]) + offset
@@ -563,15 +627,9 @@ def _make_orientation_overlay(
         weight = diagnostics.weights[source_index]
         error_labels.append(
             server.scene.add_label(
-                (
-                    f"{namespace}/orientation/errors/"
-                    f"{local_index:02d}_{joint_name}"
-                ),
+                (f"{namespace}/orientation/errors/{local_index:02d}_{joint_name}"),
                 f"{joint_name}: {error_degrees:.1f}° (w={weight:g})",
-                position=origins[local_index]
-                + np.asarray(
-                    [0.0, 0.0, 1.15 * config.orientation_axis_length]
-                ),
+                position=origins[local_index] + np.asarray([0.0, 0.0, 1.15 * config.orientation_axis_length]),
                 visible=config.show_orientation_error_labels,
                 font_screen_scale=0.55,
                 depth_test=True,
@@ -607,10 +665,7 @@ def make_ablation_player(
     robot_xml = _resolve_robot_xml(config, robot_urdf)
     contains_object = reference.contains_object_in_qpos
     object_urdf = _resolve_object_urdf(config, reference) if contains_object else None
-    if (
-        not np.isfinite(config.orientation_axis_length)
-        or config.orientation_axis_length <= 0.0
-    ):
+    if not np.isfinite(config.orientation_axis_length) or config.orientation_axis_length <= 0.0:
         raise ValueError("orientation_axis_length must be finite and positive")
     arrow_dimensions = {
         "orientation_axis_shaft_radius": config.orientation_axis_shaft_radius,
@@ -618,21 +673,12 @@ def make_ablation_player(
         "orientation_axis_head_length": config.orientation_axis_head_length,
     }
     invalid_arrow_dimensions = {
-        name: value
-        for name, value in arrow_dimensions.items()
-        if not np.isfinite(value) or value <= 0.0
+        name: value for name, value in arrow_dimensions.items() if not np.isfinite(value) or value <= 0.0
     }
     if invalid_arrow_dimensions:
-        raise ValueError(
-            "Orientation arrow dimensions must be finite and positive: "
-            f"{invalid_arrow_dimensions}"
-        )
-    if config.orientation_axis_head_length >= (
-        config.orientation_axis_length * _TARGET_AXIS_LENGTH_SCALE
-    ):
-        raise ValueError(
-            "orientation_axis_head_length must be shorter than the target arrows"
-        )
+        raise ValueError(f"Orientation arrow dimensions must be finite and positive: {invalid_arrow_dimensions}")
+    if config.orientation_axis_head_length >= (config.orientation_axis_length * _TARGET_AXIS_LENGTH_SCALE):
+        raise ValueError("orientation_axis_head_length must be shorter than the target arrows")
     orientation_diagnostics = [
         load_orientation_diagnostics(
             result.path,
@@ -640,12 +686,26 @@ def make_ablation_player(
         )
         for result in results
     ]
+    human_skeletons = [
+        load_human_skeleton(
+            result.path,
+            expected_frames=result.qpos.shape[0],
+        )
+        for result in results
+    ]
+    reference_skeleton = human_skeletons[0]
+    for result, skeleton in zip(
+        results[1:],
+        human_skeletons[1:],
+        strict=True,
+    ):
+        if skeleton.joint_names != reference_skeleton.joint_names:
+            raise ValueError(f"{result.path} human skeleton joint names differ from the first comparison result")
     robot_fk_model = None
     if any(item is not None for item in orientation_diagnostics):
         if robot_xml is None:
             raise FileNotFoundError(
-                "A MuJoCo robot XML is required to position orientation arrows; "
-                "pass --robot-mujoco-xml."
+                "A MuJoCo robot XML is required to position orientation arrows; pass --robot-mujoco-xml."
             )
         robot_fk_model = mujoco.MjModel.from_xml_path(str(robot_xml))
 
@@ -677,17 +737,25 @@ def make_ablation_player(
     joint_order_indices: np.ndarray | None = None
     centered_indices = np.arange(len(results), dtype=float) - 0.5 * (len(results) - 1)
 
-    for index, (label, result, diagnostics) in enumerate(
+    for index, (label, result, diagnostics, human_skeleton) in enumerate(
         zip(
             labels,
             results,
             orientation_diagnostics,
+            human_skeletons,
             strict=True,
         )
     ):
         color = _variant_color(label, index)
-        namespace = f"/comparisons/{index:02d}_{label}"
+        namespace = f"/groups/{index:02d}_{label}"
         offset = np.asarray([centered_indices[index] * config.x_offset, 0.0, 0.0])
+        human_skeleton_overlay = _make_human_skeleton_overlay(
+            server=server,
+            namespace=namespace,
+            trajectory=human_skeleton,
+            offset=offset,
+            config=config,
+        )
         robot_root = server.scene.add_frame(f"{namespace}/robot", show_axes=False)
         robot = ViserUrdf(
             server,
@@ -731,7 +799,7 @@ def make_ablation_player(
             )
             orientation_overlay = _make_orientation_overlay(
                 server=server,
-                namespace=f"/orientation_overlays/{index:02d}_{label}",
+                namespace=namespace,
                 diagnostics=diagnostics,
                 joint_indices=joint_indices,
                 model=robot_fk_model,
@@ -750,6 +818,7 @@ def make_ablation_player(
                 robot_root=robot_root,
                 object_visual=object_visual,
                 object_root=object_root,
+                human_skeleton=human_skeleton_overlay,
                 orientation_overlay=orientation_overlay,
             )
         )
@@ -762,6 +831,7 @@ def make_ablation_player(
         q: np.ndarray,
         frame_float: float,
     ) -> None:
+        scene.human_skeleton.update(frame_float)
         scene.robot.update_cfg(
             _robot_joints_for_viser(
                 q,
@@ -791,49 +861,55 @@ def make_ablation_player(
             )
             _render_scene(scene, q, frame_float)
 
-    with server.gui.add_folder("Comparison results"):
+    with server.gui.add_folder("Comparison groups"):
         for scene in scenes:
             color_hex = "#" + "".join(f"{channel:02x}" for channel in scene.color)
-            checkbox = server.gui.add_checkbox(
-                f"Mesh: {scene.label} ({color_hex})",
-                initial_value=True,
-            )
-
-            def _register_visibility_callback(scene_ref: ComparisonScene, checkbox_ref) -> None:
-                @checkbox_ref.on_update
-                def _(_event) -> None:
-                    scene_ref.set_mesh_visible(bool(checkbox_ref.value))
-
-            _register_visibility_callback(scene, checkbox)
-
-    overlays = [
-        scene.orientation_overlay
-        for scene in scenes
-        if scene.orientation_overlay is not None
-    ]
-    if overlays:
-        with server.gui.add_folder("Orientation diagnostics"):
-            for scene in scenes:
-                if scene.orientation_overlay is None:
-                    continue
-                overlay_checkbox = server.gui.add_checkbox(
-                    f"Arrows: {scene.label}",
+            with server.gui.add_folder(f"{scene.label} ({color_hex})"):
+                mesh_checkbox = server.gui.add_checkbox(
+                    "Robot mesh",
                     initial_value=True,
                 )
+                skeleton_checkbox = server.gui.add_checkbox(
+                    "Original human skeleton",
+                    initial_value=config.show_human_skeleton,
+                )
+                arrows_checkbox = None
+                if scene.orientation_overlay is not None:
+                    arrows_checkbox = server.gui.add_checkbox(
+                        "Tracked-link axes",
+                        initial_value=True,
+                    )
 
-                def _register_overlay_callback(
-                    overlay_ref: OrientationOverlay,
-                    checkbox_ref,
+                def _register_group_callbacks(
+                    scene_ref: ComparisonScene,
+                    mesh_checkbox_ref,
+                    skeleton_checkbox_ref,
+                    arrows_checkbox_ref,
                 ) -> None:
-                    @checkbox_ref.on_update
+                    @mesh_checkbox_ref.on_update
                     def _(_event) -> None:
-                        overlay_ref.set_enabled(bool(checkbox_ref.value))
+                        scene_ref.set_mesh_visible(bool(mesh_checkbox_ref.value))
 
-                _register_overlay_callback(
-                    scene.orientation_overlay,
-                    overlay_checkbox,
+                    @skeleton_checkbox_ref.on_update
+                    def _(_event) -> None:
+                        scene_ref.set_skeleton_visible(bool(skeleton_checkbox_ref.value))
+
+                    if arrows_checkbox_ref is not None and scene_ref.orientation_overlay is not None:
+
+                        @arrows_checkbox_ref.on_update
+                        def _(_event) -> None:
+                            scene_ref.orientation_overlay.set_enabled(bool(arrows_checkbox_ref.value))
+
+                _register_group_callbacks(
+                    scene,
+                    mesh_checkbox,
+                    skeleton_checkbox,
+                    arrows_checkbox,
                 )
 
+    overlays = [scene.orientation_overlay for scene in scenes if scene.orientation_overlay is not None]
+    if overlays:
+        with server.gui.add_folder("Orientation style"):
             target_checkbox = server.gui.add_checkbox(
                 "Target arrows (short RGB)",
                 initial_value=config.show_target_orientation_axes,
@@ -887,12 +963,12 @@ def make_ablation_player(
         f"frames={reference.qpos.shape[0]}, fps={config.fps or reference.fps:.3f}"
     )
     for scene in scenes:
-        print(f"  {scene.label}: rgb={scene.color}, path={scene.result.path}")
+        print(
+            f"  group {scene.label}: original human skeleton + robot mesh, rgb={scene.color}, path={scene.result.path}"
+        )
         if scene.orientation_overlay is not None:
             selected_names = tuple(
-                scene.orientation_overlay.diagnostics.human_joint_names[
-                    int(index)
-                ]
+                scene.orientation_overlay.diagnostics.human_joint_names[int(index)]
                 for index in scene.orientation_overlay.joint_indices
             )
             print(

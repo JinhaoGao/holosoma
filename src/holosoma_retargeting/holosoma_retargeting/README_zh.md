@@ -351,7 +351,7 @@ python examples/ablation_viser_player.py \
   --show-orientation-error-labels
 ```
 
-播放器中的短 RGB 实心箭头是标定后的目标 link frame，较长的 RGB 实心箭头是机器人实际 link frame，红、绿、蓝分别表示局部 X、Y、Z 轴；两套箭头越重合，朝向跟踪越准确。界面中的 mesh、每组结果的箭头、全局目标箭头、全局机器人箭头和 `SO(3) error labels` 均可独立开关。要只加强肩膀，可运行 `--variants baseline shoulders --weight-scales 0.01 0.025 0.05` 搜索权重，再用上面的 `--orientation-joints LeftArm RightArm` 对照显示候选结果。
+播放器以实验结果为组同步显示。每组在相同空间位置叠加该结果文件保存的完整原始人体骨架、机器人 mesh 和被跟踪 link 的坐标轴；人体只显示骨架，不显示 mesh，组间由 `--x-offset` 分开。短 RGB 实心箭头是标定后的目标 link frame，较长的 RGB 实心箭头是机器人实际 link frame，红、绿、蓝分别表示局部 X、Y、Z 轴；两套箭头越重合，朝向跟踪越准确。`Comparison groups` 中每组的 `Robot mesh`、`Original human skeleton` 和 `Tracked-link axes` 均可独立开关，全局目标箭头、机器人箭头和 `SO(3) error labels` 位于 `Orientation style`。要只加强肩膀，可运行 `--variants baseline shoulders --weight-scales 0.01 0.025 0.05` 搜索权重，再用上面的 `--orientation-joints LeftArm RightArm` 对照显示候选结果。
 
 ### GVHMR
 

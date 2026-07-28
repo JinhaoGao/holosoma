@@ -26,8 +26,10 @@ from holosoma_retargeting.augmentation_viser_player import (  # noqa: E402
 from holosoma_retargeting.examples.ablation_viser_player import (  # noqa: E402
     AblationViserConfig,
     ComparisonScene,
+    interpolate_human_points,
     interpolate_orientation_quaternions,
     load_comparison_results,
+    load_human_skeleton,
     load_orientation_diagnostics,
     orientation_axis_segments,
     orientation_joint_indices,
@@ -57,9 +59,7 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
             human_joint_names=np.asarray(["Pelvis", "L_Hip", "R_Hip"]),
             mapped_human_joint_names=np.asarray(["Pelvis", "L_Hip", "R_Hip"]),
             mapped_robot_joints=np.zeros((n_frames, 3, 3), dtype=np.float32),
-            mapped_robot_link_names=np.asarray(
-                ["pelvis_contour_link", "left_hip_pitch_link", "right_hip_pitch_link"]
-            ),
+            mapped_robot_link_names=np.asarray(["pelvis_contour_link", "left_hip_pitch_link", "right_hip_pitch_link"]),
             robot_type=np.asarray(robot_type),
             object_name=np.asarray("largebox"),
             object_urdf=np.asarray("models/largebox/largebox.urdf"),
@@ -230,9 +230,7 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
             quaternions[..., 0] = 2.0
             np.savez(
                 path,
-                orientation_human_joint_names=np.asarray(
-                    ["LeftArm", "RightArm"]
-                ),
+                orientation_human_joint_names=np.asarray(["LeftArm", "RightArm"]),
                 orientation_robot_link_names=np.asarray(
                     [
                         "l_arm_shoulder_yaw_link",
@@ -284,9 +282,7 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
             ],
         )
 
-        half_turn_z = np.asarray(
-            [[[1.0, 0.0, 0.0, 0.0]], [[0.0, 0.0, 0.0, 1.0]]]
-        )
+        half_turn_z = np.asarray([[[1.0, 0.0, 0.0, 0.0]], [[0.0, 0.0, 0.0, 1.0]]])
         middle = interpolate_orientation_quaternions(
             half_turn_z,
             0.5,
@@ -306,6 +302,10 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
         robot = SimpleNamespace(show_visual=True)
         object_visual = SimpleNamespace(show_visual=True)
         orientation_overlay = SimpleNamespace(enabled=True)
+        human_skeleton = SimpleNamespace(
+            visible=True,
+            set_visible=lambda _: None,
+        )
         scene = ComparisonScene(
             label="shoulders",
             result=object(),
@@ -315,6 +315,7 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
             robot_root=object(),
             object_visual=object_visual,
             object_root=object(),
+            human_skeleton=human_skeleton,
             orientation_overlay=orientation_overlay,
         )
 
@@ -324,6 +325,58 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
         self.assertFalse(robot.show_visual)
         self.assertFalse(object_visual.show_visual)
         self.assertTrue(orientation_overlay.enabled)
+        self.assertTrue(human_skeleton.visible)
+
+    def test_loads_and_interpolates_complete_noetix_human_skeleton(self):
+        joint_names = (
+            "Hips",
+            "RightUpLeg",
+            "RightLeg",
+            "RightFoot",
+            "RightToeBase",
+            "LeftUpLeg",
+            "LeftLeg",
+            "LeftFoot",
+            "LeftToeBase",
+            "Spine",
+            "Spine1",
+            "Spine2",
+            "Neck",
+            "Head",
+            "RightShoulder",
+            "RightArm",
+            "RightForeArm",
+            "RightHand",
+            "LeftShoulder",
+            "LeftArm",
+            "LeftForeArm",
+            "LeftHand",
+        )
+        points = np.zeros((2, len(joint_names), 3), dtype=np.float32)
+        points[1, :, 0] = 2.0
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "result.npz"
+            np.savez(
+                path,
+                human_joints=points,
+                human_joint_names=np.asarray(joint_names),
+            )
+
+            skeleton = load_human_skeleton(path, expected_frames=2)
+
+        index = {name: i for i, name in enumerate(joint_names)}
+        self.assertIn(
+            (index["Hips"], index["Spine"]),
+            skeleton.edges,
+        )
+        self.assertIn(
+            (index["Spine2"], index["LeftShoulder"]),
+            skeleton.edges,
+        )
+        np.testing.assert_allclose(
+            interpolate_human_points(skeleton.points, 0.5)[:, 0],
+            1.0,
+        )
 
 
 if __name__ == "__main__":
