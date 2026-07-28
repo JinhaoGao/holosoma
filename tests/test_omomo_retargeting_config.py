@@ -6,6 +6,7 @@ import sys
 import unittest
 from pathlib import Path
 
+import cvxpy as cp
 import mujoco
 import numpy as np
 
@@ -169,6 +170,223 @@ class ObjectNonPenetrationToggleTests(unittest.TestCase):
                 "ground",
             )
         )
+
+
+class ObjectPointPayloadTests(unittest.TestCase):
+    def test_robot_only_payload_omits_static_ground_point_trajectories(self):
+        payload = InteractionMeshRetargeter._object_points_save_payload(
+            has_dynamic_object=False,
+            object_points_local_demo=np.zeros((225, 3)),
+            object_points_local=np.zeros((225, 3)),
+            obj_pts_demo_list=[np.zeros((225, 3))],
+            obj_pts_list=[np.zeros((225, 3))],
+        )
+
+        self.assertEqual(payload, {})
+
+    def test_dynamic_object_payload_keeps_local_and_world_points(self):
+        payload = InteractionMeshRetargeter._object_points_save_payload(
+            has_dynamic_object=True,
+            object_points_local_demo=np.zeros((4, 3)),
+            object_points_local=np.ones((4, 3)),
+            obj_pts_demo_list=[np.full((4, 3), 2.0)],
+            obj_pts_list=[np.full((4, 3), 3.0)],
+        )
+
+        self.assertEqual(
+            set(payload),
+            {
+                "object_points_demo_local",
+                "object_points_target_local",
+                "object_points_demo_world",
+                "object_points_target_world",
+            },
+        )
+        self.assertEqual(payload["object_points_demo_world"].shape, (1, 4, 3))
+
+
+class FootStickingFallbackTests(unittest.TestCase):
+    def test_config_passes_fallback_tolerance_to_retargeter(self):
+        constants = create_task_constants(
+            RobotConfig(robot_type="g1"),
+            MotionDataConfig(data_format="omomo", robot_type="g1"),
+            TaskConfig(object_name="largebox"),
+            "object_interaction",
+        )
+        kwargs = build_retargeter_kwargs_from_config(
+            RetargeterConfig(foot_sticking_fallback_tolerance=0.025),
+            constants,
+            "unused-object.urdf",
+            "object_interaction",
+        )
+
+        self.assertEqual(kwargs["foot_sticking_fallback_tolerance"], 0.025)
+        self.assertTrue(kwargs["release_foot_sticking_on_infeasible"])
+        self.assertFalse(kwargs["release_object_non_penetration_on_infeasible"])
+        self.assertTrue(kwargs["retry_without_foot_sticking_on_infeasible"])
+
+    def test_solver_replaces_only_infeasible_foot_constraints(self):
+        x = cp.Variable()
+        objective = cp.Minimize(cp.square(x))
+        base_constraints = [x <= 0.5]
+        normal_foot_constraints = [x >= 1.0]
+        fallback_foot_constraints = [x >= -0.1]
+
+        (
+            problem,
+            resolution,
+            object_constraints_released,
+        ) = InteractionMeshRetargeter._solve_with_foot_sticking_fallback(
+            objective=objective,
+            base_constraints=base_constraints,
+            object_non_penetration_constraints=[],
+            foot_sticking_constraints=normal_foot_constraints,
+            foot_sticking_fallback_constraints=fallback_foot_constraints,
+            solver_kwargs={"verbose": False},
+            remove_soc_on_failure=False,
+            release_on_failure=True,
+            release_object_non_penetration_on_failure=True,
+        )
+
+        self.assertEqual(resolution, "relaxed")
+        self.assertFalse(object_constraints_released)
+        self.assertIn(problem.status, (cp.OPTIMAL, cp.OPTIMAL_INACCURATE))
+        self.assertLessEqual(float(x.value), 0.5 + 1e-8)
+        self.assertGreaterEqual(float(x.value), -0.1 - 1e-8)
+
+    def test_solver_can_release_only_foot_constraints_as_last_resort(self):
+        x = cp.Variable()
+        objective = cp.Minimize(cp.square(x))
+        base_constraints = [x <= 0.5]
+
+        (
+            problem,
+            resolution,
+            object_constraints_released,
+        ) = InteractionMeshRetargeter._solve_with_foot_sticking_fallback(
+            objective=objective,
+            base_constraints=base_constraints,
+            object_non_penetration_constraints=[],
+            foot_sticking_constraints=[x >= 1.0],
+            foot_sticking_fallback_constraints=[x >= 0.8],
+            solver_kwargs={"verbose": False},
+            remove_soc_on_failure=False,
+            release_on_failure=True,
+            release_object_non_penetration_on_failure=True,
+        )
+
+        self.assertEqual(resolution, "released")
+        self.assertFalse(object_constraints_released)
+        self.assertIn(problem.status, (cp.OPTIMAL, cp.OPTIMAL_INACCURATE))
+        self.assertLessEqual(float(x.value), 0.5 + 1e-8)
+
+    def test_solver_can_release_only_object_constraints_as_last_resort(self):
+        x = cp.Variable()
+        objective = cp.Minimize(cp.square(x))
+        base_constraints = [x <= 0.5]
+
+        (
+            problem,
+            resolution,
+            object_constraints_released,
+        ) = InteractionMeshRetargeter._solve_with_foot_sticking_fallback(
+            objective=objective,
+            base_constraints=base_constraints,
+            object_non_penetration_constraints=[x >= 1.0],
+            foot_sticking_constraints=[],
+            foot_sticking_fallback_constraints=[],
+            solver_kwargs={"verbose": False},
+            remove_soc_on_failure=False,
+            release_on_failure=True,
+            release_object_non_penetration_on_failure=True,
+        )
+
+        self.assertIsNone(resolution)
+        self.assertTrue(object_constraints_released)
+        self.assertIn(problem.status, (cp.OPTIMAL, cp.OPTIMAL_INACCURATE))
+        self.assertLessEqual(float(x.value), 0.5 + 1e-8)
+
+
+class SqpConvergenceTests(unittest.TestCase):
+    @staticmethod
+    def _retargeter_with_costs(
+        costs: list[float],
+        *,
+        max_iterations: int = 20,
+        patience: int = 3,
+    ) -> tuple[InteractionMeshRetargeter, list[int]]:
+        retargeter = InteractionMeshRetargeter.__new__(InteractionMeshRetargeter)
+        retargeter.q_a_indices = np.asarray([0], dtype=int)
+        retargeter.sqp_max_iterations = max_iterations
+        retargeter.sqp_min_iterations = 1
+        retargeter.sqp_convergence_patience = patience
+        retargeter.sqp_abs_cost_tolerance = 1e-9
+        retargeter.sqp_rel_cost_tolerance = 1e-7
+        retargeter.last_sqp_iteration_count = 0
+        retargeter.last_sqp_stop_reason = "not_started"
+
+        calls: list[int] = []
+        cost_iterator = iter(costs)
+
+        def fake_single_iteration(**_kwargs):
+            calls.append(len(calls) + 1)
+            return np.asarray([float(calls[-1])]), next(cost_iterator)
+
+        retargeter.solve_single_iteration = fake_single_iteration
+        return retargeter, calls
+
+    @staticmethod
+    def _iterate(retargeter: InteractionMeshRetargeter):
+        return retargeter.iterate(
+            q_locked=np.zeros(1),
+            q_n=np.zeros(1),
+            q_t_last=np.zeros(1),
+            target_laplacian=np.zeros((1, 3)),
+            adj_list=[],
+            obj_pts_local=np.zeros((0, 3)),
+            foot_sticking=(False, False),
+        )
+
+    def test_stops_only_after_patience_is_exhausted(self):
+        retargeter, calls = self._retargeter_with_costs(
+            [10.0, 9.0, 8.0, 8.1, 8.2, 8.3, 7.0],
+            patience=3,
+        )
+
+        q, cost = self._iterate(retargeter)
+
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(retargeter.last_sqp_iteration_count, 6)
+        self.assertEqual(retargeter.last_sqp_stop_reason, "cost_stalled")
+        self.assertEqual(cost, 8.0)
+        np.testing.assert_array_equal(q, np.asarray([3.0]))
+
+    def test_significant_decrease_resets_patience(self):
+        retargeter, calls = self._retargeter_with_costs(
+            [10.0, 9.0, 9.0, 8.0, 8.0, 8.0, 8.0],
+            patience=3,
+        )
+
+        q, cost = self._iterate(retargeter)
+
+        self.assertEqual(len(calls), 7)
+        self.assertEqual(retargeter.last_sqp_stop_reason, "cost_stalled")
+        self.assertEqual(cost, 8.0)
+        np.testing.assert_array_equal(q, np.asarray([4.0]))
+
+    def test_safety_cap_returns_best_iteration_instead_of_last(self):
+        retargeter, calls = self._retargeter_with_costs(
+            [10.0, 9.0, 10.0, 11.0],
+            max_iterations=4,
+            patience=10,
+        )
+
+        q, cost = self._iterate(retargeter)
+
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(retargeter.last_sqp_stop_reason, "max_iterations")
+        self.assertEqual(cost, 9.0)
+        np.testing.assert_array_equal(q, np.asarray([2.0]))
 
 
 if __name__ == "__main__":

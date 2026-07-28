@@ -483,8 +483,21 @@ def build_retargeter_kwargs_from_config(
         "foot_lock": retargeter_config.foot_lock,
         "penetration_tolerance": retargeter_config.penetration_tolerance,
         "foot_sticking_tolerance": retargeter_config.foot_sticking_tolerance,
+        "foot_sticking_fallback_tolerance": retargeter_config.foot_sticking_fallback_tolerance,
+        "release_foot_sticking_on_infeasible": retargeter_config.release_foot_sticking_on_infeasible,
+        "release_object_non_penetration_on_infeasible": (
+            retargeter_config.release_object_non_penetration_on_infeasible
+        ),
+        "retry_without_foot_sticking_on_infeasible": (
+            retargeter_config.retry_without_foot_sticking_on_infeasible
+        ),
         "self_collision": retargeter_config.self_collision,
         "step_size": retargeter_config.step_size,
+        "sqp_max_iterations": retargeter_config.sqp_max_iterations,
+        "sqp_min_iterations": retargeter_config.sqp_min_iterations,
+        "sqp_convergence_patience": retargeter_config.sqp_convergence_patience,
+        "sqp_abs_cost_tolerance": retargeter_config.sqp_abs_cost_tolerance,
+        "sqp_rel_cost_tolerance": retargeter_config.sqp_rel_cost_tolerance,
         "visualize": retargeter_config.visualize,
         "mesh_opacity": retargeter_config.mesh_opacity,
         "debug": retargeter_config.debug,

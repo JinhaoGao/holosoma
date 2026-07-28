@@ -63,8 +63,17 @@ class InteractionMeshRetargeter:
         collision_detection_threshold: float = 0.1,
         penetration_tolerance: float = 1e-3,
         foot_sticking_tolerance: float = 1e-3,
+        foot_sticking_fallback_tolerance: float | None = 0.02,
+        release_foot_sticking_on_infeasible: bool = True,
+        release_object_non_penetration_on_infeasible: bool = True,
+        retry_without_foot_sticking_on_infeasible: bool = True,
         foot_lock: FootLockConfig | None = None,
         self_collision: SelfCollisionConfig | None = None,
+        sqp_max_iterations: int = 50,
+        sqp_min_iterations: int = 4,
+        sqp_convergence_patience: int = 3,
+        sqp_abs_cost_tolerance: float = 1e-9,
+        sqp_rel_cost_tolerance: float = 1e-7,
         visualize: bool = False,
         mesh_opacity: float = 1.0,
         debug: bool = False,
@@ -94,7 +103,23 @@ class InteractionMeshRetargeter:
             when the distance is smaller than this threshold.
             penetration_tolerance: tolerance for penetration when enforcing non-penetration constraints.
             foot_sticking_tolerance: tolerance for foot sticking constraints in x, y.
+            foot_sticking_fallback_tolerance: relaxed x/y tolerance used only when
+                the normal foot-sticking problem is infeasible. None disables the fallback.
+            release_foot_sticking_on_infeasible: release foot-sticking constraints
+                only on a frame that remains infeasible after the relaxed retry.
+            release_object_non_penetration_on_infeasible: release robot-object
+                non-penetration constraints only on a frame that remains
+                infeasible after foot-sticking fallbacks. Ground constraints
+                remain enabled.
+            retry_without_foot_sticking_on_infeasible: retry the full sequence
+                without foot sticking if a local release remains infeasible.
             foot_lock: configuration for explicit frame-range based foot locking constraints.
+            sqp_max_iterations: safety cap for SQP iterations per frame.
+            sqp_min_iterations: minimum iterations before convergence-based stopping.
+            sqp_convergence_patience: consecutive non-improving iterations required
+                before stopping.
+            sqp_abs_cost_tolerance: absolute significant-improvement threshold.
+            sqp_rel_cost_tolerance: relative significant-improvement threshold.
             nominal_tracking_tau: the time constant for the nominal tracking cost.
         """
 
@@ -135,7 +160,31 @@ class InteractionMeshRetargeter:
         self.laplacian_weights = 10
         self.smooth_weight = 0.2
         # Tolerance for foot sticking constraints in x, y.
-        self.foot_sticking_tolerance = foot_sticking_tolerance
+        self.foot_sticking_tolerance = float(foot_sticking_tolerance)
+        self.foot_sticking_fallback_tolerance = (
+            None if foot_sticking_fallback_tolerance is None else float(foot_sticking_fallback_tolerance)
+        )
+        self.release_foot_sticking_on_infeasible = bool(release_foot_sticking_on_infeasible)
+        self.release_object_non_penetration_on_infeasible = bool(
+            release_object_non_penetration_on_infeasible
+        )
+        self.retry_without_foot_sticking_on_infeasible = bool(
+            retry_without_foot_sticking_on_infeasible
+        )
+        if self.foot_sticking_tolerance < 0:
+            raise ValueError("foot_sticking_tolerance must be non-negative")
+        if (
+            self.foot_sticking_fallback_tolerance is not None
+            and self.foot_sticking_fallback_tolerance < self.foot_sticking_tolerance
+        ):
+            raise ValueError(
+                "foot_sticking_fallback_tolerance must be greater than or equal to "
+                "foot_sticking_tolerance"
+            )
+        self.foot_sticking_fallback_frames: set[int] = set()
+        self.foot_sticking_release_frames: set[int] = set()
+        self.object_non_penetration_release_frames: set[int] = set()
+        self.foot_sticking_full_sequence_retry_frame: int | None = None
         self._init_foot_lock(foot_lock)
         self._self_collision_config = self_collision
 
@@ -206,6 +255,26 @@ class InteractionMeshRetargeter:
         self.Q_diag[np.array(list(self.task_constants.MANUAL_COST.keys())).astype(int)] = list(
             self.task_constants.MANUAL_COST.values()
         )
+
+        self.sqp_max_iterations = int(sqp_max_iterations)
+        self.sqp_min_iterations = int(sqp_min_iterations)
+        self.sqp_convergence_patience = int(sqp_convergence_patience)
+        self.sqp_abs_cost_tolerance = float(sqp_abs_cost_tolerance)
+        self.sqp_rel_cost_tolerance = float(sqp_rel_cost_tolerance)
+        if self.sqp_max_iterations <= 0:
+            raise ValueError("sqp_max_iterations must be positive")
+        if self.sqp_min_iterations <= 0:
+            raise ValueError("sqp_min_iterations must be positive")
+        if self.sqp_min_iterations > self.sqp_max_iterations:
+            raise ValueError("sqp_min_iterations must not exceed sqp_max_iterations")
+        if self.sqp_convergence_patience <= 0:
+            raise ValueError("sqp_convergence_patience must be positive")
+        if self.sqp_abs_cost_tolerance < 0:
+            raise ValueError("sqp_abs_cost_tolerance must be non-negative")
+        if self.sqp_rel_cost_tolerance < 0:
+            raise ValueError("sqp_rel_cost_tolerance must be non-negative")
+        self.last_sqp_iteration_count = 0
+        self.last_sqp_stop_reason = "not_started"
 
         self.w_nominal_tracking_init = w_nominal_tracking_init
         self.nominal_tracking_tau = nominal_tracking_tau
@@ -466,6 +535,25 @@ class InteractionMeshRetargeter:
         )
         return [handle]
 
+    @staticmethod
+    def _object_points_save_payload(
+        *,
+        has_dynamic_object: bool,
+        object_points_local_demo: np.ndarray,
+        object_points_local: np.ndarray,
+        obj_pts_demo_list: list[np.ndarray],
+        obj_pts_list: list[np.ndarray],
+    ) -> dict[str, np.ndarray]:
+        """Return object-point trajectories only for genuine dynamic objects."""
+        if not has_dynamic_object:
+            return {}
+        return {
+            "object_points_demo_local": np.asarray(object_points_local_demo, dtype=np.float32),
+            "object_points_target_local": np.asarray(object_points_local, dtype=np.float32),
+            "object_points_demo_world": np.asarray(obj_pts_demo_list, dtype=np.float32),
+            "object_points_target_world": np.asarray(obj_pts_list, dtype=np.float32),
+        }
+
     def draw_interaction_meshes(
         self,
         source_vertices: np.ndarray,
@@ -508,6 +596,7 @@ class InteractionMeshRetargeter:
         original=True,
         dest_res_path=None,
         fps=30.0,
+        _foot_sticking_retry: bool = False,
     ):
         """
         The main function to retarget an entire motion sequence frame by frame.
@@ -542,8 +631,19 @@ class InteractionMeshRetargeter:
         interaction_source_vertices_w_list = []
         interaction_target_vertices_w_list = []
         mapped_robot_joints_w_list = []
+        frame_costs = []
+        sqp_iteration_counts = []
+        sqp_stop_reasons = []
+        self.foot_sticking_fallback_frames.clear()
+        self.foot_sticking_release_frames.clear()
+        self.object_non_penetration_release_frames.clear()
+        if not _foot_sticking_retry:
+            self.foot_sticking_full_sequence_retry_frame = None
         collect_interaction_mesh = self.save_interaction_mesh or (self.visualize and self.show_interaction_mesh)
+        collect_object_point_trajectories = self.has_dynamic_object or self.visualize
         interaction_mesh_handle_list: list[object] = []
+        retry_without_foot_sticking_exception: RuntimeError | None = None
+        retry_without_foot_sticking_frame: int | None = None
 
         def _clear_interaction_mesh_handles() -> None:
             for handle in interaction_mesh_handle_list:
@@ -584,8 +684,9 @@ class InteractionMeshRetargeter:
                     object_trans,
                     object_points_local,
                 )
-                obj_pts_demo_list.append(obj_pts_demo.astype(np.float32))
-                obj_pts_list.append(obj_pts.astype(np.float32))
+                if collect_object_point_trajectories:
+                    obj_pts_demo_list.append(obj_pts_demo.astype(np.float32))
+                    obj_pts_list.append(obj_pts.astype(np.float32))
 
                 source_vertices_w = None
                 target_vertices_w = None
@@ -621,20 +722,40 @@ class InteractionMeshRetargeter:
                 else:
                     w_nominal_tracking = self.w_nominal_tracking_init * np.exp(-i / self.nominal_tracking_tau)
 
-                q, cost = self.iterate(
-                    q_locked=q_locked_list[i],
-                    q_n=q,
-                    q_t_last=retargeted_motions[-1],
-                    target_laplacian=target_laplacian,
-                    adj_list=adj_list,
-                    obj_pts_local=object_points_local,
-                    foot_sticking=foot_sticking_sequences[i],
-                    w_nominal_tracking=w_nominal_tracking,
-                    q_a_nominal=(q_nominal_list[i, self.q_a_indices] if q_nominal_list is not None else None),
-                    init_t=i == 0,
-                    n_iter=50 if i == 0 else 10,
-                    frame_idx=i,
-                )
+                try:
+                    q, cost = self.iterate(
+                        q_locked=q_locked_list[i],
+                        q_n=q,
+                        q_t_last=retargeted_motions[-1],
+                        target_laplacian=target_laplacian,
+                        adj_list=adj_list,
+                        obj_pts_local=object_points_local,
+                        foot_sticking=foot_sticking_sequences[i],
+                        w_nominal_tracking=w_nominal_tracking,
+                        q_a_nominal=(
+                            q_nominal_list[i, self.q_a_indices]
+                            if q_nominal_list is not None
+                            else None
+                        ),
+                        init_t=i == 0,
+                        frame_idx=i,
+                    )
+                except RuntimeError as exc:
+                    should_retry_without_foot_sticking = (
+                        self.retry_without_foot_sticking_on_infeasible
+                        and self.activate_foot_sticking
+                        and not _foot_sticking_retry
+                        and "CVXPY solve failed" in str(exc)
+                    )
+                    if not should_retry_without_foot_sticking:
+                        raise
+                    retry_without_foot_sticking_exception = exc
+                    retry_without_foot_sticking_frame = i
+                    break
+
+                frame_costs.append(float(cost))
+                sqp_iteration_counts.append(self.last_sqp_iteration_count)
+                sqp_stop_reasons.append(self.last_sqp_stop_reason)
 
                 robot_link_positions = self._get_robot_link_positions(
                     q, self.laplacian_match_links.values()
@@ -705,6 +826,37 @@ class InteractionMeshRetargeter:
             robot_skeleton_handle_list.clear()
         _clear_interaction_mesh_handles()
 
+        if retry_without_foot_sticking_exception is not None:
+            if retry_without_foot_sticking_frame is None:
+                raise RuntimeError("Missing frame index for foot-sticking retry")
+            self.foot_sticking_full_sequence_retry_frame = retry_without_foot_sticking_frame
+            print(
+                "WARNING: Retrying the complete sequence without foot-sticking "
+                f"constraints after frame {retry_without_foot_sticking_frame} "
+                f"remained infeasible ({retry_without_foot_sticking_exception}). "
+                "All other constraints are preserved.",
+                flush=True,
+            )
+            activate_foot_sticking = self.activate_foot_sticking
+            self.activate_foot_sticking = False
+            try:
+                return self.retarget_motion(
+                    human_joint_motions=human_joint_motions,
+                    object_poses=object_poses,
+                    object_poses_augmented=object_poses_augmented,
+                    object_points_local_demo=object_points_local_demo,
+                    object_points_local=object_points_local,
+                    foot_sticking_sequences=foot_sticking_sequences,
+                    q_a_init=q_a_init,
+                    q_nominal_list=q_nominal_list,
+                    original=original,
+                    dest_res_path=dest_res_path,
+                    fps=fps,
+                    _foot_sticking_retry=True,
+                )
+            finally:
+                self.activate_foot_sticking = activate_foot_sticking
+
         # Save results
         mapped_human_joint_names = list(self.laplacian_match_links.keys())
         save_payload = {
@@ -720,13 +872,54 @@ class InteractionMeshRetargeter:
             "object_name": np.asarray(self.object_name),
             "object_urdf": np.asarray(self.object_model_path or ""),
             "contains_object_in_qpos": np.asarray(bool(self.object_model_path) and bool(self.has_dynamic_object)),
-            "object_points_demo_local": np.asarray(object_points_local_demo, dtype=np.float32),
-            "object_points_target_local": np.asarray(object_points_local, dtype=np.float32),
-            "object_points_demo_world": np.asarray(obj_pts_demo_list, dtype=np.float32),
-            "object_points_target_world": np.asarray(obj_pts_list, dtype=np.float32),
+            "foot_sticking_tolerance": np.asarray(self.foot_sticking_tolerance),
+            "foot_sticking_fallback_tolerance": np.asarray(
+                np.nan
+                if self.foot_sticking_fallback_tolerance is None
+                else self.foot_sticking_fallback_tolerance
+            ),
+            "foot_sticking_fallback_frames": np.asarray(
+                sorted(self.foot_sticking_fallback_frames),
+                dtype=np.int32,
+            ),
+            "release_foot_sticking_on_infeasible": np.asarray(
+                self.release_foot_sticking_on_infeasible
+            ),
+            "foot_sticking_release_frames": np.asarray(
+                sorted(self.foot_sticking_release_frames),
+                dtype=np.int32,
+            ),
+            "release_object_non_penetration_on_infeasible": np.asarray(
+                self.release_object_non_penetration_on_infeasible
+            ),
+            "object_non_penetration_release_frames": np.asarray(
+                sorted(self.object_non_penetration_release_frames),
+                dtype=np.int32,
+            ),
+            "foot_sticking_enabled_for_saved_trajectory": np.asarray(
+                self.activate_foot_sticking
+            ),
+            "foot_sticking_full_sequence_retry_frame": np.asarray(
+                -1
+                if self.foot_sticking_full_sequence_retry_frame is None
+                else self.foot_sticking_full_sequence_retry_frame,
+                dtype=np.int32,
+            ),
+            "frame_costs": np.asarray(frame_costs, dtype=np.float64),
+            "sqp_iteration_counts": np.asarray(sqp_iteration_counts, dtype=np.int32),
+            "sqp_stop_reasons": np.asarray(sqp_stop_reasons, dtype=str),
             "fps": float(fps),
             "cost": cost,
         }
+        save_payload.update(
+            self._object_points_save_payload(
+                has_dynamic_object=self.has_dynamic_object,
+                object_points_local_demo=object_points_local_demo,
+                object_points_local=object_points_local,
+                obj_pts_demo_list=obj_pts_demo_list,
+                obj_pts_list=obj_pts_list,
+            )
+        )
         if self.save_interaction_mesh:
             packed_tetrahedra, tetrahedra_counts = self._pack_interaction_tetrahedra(tetrahedra)
             save_payload.update(
@@ -957,8 +1150,13 @@ class InteractionMeshRetargeter:
         dqa = cp.Variable(len(self.q_a_indices), name="dqa")
         lap_var = cp.Variable(3 * V, name="laplacian")
 
-        # Constraints list
+        # Base constraints and replaceable foot-sticking constraints are kept
+        # separate so an infeasible frame can be retried without weakening
+        # collision, joint-limit, foot-lock, or trust-region constraints.
         constraints = []
+        foot_sticking_constraints = []
+        foot_sticking_fallback_constraints = []
+        object_non_penetration_constraints = []
 
         # Linear equality
         constraints += [cp.Constant(J_L[:, self.q_a_indices]) @ dqa - lap_var == -lap0_vec]
@@ -989,14 +1187,24 @@ class InteractionMeshRetargeter:
                     apply_left = (side == "left") and foot_sticking[left_key]
                     apply_right = (side == "right") and foot_sticking[right_key]
                     if apply_left or apply_right:
-                        p_lb = p_WF_t_last_dict[key] - p_WF_dict[key] - self.foot_sticking_tolerance
-                        p_ub = p_lb + 2 * self.foot_sticking_tolerance  # symmetric window
-
                         Jxy = J_WF[:2, self.q_a_indices]  # (2 x nq_act)
-                        constraints += [
+                        delta = p_WF_t_last_dict[key] - p_WF_dict[key]
+                        p_lb = delta - self.foot_sticking_tolerance
+                        p_ub = delta + self.foot_sticking_tolerance
+                        foot_sticking_constraints += [
                             Jxy @ dqa >= p_lb[:2],
                             Jxy @ dqa <= p_ub[:2],
                         ]
+                        if (
+                            self.foot_sticking_fallback_tolerance is not None
+                            and self.foot_sticking_fallback_tolerance > self.foot_sticking_tolerance
+                        ):
+                            fallback_lb = delta - self.foot_sticking_fallback_tolerance
+                            fallback_ub = delta + self.foot_sticking_fallback_tolerance
+                            foot_sticking_fallback_constraints += [
+                                Jxy @ dqa >= fallback_lb[:2],
+                                Jxy @ dqa <= fallback_ub[:2],
+                            ]
 
             # Foot lock windows: pin Z to floor within configured frame ranges
             if apply_foot_lock:
@@ -1018,7 +1226,11 @@ class InteractionMeshRetargeter:
             Ja_n_full = Js[key]
             Ja_n = Ja_n_full[self.q_a_indices]
             rhs = -phi - self.penetration_tolerance
-            constraints += [Ja_n @ dqa >= rhs]
+            constraint = Ja_n @ dqa >= rhs
+            if self._collision_pair_involves_dynamic_object(*key):
+                object_non_penetration_constraints.append(constraint)
+            else:
+                constraints.append(constraint)
 
         # Self-collision constraints
         Js_sc, phis_sc = self._compute_self_collision_constraints(frame_idx)
@@ -1067,18 +1279,71 @@ class InteractionMeshRetargeter:
                 # if a full matrix was supplied, fall back to quad_form
                 obj_terms.append(cp.quad_form(dqa - dqa_smooth, Wsmooth))
 
-        problem = cp.Problem(cp.Minimize(cp.sum(obj_terms)), constraints)
-
-        # -------- Solve with Clarabel --------
+        objective = cp.Minimize(cp.sum(obj_terms))
         solver_kwargs = {"verbose": verbose}
-        problem.solve(solver=cp.CLARABEL, **solver_kwargs)
-        if (problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)) and init_t:
-            constraints = [c for c in constraints if not isinstance(c, cp.constraints.second_order.SOC)]
-            problem = cp.Problem(cp.Minimize(cp.sum(obj_terms)), constraints)
-            problem.solve(solver=cp.CLARABEL, **solver_kwargs)
+        (
+            problem,
+            foot_sticking_resolution,
+            object_non_penetration_released,
+        ) = self._solve_with_foot_sticking_fallback(
+            objective=objective,
+            base_constraints=constraints,
+            object_non_penetration_constraints=object_non_penetration_constraints,
+            foot_sticking_constraints=foot_sticking_constraints,
+            foot_sticking_fallback_constraints=foot_sticking_fallback_constraints,
+            solver_kwargs=solver_kwargs,
+            remove_soc_on_failure=init_t,
+            release_on_failure=self.release_foot_sticking_on_infeasible,
+            release_object_non_penetration_on_failure=(
+                self.release_object_non_penetration_on_infeasible
+            ),
+        )
 
         if problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
-            raise RuntimeError(f"CVXPY solve failed: {problem.status}")
+            raise RuntimeError(
+                f"CVXPY solve failed at frame {frame_idx}: {problem.status}; "
+                f"foot tolerance={self.foot_sticking_tolerance}, "
+                f"fallback tolerance={self.foot_sticking_fallback_tolerance}, "
+                f"release foot on infeasible={self.release_foot_sticking_on_infeasible}, "
+                "release object non-penetration on infeasible="
+                f"{self.release_object_non_penetration_on_infeasible}"
+            )
+        if (
+            foot_sticking_resolution == "relaxed"
+            and frame_idx not in self.foot_sticking_fallback_frames
+        ):
+            self.foot_sticking_fallback_frames.add(frame_idx)
+            print(
+                "WARNING: Retried infeasible foot-sticking constraints at "
+                f"frame {frame_idx} with tolerance "
+                f"{self.foot_sticking_fallback_tolerance:.6g} m "
+                f"(normal {self.foot_sticking_tolerance:.6g} m).",
+                flush=True,
+            )
+        elif (
+            foot_sticking_resolution == "released"
+            and frame_idx not in self.foot_sticking_release_frames
+        ):
+            self.foot_sticking_fallback_frames.add(frame_idx)
+            self.foot_sticking_release_frames.add(frame_idx)
+            print(
+                "WARNING: Released foot-sticking constraints at "
+                f"frame {frame_idx} after the normal and relaxed problems "
+                "remained infeasible; all other constraints are preserved.",
+                flush=True,
+            )
+        if (
+            object_non_penetration_released
+            and frame_idx not in self.object_non_penetration_release_frames
+        ):
+            self.object_non_penetration_release_frames.add(frame_idx)
+            print(
+                "WARNING: Released robot-object non-penetration constraints at "
+                f"frame {frame_idx} after the foot-sticking fallbacks remained "
+                "infeasible; ground non-penetration and all other constraints "
+                "are preserved.",
+                flush=True,
+            )
 
         dqa_star = dqa.value
         cost = problem.value
@@ -1088,6 +1353,93 @@ class InteractionMeshRetargeter:
         q_star[3:7] /= np.linalg.norm(q_star[3:7]) + 1e-12
 
         return q_star, cost
+
+    @staticmethod
+    def _solve_with_foot_sticking_fallback(
+        objective,
+        base_constraints: list,
+        object_non_penetration_constraints: list,
+        foot_sticking_constraints: list,
+        foot_sticking_fallback_constraints: list,
+        solver_kwargs: dict,
+        remove_soc_on_failure: bool,
+        release_on_failure: bool,
+        release_object_non_penetration_on_failure: bool,
+    ) -> tuple[cp.Problem, str | None, bool]:
+        """Retry replaceable foot and robot-object constraints in a fixed order."""
+
+        active_base_constraints = list(base_constraints)
+
+        def _solve(
+            active_foot_constraints: list,
+            *,
+            include_object_non_penetration: bool = True,
+        ) -> cp.Problem:
+            object_constraints = (
+                object_non_penetration_constraints
+                if include_object_non_penetration
+                else []
+            )
+            problem = cp.Problem(
+                objective,
+                [
+                    *active_base_constraints,
+                    *object_constraints,
+                    *active_foot_constraints,
+                ],
+            )
+            problem.solve(solver=cp.CLARABEL, **solver_kwargs)
+            return problem
+
+        problem = _solve(foot_sticking_constraints)
+        if (
+            problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
+            and remove_soc_on_failure
+        ):
+            active_base_constraints = [
+                constraint
+                for constraint in active_base_constraints
+                if not isinstance(constraint, cp.constraints.second_order.SOC)
+            ]
+            problem = _solve(foot_sticking_constraints)
+
+        foot_sticking_resolution = None
+        if (
+            problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
+            and foot_sticking_constraints
+            and foot_sticking_fallback_constraints
+        ):
+            problem = _solve(foot_sticking_fallback_constraints)
+            if problem.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
+                foot_sticking_resolution = "relaxed"
+
+        if (
+            problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
+            and foot_sticking_constraints
+            and release_on_failure
+        ):
+            problem = _solve([])
+            if problem.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
+                foot_sticking_resolution = "released"
+
+        object_non_penetration_released = False
+        if (
+            problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
+            and object_non_penetration_constraints
+            and release_object_non_penetration_on_failure
+        ):
+            problem = _solve(
+                [],
+                include_object_non_penetration=False,
+            )
+            if problem.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
+                object_non_penetration_released = True
+
+        return (
+            problem,
+            foot_sticking_resolution,
+            object_non_penetration_released,
+        )
 
     def _is_foot_locked_in_window(self, foot_link_key: str, frame_idx: int) -> bool:
         """Check whether a foot link is locked by configured frame windows."""
@@ -1163,12 +1515,25 @@ class InteractionMeshRetargeter:
         w_nominal_tracking: float = 0.0,
         q_a_nominal: np.ndarray | None = None,
         init_t: bool = False,
-        n_iter: int = 10,
+        n_iter: int | None = None,
         frame_idx: int = 0,
     ):
-        """Iterate the solver for multiple iterations."""
-        last_cost = np.inf
-        for _ in range(n_iter):
+        """Run SQP until its cost stalls, with a maximum-iteration safety cap.
+
+        ``n_iter`` is retained as an optional per-call safety-cap override for
+        compatibility. Normal retargeting uses ``self.sqp_max_iterations``.
+        """
+        max_iterations = self.sqp_max_iterations if n_iter is None else int(n_iter)
+        if max_iterations <= 0:
+            raise ValueError("n_iter must be positive when provided")
+
+        min_iterations = min(self.sqp_min_iterations, max_iterations)
+        best_q = np.copy(q_n)
+        best_cost = np.inf
+        stalled_iterations = 0
+        stop_reason = "max_iterations"
+
+        for iteration_idx in range(max_iterations):
             q_a_n_last = q_n[self.q_a_indices]
             q_n, cost = self.solve_single_iteration(
                 q_locked=q_locked,
@@ -1183,10 +1548,36 @@ class InteractionMeshRetargeter:
                 init_t=init_t,
                 frame_idx=frame_idx,
             )
-            if np.isclose(cost, last_cost):
+
+            cost = float(cost)
+            if not np.isfinite(cost):
+                raise RuntimeError(
+                    f"SQP returned a non-finite cost at frame {frame_idx}, iteration {iteration_idx}: {cost}"
+                )
+
+            if np.isinf(best_cost):
+                best_q = np.copy(q_n)
+                best_cost = cost
+                stalled_iterations = 0
+            else:
+                improvement = best_cost - cost
+                significant_improvement = self.sqp_abs_cost_tolerance + self.sqp_rel_cost_tolerance * abs(best_cost)
+                if improvement > 0:
+                    best_q = np.copy(q_n)
+                    best_cost = cost
+                if improvement > significant_improvement:
+                    stalled_iterations = 0
+                else:
+                    stalled_iterations += 1
+
+            completed_iterations = iteration_idx + 1
+            if completed_iterations >= min_iterations and stalled_iterations >= self.sqp_convergence_patience:
+                stop_reason = "cost_stalled"
                 break
-            last_cost = cost
-        return q_n, cost
+
+        self.last_sqp_iteration_count = completed_iterations
+        self.last_sqp_stop_reason = stop_reason
+        return best_q, best_cost
 
     def _draw_self_collision_geoms(self):
         """Draw collision cylinders for self-collision geom pairs in viser."""
@@ -1552,6 +1943,20 @@ class InteractionMeshRetargeter:
                 #     self._geom_names[g1], self._geom_names[g2], fromto=fromto)
 
         return Js, phis
+
+    def _collision_pair_involves_dynamic_object(
+        self,
+        geom1_id: int,
+        geom2_id: int,
+    ) -> bool:
+        """Return whether a collision pair contains the task's dynamic object."""
+
+        if self.object_name in {"", "ground"}:
+            return False
+        return (
+            self.object_name in self._geom_names[geom1_id]
+            or self.object_name in self._geom_names[geom2_id]
+        )
 
     def _environment_collision_pair_is_active(self, geom1_name: str, geom2_name: str) -> bool:
         """Select ground pairs and, when enabled, object pairs for hard constraints."""
