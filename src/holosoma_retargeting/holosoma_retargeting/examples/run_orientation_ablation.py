@@ -91,6 +91,7 @@ PROFILE_WEIGHTS: dict[str, dict[str, float]] = {
         "LeftHand": 1.0,
         "RightHand": 1.0,
     },
+    "full_equal": dict.fromkeys(ORIENTATION_JOINTS, 1.0),
 }
 
 

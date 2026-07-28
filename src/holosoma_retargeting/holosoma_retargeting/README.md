@@ -405,6 +405,10 @@ The `shoulders_feet` ablation profile assigns the same requested weight to
 shoulder-yaw bodies and the two ankle-roll bodies; all other orientation
 weights remain zero.
 
+The `full_equal` profile tracks all 13 configured links with exactly the same
+requested weight. This differs from `full`, which retains nonuniform relative
+coefficients for the legs, feet, forearms, and hands.
+
 Run the reproducible `breaking+hippop` baseline, grouped-link, and full-link
 ablations with the `gmr_legs` profile mirroring the hip, knee, and foot chains
 whose rotation costs are enabled by GMR's primary E1 task. The `shoulders`
