@@ -24,7 +24,11 @@ from holosoma_retargeting.augmentation_viser_player import (  # noqa: E402
 )
 from holosoma_retargeting.examples.ablation_viser_player import (  # noqa: E402
     AblationViserConfig,
+    interpolate_orientation_quaternions,
     load_comparison_results,
+    load_orientation_diagnostics,
+    orientation_axis_segments,
+    orientation_joint_indices,
 )
 from holosoma_retargeting.examples.parallel_robot_retarget import (  # noqa: E402
     generate_augmentation_configs,
@@ -204,6 +208,97 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertFalse(results[0].contains_object_in_qpos)
         self.assertEqual(results[0].qpos.shape, (3, 36))
+
+    def test_legacy_result_has_no_orientation_overlay(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "legacy.npz"
+            self._write_result(path)
+
+            diagnostics = load_orientation_diagnostics(
+                path,
+                expected_frames=3,
+            )
+
+        self.assertIsNone(diagnostics)
+
+    def test_loads_and_subsets_orientation_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "orientation.npz"
+            quaternions = np.zeros((3, 2, 4), dtype=np.float32)
+            quaternions[..., 0] = 2.0
+            np.savez(
+                path,
+                orientation_human_joint_names=np.asarray(
+                    ["LeftArm", "RightArm"]
+                ),
+                orientation_robot_link_names=np.asarray(
+                    [
+                        "l_arm_shoulder_yaw_link",
+                        "r_arm_shoulder_yaw_link",
+                    ]
+                ),
+                orientation_weights=np.asarray([0.025, 0.0]),
+                orientation_target_quaternions_wxyz=quaternions,
+                orientation_robot_quaternions_wxyz=quaternions,
+                orientation_errors_rad=np.zeros((3, 2)),
+            )
+
+            diagnostics = load_orientation_diagnostics(
+                path,
+                expected_frames=3,
+            )
+
+        self.assertIsNotNone(diagnostics)
+        assert diagnostics is not None
+        np.testing.assert_allclose(
+            diagnostics.target_quaternions_wxyz[..., 0],
+            1.0,
+        )
+        np.testing.assert_array_equal(
+            orientation_joint_indices(diagnostics, ("RightArm",)),
+            [1],
+        )
+        with self.assertRaisesRegex(ValueError, "Unknown orientation joints"):
+            orientation_joint_indices(diagnostics, ("LeftFoot",))
+
+    def test_orientation_axes_follow_wxyz_frames(self):
+        origins = np.asarray([[1.0, 2.0, 3.0]])
+        identity = np.asarray([[1.0, 0.0, 0.0, 0.0]])
+        identity_segments = orientation_axis_segments(
+            origins,
+            identity,
+            0.5,
+        )
+        np.testing.assert_allclose(
+            identity_segments[:, 0],
+            np.repeat(origins, 3, axis=0),
+        )
+        np.testing.assert_allclose(
+            identity_segments[:, 1],
+            [
+                [1.5, 2.0, 3.0],
+                [1.0, 2.5, 3.0],
+                [1.0, 2.0, 3.5],
+            ],
+        )
+
+        half_turn_z = np.asarray(
+            [[[1.0, 0.0, 0.0, 0.0]], [[0.0, 0.0, 0.0, 1.0]]]
+        )
+        middle = interpolate_orientation_quaternions(
+            half_turn_z,
+            0.5,
+        )
+        middle_segments = orientation_axis_segments(
+            np.zeros((1, 3)),
+            middle,
+            1.0,
+        )
+        np.testing.assert_allclose(
+            middle_segments[0, 1],
+            [0.0, 1.0, 0.0],
+            atol=1e-6,
+        )
 
 
 if __name__ == "__main__":

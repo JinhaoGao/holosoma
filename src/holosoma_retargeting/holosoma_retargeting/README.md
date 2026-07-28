@@ -390,16 +390,18 @@ position-only path unchanged.
 
 Run the reproducible `breaking+hippop` baseline, grouped-link, and full-link
 ablations with the `gmr_legs` profile mirroring the hip, knee, and foot chains
-whose rotation costs are enabled by GMR's primary E1 task. GMR's numerical
-weights and fixed quaternions are not copied because the MJCF frames,
-coordinate conversion, and objective scales differ:
+whose rotation costs are enabled by GMR's primary E1 task. The `shoulders`
+profile only weights `LeftArm/RightArm → l/r_arm_shoulder_yaw_link`; all other
+diagnostic links remain at exactly zero weight. GMR's numerical weights and
+fixed quaternions are not copied because the MJCF frames, coordinate conversion,
+and objective scales differ:
 
 ```bash
 python examples/run_orientation_ablation.py \
   --data-path demo_data/noetix_mocap/0724_BEITI \
   --task-name 'breaking+hippop.bvh_Skeleton1' \
   --output-root demo_results_orientation/e1/robot_only/0724_BEITI/breaking+hippop \
-  --variants baseline root feet gmr_legs upper full \
+  --variants baseline root feet gmr_legs shoulders upper full \
   --weight-scales 0.25 0.5 1.0 \
   --overwrite
 ```
@@ -416,6 +418,24 @@ python examples/raw_human_motion_viewer.py \
   --motion-path demo_data/noetix_mocap/0724_BEITI/breaking+hippop.bvh_Skeleton1.npz \
   --show-joint-orientations
 ```
+
+Compare target and actual shoulder frames on a shared timeline with:
+
+```bash
+python examples/ablation_viser_player.py \
+  --qpos-npzs \
+    demo_results_orientation/e1/robot_only/0724_BEITI/breaking+hippop/baseline/breaking+hippop.bvh_Skeleton1.npz \
+    demo_results_orientation/e1/robot_only/0724_BEITI/breaking+hippop/shoulders_x0.025/breaking+hippop.bvh_Skeleton1.npz \
+  --labels baseline shoulders_x0.025 \
+  --x-offset 0.7 \
+  --orientation-joints LeftArm RightArm \
+  --show-orientation-error-labels
+```
+
+Pale RGB axes are calibrated target frames and saturated RGB axes are actual
+robot-link frames; red, green, and blue are local X, Y, and Z. Use
+`--variants baseline shoulders --weight-scales 0.01 0.025 0.05` to tune only
+the shoulder orientation objective.
 
 ### GVHMR
 

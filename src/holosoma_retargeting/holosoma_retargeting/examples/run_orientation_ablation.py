@@ -56,6 +56,10 @@ PROFILE_WEIGHTS: dict[str, dict[str, float]] = {
         "LeftFoot": 1.0,
         "RightFoot": 1.0,
     },
+    "shoulders": {
+        "LeftArm": 1.0,
+        "RightArm": 1.0,
+    },
     "upper": {
         "LeftArm": 1.0,
         "RightArm": 1.0,
@@ -104,6 +108,7 @@ class Config:
         "root",
         "feet",
         "gmr_legs",
+        "shoulders",
         "upper",
         "full",
     )

@@ -316,14 +316,14 @@ python data_utils/convert_noetix_bvh.py \
 
 朝向跟踪是独立于位置 Interaction Mesh 的软目标。它参考 GMR 的全局刚体 FrameTask 思路，为人体关节和机器人 link 建立固定帧对齐，但仍保留本项目原有的 SQP、碰撞和接触约束。每一帧使用 SO(3) 测地误差 `Log(R_target R_robot^T)`，并通过 MuJoCo 世界角速度雅可比线性化。默认 `orientation_weights={}`，因此旧配置和位置-only 求解路径保持不变；`first_frame` 对齐会在序列第一帧计算固定的人体关节到机器人 link 局部帧偏置。
 
-可复现实验入口固定使用 `breaking+hippop.bvh_Skeleton1`，并生成 baseline、root、feet、gmr_legs、upper 和 full 六组结果、每次运行的 manifest 以及统一 `summary.json`。其中 `gmr_legs` 对应 GMR E1 主任务实际启用旋转代价的髋、膝和足链；本项目不会直接照搬 GMR 的数值权重和固定四元数，因为两套 E1 MJCF、坐标变换和目标函数标度不同：
+可复现实验入口固定使用 `breaking+hippop.bvh_Skeleton1`，并生成 baseline、root、feet、gmr_legs、shoulders、upper 和 full 七组结果、每次运行的 manifest 以及统一 `summary.json`。其中 `gmr_legs` 对应 GMR E1 主任务实际启用旋转代价的髋、膝和足链，`shoulders` 只对 `LeftArm/RightArm → l/r_arm_shoulder_yaw_link` 加入朝向代价，其他十一个诊断 link 的权重严格为零；本项目不会直接照搬 GMR 的数值权重和固定四元数，因为两套 E1 MJCF、坐标变换和目标函数标度不同：
 
 ```bash
 python examples/run_orientation_ablation.py \
   --data-path demo_data/noetix_mocap/0724_BEITI \
   --task-name 'breaking+hippop.bvh_Skeleton1' \
   --output-root demo_results_orientation/e1/robot_only/0724_BEITI/breaking+hippop \
-  --variants baseline root feet gmr_legs upper full \
+  --variants baseline root feet gmr_legs shoulders upper full \
   --weight-scales 0.25 0.5 1.0 \
   --overwrite
 ```
@@ -346,8 +346,12 @@ python examples/ablation_viser_player.py \
     demo_results_orientation/e1/robot_only/0724_BEITI/breaking+hippop/baseline/breaking+hippop.bvh_Skeleton1.npz \
     demo_results_orientation/e1/robot_only/0724_BEITI/breaking+hippop/full/breaking+hippop.bvh_Skeleton1.npz \
   --labels baseline full \
-  --x-offset 0
+  --x-offset 0.7 \
+  --orientation-joints LeftArm RightArm \
+  --show-orientation-error-labels
 ```
+
+播放器中的浅色 RGB 坐标轴是标定后的目标 link frame，深色 RGB 坐标轴是机器人实际 link frame，红、绿、蓝分别表示局部 X、Y、Z 轴；两套轴越重合，朝向跟踪越准确。界面中的 `Target axes`、`Robot axes` 和 `SO(3) error labels` 可随时开关。要只加强肩膀，可运行 `--variants baseline shoulders --weight-scales 0.01 0.025 0.05` 搜索权重，再用上面的 `--orientation-joints LeftArm RightArm` 对照显示候选结果。
 
 ### GVHMR
 

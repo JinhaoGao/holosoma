@@ -29,6 +29,7 @@ class OrientationAblationTests(unittest.TestCase):
         baseline = orientation_weights_for_variant("baseline", 1.0)
         feet = orientation_weights_for_variant("feet", 0.5)
         gmr_legs = orientation_weights_for_variant("gmr_legs", 1.0)
+        shoulders = orientation_weights_for_variant("shoulders", 0.025)
         full = orientation_weights_for_variant("full", 1.0)
 
         self.assertEqual(tuple(baseline), ORIENTATION_JOINTS)
@@ -41,6 +42,15 @@ class OrientationAblationTests(unittest.TestCase):
         self.assertEqual(gmr_legs["LeftFoot"], 1.0)
         self.assertEqual(gmr_legs["Hips"], 0.0)
         self.assertEqual(gmr_legs["LeftArm"], 0.0)
+        self.assertEqual(shoulders["LeftArm"], 0.025)
+        self.assertEqual(shoulders["RightArm"], 0.025)
+        self.assertTrue(
+            all(
+                weight == 0.0
+                for name, weight in shoulders.items()
+                if name not in {"LeftArm", "RightArm"}
+            )
+        )
         self.assertTrue(all(full[name] > 0.0 for name in ORIENTATION_JOINTS))
 
     def test_baseline_is_not_duplicated_across_weight_scales(self):
