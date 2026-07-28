@@ -335,10 +335,10 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
         self.assertFalse(robot_skeleton.enabled)
         self.assertFalse(orientation_overlay.enabled)
 
-    def test_robot_groups_use_classic_red_green_blue_order(self):
-        self.assertEqual(comparison_color(0), (220, 53, 69))
-        self.assertEqual(comparison_color(1), (25, 135, 84))
-        self.assertEqual(comparison_color(2), (13, 110, 253))
+    def test_robot_groups_use_colorblind_safe_palette_order(self):
+        self.assertEqual(comparison_color(0), (0, 114, 178))
+        self.assertEqual(comparison_color(1), (213, 94, 0))
+        self.assertEqual(comparison_color(2), (0, 158, 115))
 
     def test_loads_and_interpolates_complete_noetix_human_skeleton(self):
         joint_names = (
@@ -384,6 +384,7 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
         self.assertEqual(skeleton.full_points.shape, (2, 22, 3))
         self.assertIn((0, 1), skeleton.edges)
         self.assertIn((0, 2), skeleton.edges)
+        self.assertNotIn((1, 2), skeleton.edges)
         np.testing.assert_allclose(
             interpolate_human_points(skeleton.points, 0.5)[:, 0],
             1.0,

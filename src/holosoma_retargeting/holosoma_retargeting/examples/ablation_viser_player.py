@@ -64,20 +64,20 @@ class AblationViserConfig:
     x_offset: float = 0.6
     """Spacing between the human reference and robot result groups."""
 
-    robot_mesh_opacity: float = 0.35
+    robot_mesh_opacity: float = 0.22
     """Opacity of the color-coded robot meshes."""
 
-    object_mesh_opacity: float = 0.45
+    object_mesh_opacity: float = 0.30
     """Opacity of object meshes when object poses are present."""
 
     show_human_skeleton: bool = True
     """Show one shared source-human reference made from mapped keypoints."""
 
-    human_skeleton_line_width: float = 5.0
-    """Line width of the original human skeleton."""
+    human_skeleton_line_width: float = 2.0
+    """Pixel width shared by the clean human and robot skeletons."""
 
-    human_joint_point_size: float = 0.025
-    """Point size of the original human skeleton joints."""
+    human_joint_point_size: float = 0.010
+    """World-space size shared by human and robot keypoints."""
 
     grid_width: float = 8.0
     """Viewer grid width."""
@@ -97,16 +97,16 @@ class AblationViserConfig:
     show_orientation_error_labels: bool = False
     """Show each selected joint's SO(3) geodesic error in degrees."""
 
-    orientation_axis_length: float = 0.10
+    orientation_axis_length: float = 0.065
     """Length of each orientation axis in scene units."""
 
-    orientation_axis_shaft_radius: float = 0.006
+    orientation_axis_shaft_radius: float = 0.0025
     """Radius of each solid orientation arrow shaft."""
 
-    orientation_axis_head_radius: float = 0.013
+    orientation_axis_head_radius: float = 0.0055
     """Radius of each solid orientation arrow head."""
 
-    orientation_axis_head_length: float = 0.024
+    orientation_axis_head_length: float = 0.011
     """Length of each solid orientation arrow head."""
 
 
@@ -293,19 +293,19 @@ _AXIS_COLORS = np.asarray(
     dtype=np.uint8,
 )
 _TARGET_AXIS_LENGTH_SCALE = 0.78
-_HUMAN_SKELETON_COLOR = np.asarray((0, 0, 0), dtype=np.uint8)
+_HUMAN_SKELETON_COLOR = np.asarray((35, 38, 42), dtype=np.uint8)
 _CLASSIC_GROUP_COLORS = (
-    (220, 53, 69),
-    (25, 135, 84),
-    (13, 110, 253),
-    (255, 193, 7),
-    (111, 66, 193),
-    (13, 202, 240),
+    (0, 114, 178),
+    (213, 94, 0),
+    (0, 158, 115),
+    (204, 121, 167),
+    (230, 159, 0),
+    (86, 180, 233),
 )
 
 
 def comparison_color(index: int) -> tuple[int, int, int]:
-    """Return stable classic colors in red, green, blue order."""
+    """Return stable colorblind-safe group colors."""
 
     return _CLASSIC_GROUP_COLORS[index % len(_CLASSIC_GROUP_COLORS)]
 
@@ -314,8 +314,31 @@ def darker_color(color: tuple[int, int, int]) -> np.ndarray:
     """Produce a darker opaque color for keypoints and skeleton segments."""
 
     return np.asarray(
-        tuple(max(0, round(channel * 0.55)) for channel in color),
+        tuple(max(0, round(channel * 0.72)) for channel in color),
         dtype=np.uint8,
+    )
+
+
+def pale_mesh_color(color: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Produce a pale low-saturation tint that does not obscure the skeleton."""
+
+    return tuple(round(0.25 * channel + 0.75 * 235) for channel in color)
+
+
+def visualization_skeleton_edges(
+    joint_names: tuple[str, ...],
+) -> tuple[tuple[int, int], ...]:
+    """Remove redundant crossbars from the mapped solver-keypoint graph."""
+
+    edges = _mapped_skeleton_edges(list(joint_names))
+    redundant_pairs = {
+        frozenset(("LeftArm", "RightArm")),
+        frozenset(("LeftUpLeg", "RightUpLeg")),
+        frozenset(("L_Shoulder", "R_Shoulder")),
+        frozenset(("L_Hip", "R_Hip")),
+    }
+    return tuple(
+        edge for edge in edges if frozenset((joint_names[edge[0]], joint_names[edge[1]])) not in redundant_pairs
     )
 
 
@@ -357,7 +380,7 @@ def load_human_skeleton(
     return HumanSkeletonTrajectory(
         joint_names=joint_names,
         points=points,
-        edges=tuple(_mapped_skeleton_edges(list(joint_names))),
+        edges=visualization_skeleton_edges(joint_names),
         full_joint_names=full_joint_names,
         full_points=full_points,
     )
@@ -459,7 +482,7 @@ def _make_robot_skeleton_overlay(
     offset: np.ndarray,
     config: AblationViserConfig,
 ) -> RobotSkeletonOverlay:
-    edges = tuple(_mapped_skeleton_edges(list(result.mapped_joint_names)))
+    edges = visualization_skeleton_edges(result.mapped_joint_names)
     points = result.robot_points[0] + offset
     skeleton_color = darker_color(color)
     joints_handle = server.scene.add_point_cloud(
@@ -908,7 +931,10 @@ def make_ablation_player(
             server,
             urdf_or_path=robot_urdf_model,
             root_node_name=f"{namespace}/robot",
-            mesh_color_override=_rgba(color, config.robot_mesh_opacity),
+            mesh_color_override=_rgba(
+                pale_mesh_color(color),
+                config.robot_mesh_opacity,
+            ),
         )
 
         object_root = None
@@ -1070,7 +1096,7 @@ def make_ablation_player(
             print(f"    orientation arrows: joints={selected_names}, robot=opaque RGB arrows")
         else:
             print("    orientation arrows: unavailable in this legacy result")
-    print("  human reference: black mapped-keypoint skeleton + target RGB link axes")
+    print("  human reference: charcoal mapped-keypoint skeleton + target RGB link axes")
     print("Open the viewer URL printed above. Close the process (Ctrl+C) to exit.")
     return server
 

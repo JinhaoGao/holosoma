@@ -433,12 +433,14 @@ python examples/ablation_viser_player.py \
 ```
 
 The player uses one shared human-reference layer plus one layer per robot
-result. The black human skeleton contains only mapped keypoints used by the
+result. The charcoal human skeleton contains only mapped keypoints used by the
 retargeting position objective, with calibrated target frames located on the
-human joints. Each robot layer combines a translucent mesh, darker same-color
-mapped skeleton, and actual link frames under one visibility control. Robot
-layers use classic red, green, and blue colors in input order, while
-`--x-offset` separates all layers. RGB arrows are local X, Y, and Z. Use
+human joints. Each robot layer combines a pale low-opacity mesh, darker
+same-hue mapped skeleton, and actual link frames under one visibility control.
+Robot layers use a colorblind-safe blue, vermilion, and bluish-green palette
+in input order. Redundant shoulder and hip crossbars are omitted from the
+display topology, while `--x-offset` separates all layers. RGB arrows are
+local X, Y, and Z. Use
 `--variants baseline shoulders --weight-scales 0.01 0.025 0.05` to tune only
 the shoulder orientation objective.
 
