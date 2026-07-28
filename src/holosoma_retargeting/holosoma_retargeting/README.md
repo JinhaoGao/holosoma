@@ -400,6 +400,11 @@ frame rotations.
 The legacy `first_frame` mode remains available only for reproducibility,
 because an arbitrary first motion frame is not a valid calibration pose.
 
+The `shoulders_feet` ablation profile assigns the same requested weight to
+`LeftArm`, `RightArm`, `LeftFoot`, and `RightFoot`. On E1 these target the two
+shoulder-yaw bodies and the two ankle-roll bodies; all other orientation
+weights remain zero.
+
 Run the reproducible `breaking+hippop` baseline, grouped-link, and full-link
 ablations with the `gmr_legs` profile mirroring the hip, knee, and foot chains
 whose rotation costs are enabled by GMR's primary E1 task. The `shoulders`

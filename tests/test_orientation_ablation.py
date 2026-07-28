@@ -30,6 +30,7 @@ class OrientationAblationTests(unittest.TestCase):
         feet = orientation_weights_for_variant("feet", 0.5)
         gmr_legs = orientation_weights_for_variant("gmr_legs", 1.0)
         shoulders = orientation_weights_for_variant("shoulders", 0.025)
+        shoulders_feet = orientation_weights_for_variant("shoulders_feet", 10.0)
         full = orientation_weights_for_variant("full", 1.0)
 
         self.assertEqual(tuple(baseline), ORIENTATION_JOINTS)
@@ -44,11 +45,14 @@ class OrientationAblationTests(unittest.TestCase):
         self.assertEqual(gmr_legs["LeftArm"], 0.0)
         self.assertEqual(shoulders["LeftArm"], 0.025)
         self.assertEqual(shoulders["RightArm"], 0.025)
+        self.assertTrue(all(weight == 0.0 for name, weight in shoulders.items() if name not in {"LeftArm", "RightArm"}))
+        for name in ("LeftArm", "RightArm", "LeftFoot", "RightFoot"):
+            self.assertEqual(shoulders_feet[name], 10.0)
         self.assertTrue(
             all(
                 weight == 0.0
-                for name, weight in shoulders.items()
-                if name not in {"LeftArm", "RightArm"}
+                for name, weight in shoulders_feet.items()
+                if name not in {"LeftArm", "RightArm", "LeftFoot", "RightFoot"}
             )
         )
         self.assertTrue(all(full[name] > 0.0 for name in ORIENTATION_JOINTS))
@@ -119,9 +123,7 @@ class OrientationAblationTests(unittest.TestCase):
                 self.assertEqual(manifest["status"], "planned")
                 self.assertEqual(manifest["variant"], variant)
                 self.assertEqual(len(manifest["orientation_weights"]), 13)
-            summary = json.loads(
-                (output_root / "summary.json").read_text(encoding="utf-8")
-            )
+            summary = json.loads((output_root / "summary.json").read_text(encoding="utf-8"))
             self.assertEqual(set(summary["runs"]), {"baseline", "full"})
             self.assertEqual(summary["comparisons_to_baseline"], {})
             self.assertEqual(summary["failures"], [])

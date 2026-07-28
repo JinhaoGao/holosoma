@@ -62,6 +62,12 @@ PROFILE_WEIGHTS: dict[str, dict[str, float]] = {
         "LeftArm": 1.0,
         "RightArm": 1.0,
     },
+    "shoulders_feet": {
+        "LeftArm": 1.0,
+        "RightArm": 1.0,
+        "LeftFoot": 1.0,
+        "RightFoot": 1.0,
+    },
     "upper": {
         "LeftArm": 1.0,
         "RightArm": 1.0,
