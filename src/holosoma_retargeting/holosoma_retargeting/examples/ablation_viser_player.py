@@ -731,7 +731,7 @@ def make_ablation_player(
             )
             orientation_overlay = _make_orientation_overlay(
                 server=server,
-                namespace=namespace,
+                namespace=f"/orientation_overlays/{index:02d}_{label}",
                 diagnostics=diagnostics,
                 joint_indices=joint_indices,
                 model=robot_fk_model,
