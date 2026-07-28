@@ -391,6 +391,44 @@ ORIENTATION_JOINTS_MAPPINGS: dict[tuple[str, str], dict[str, str]] = {
     },
 }
 
+# BVH joints have identity global frames when every rotation channel is zero.
+# The Noetix converter changes coordinates by basis conjugation, which preserves
+# that identity T-pose frame.  Keeping this reference table separate from the
+# motion itself prevents the first animation frame from being mistaken for a
+# calibration pose.
+ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ: dict[
+    tuple[str, str],
+    dict[str, tuple[float, float, float, float]],
+] = {
+    ("noetix_mocap", "e1"): dict.fromkeys(
+        ORIENTATION_JOINTS_MAPPINGS[("noetix_mocap", "e1")],
+        (1.0, 0.0, 0.0, 0.0),
+    ),
+}
+
+ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ: dict[
+    tuple[str, str],
+    tuple[float, float, float, float],
+] = {
+    # Canonical Noetix T-pose faces +Y; E1 qpos0 faces +X.
+    ("noetix_mocap", "e1"): (
+        0.7071067811865476,
+        0.0,
+        0.0,
+        0.7071067811865475,
+    ),
+}
+
+ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS: dict[
+    tuple[str, str],
+    dict[str, float],
+] = {
+    ("noetix_mocap", "e1"): {
+        "l_arm_shoulder_roll_joint": 1.5707963267948966,
+        "r_arm_shoulder_roll_joint": -1.5707963267948966,
+    },
+}
+
 # Noetix is a separate company-collected dataset and has its own loader and
 # converter. Its normalized skeleton reuses only the LAFAN joint-name topology
 # and robot mapping. AMASS and GVHMR both use the first 22 SMPL-X body joints.
@@ -457,6 +495,15 @@ class MotionDataConfig:
     demo_joints: list[str] | None = None
     joints_mapping: dict[str, str] | None = None
     orientation_joints_mapping: dict[str, str] | None = None
+    orientation_t_pose_human_quaternions_wxyz: (
+        dict[
+            str,
+            tuple[float, float, float, float],
+        ]
+        | None
+    ) = None
+    orientation_t_pose_robot_base_quaternion_wxyz: tuple[float, float, float, float] | None = None
+    orientation_t_pose_robot_joint_positions: dict[str, float] | None = None
 
     @property
     def resolved_demo_joints(self) -> list[str]:
@@ -489,6 +536,42 @@ class MotionDataConfig:
         )
 
     @property
+    def resolved_orientation_t_pose_human_quaternions_wxyz(
+        self,
+    ) -> dict[str, tuple[float, float, float, float]]:
+        """Get source-human global joint frames in the canonical T-pose."""
+
+        if self.orientation_t_pose_human_quaternions_wxyz is not None:
+            return self.orientation_t_pose_human_quaternions_wxyz
+        return ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ.get(
+            (self.data_format, self.robot_type),
+            {},
+        )
+
+    @property
+    def resolved_orientation_t_pose_robot_base_quaternion_wxyz(
+        self,
+    ) -> tuple[float, float, float, float] | None:
+        """Get the robot root orientation sharing the human T-pose facing."""
+
+        if self.orientation_t_pose_robot_base_quaternion_wxyz is not None:
+            return self.orientation_t_pose_robot_base_quaternion_wxyz
+        return ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ.get((self.data_format, self.robot_type))
+
+    @property
+    def resolved_orientation_t_pose_robot_joint_positions(
+        self,
+    ) -> dict[str, float]:
+        """Get robot joint positions forming the geometric T-pose."""
+
+        if self.orientation_t_pose_robot_joint_positions is not None:
+            return self.orientation_t_pose_robot_joint_positions
+        return ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS.get(
+            (self.data_format, self.robot_type),
+            {},
+        )
+
+    @property
     def toe_names(self) -> list[str]:
         """Get toe joint names for this data format."""
         if self.data_format not in TOE_NAMES_BY_FORMAT:
@@ -504,5 +587,10 @@ class MotionDataConfig:
             "DEMO_JOINTS": self.resolved_demo_joints,
             "JOINTS_MAPPING": self.resolved_joints_mapping,
             "ORIENTATION_JOINTS_MAPPING": self.resolved_orientation_joints_mapping,
+            "ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ": (self.resolved_orientation_t_pose_human_quaternions_wxyz),
+            "ORIENTATION_T_POSE_ROBOT_BASE_QUATERNION_WXYZ": (
+                self.resolved_orientation_t_pose_robot_base_quaternion_wxyz
+            ),
+            "ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS": (self.resolved_orientation_t_pose_robot_joint_positions),
             "TOE_NAMES": self.toe_names,
         }

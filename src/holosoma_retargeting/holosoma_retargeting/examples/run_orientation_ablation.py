@@ -90,20 +90,10 @@ PROFILE_WEIGHTS: dict[str, dict[str, float]] = {
 
 @dataclass
 class Config:
-    data_path: Path = (
-        PACKAGE_ROOT
-        / "demo_data"
-        / "noetix_mocap"
-        / "0724_BEITI"
-    )
+    data_path: Path = PACKAGE_ROOT / "demo_data" / "noetix_mocap" / "0724_BEITI"
     task_name: str = DEFAULT_TASK_NAME
     output_root: Path = (
-        PACKAGE_ROOT
-        / "demo_results_orientation"
-        / "e1"
-        / "robot_only"
-        / "0724_BEITI"
-        / DEFAULT_TASK_NAME
+        PACKAGE_ROOT / "demo_results_orientation" / "e1" / "robot_only" / "0724_BEITI" / DEFAULT_TASK_NAME
     )
     variants: tuple[str, ...] = (
         "baseline",
@@ -129,17 +119,11 @@ def orientation_weights_for_variant(
     """Expand one relative profile into all 13 diagnostic-link weights."""
 
     if variant not in PROFILE_WEIGHTS:
-        raise ValueError(
-            f"Unknown orientation ablation variant {variant!r}; "
-            f"available: {sorted(PROFILE_WEIGHTS)}"
-        )
+        raise ValueError(f"Unknown orientation ablation variant {variant!r}; available: {sorted(PROFILE_WEIGHTS)}")
     if not np.isfinite(weight_scale) or weight_scale < 0.0:
         raise ValueError("weight_scale must be finite and non-negative")
     active = PROFILE_WEIGHTS[variant]
-    return {
-        joint_name: float(active.get(joint_name, 0.0) * weight_scale)
-        for joint_name in ORIENTATION_JOINTS
-    }
+    return {joint_name: float(active.get(joint_name, 0.0) * weight_scale) for joint_name in ORIENTATION_JOINTS}
 
 
 def ablation_run_specs(
@@ -152,11 +136,7 @@ def ablation_run_specs(
     for variant in variants:
         scales = (1.0,) if variant == "baseline" else weight_scales
         for weight_scale in scales:
-            run_name = (
-                variant
-                if weight_scale == 1.0
-                else f"{variant}_x{weight_scale:g}"
-            )
+            run_name = variant if weight_scale == 1.0 else f"{variant}_x{weight_scale:g}"
             if run_name in seen_names:
                 raise ValueError(f"Duplicate ablation run name: {run_name}")
             orientation_weights_for_variant(variant, weight_scale)
@@ -211,23 +191,13 @@ def _prepare_input(cfg: Config) -> tuple[Path, Path]:
     with np.load(source_path, allow_pickle=False) as data:
         source_frames = int(data["global_joint_positions"].shape[0])
         start = int(cfg.frame_start)
-        end = (
-            source_frames
-            if cfg.frame_count is None
-            else start + int(cfg.frame_count)
-        )
+        end = source_frames if cfg.frame_count is None else start + int(cfg.frame_count)
         if start < 0 or start >= source_frames or end <= start or end > source_frames:
-            raise ValueError(
-                f"Invalid frame interval [{start}, {end}) for {source_frames} frames"
-            )
+            raise ValueError(f"Invalid frame interval [{start}, {end}) for {source_frames} frames")
         payload: dict[str, np.ndarray] = {}
         for key in data.files:
             value = np.asarray(data[key])
-            payload[key] = (
-                value[start:end]
-                if value.ndim > 0 and value.shape[0] == source_frames
-                else value
-            )
+            payload[key] = value[start:end] if value.ndim > 0 and value.shape[0] == source_frames else value
     np.savez_compressed(subset_path, **payload)
     return subset_dir, subset_path
 
@@ -239,34 +209,20 @@ def _result_summary(result_path: Path, elapsed_seconds: float) -> dict[str, Any]
         robot_mapped = np.asarray(data["mapped_robot_joints"])
         position_errors = np.linalg.norm(robot_mapped - human_mapped, axis=-1)
         orientation_errors = np.asarray(data["orientation_errors_rad"])
-        orientation_names = [
-            str(name)
-            for name in np.asarray(
-                data["orientation_human_joint_names"]
-            ).tolist()
-        ]
+        orientation_names = [str(name) for name in np.asarray(data["orientation_human_joint_names"]).tolist()]
         per_link_orientation = {
             name: {
                 "mean_rad": float(np.mean(orientation_errors[:, link_idx])),
-                "median_rad": float(
-                    np.median(orientation_errors[:, link_idx])
-                ),
-                "p95_rad": float(
-                    np.percentile(orientation_errors[:, link_idx], 95)
-                ),
+                "median_rad": float(np.median(orientation_errors[:, link_idx])),
+                "p95_rad": float(np.percentile(orientation_errors[:, link_idx], 95)),
             }
             for link_idx, name in enumerate(orientation_names)
         }
-        mapped_names = [
-            str(name)
-            for name in np.asarray(data["mapped_human_joint_names"]).tolist()
-        ]
+        mapped_names = [str(name) for name in np.asarray(data["mapped_human_joint_names"]).tolist()]
         per_link_position = {
             name: {
                 "mean_m": float(np.mean(position_errors[:, link_idx])),
-                "p95_m": float(
-                    np.percentile(position_errors[:, link_idx], 95)
-                ),
+                "p95_m": float(np.percentile(position_errors[:, link_idx], 95)),
             }
             for link_idx, name in enumerate(mapped_names)
         }
@@ -287,28 +243,16 @@ def _result_summary(result_path: Path, elapsed_seconds: float) -> dict[str, Any]
             "qpos_shape": list(qpos.shape),
             "all_finite": bool(np.isfinite(qpos).all()),
             "elapsed_seconds": float(elapsed_seconds),
-            "orientation_tracking_enabled": bool(
-                np.asarray(data["orientation_tracking_enabled"]).item()
-            ),
-            "orientation_weights": np.asarray(
-                data["orientation_weights"]
+            "orientation_tracking_enabled": bool(np.asarray(data["orientation_tracking_enabled"]).item()),
+            "orientation_alignment_mode": str(np.asarray(data["orientation_alignment_mode"]).item()),
+            "orientation_alignment_quaternions_wxyz": np.asarray(
+                data["orientation_alignment_quaternions_wxyz"]
             ).tolist(),
+            "orientation_weights": np.asarray(data["orientation_weights"]).tolist(),
             "orientation_overall": {
-                "mean_rad": (
-                    float(np.mean(orientation_values))
-                    if orientation_values.size
-                    else None
-                ),
-                "median_rad": (
-                    float(np.median(orientation_values))
-                    if orientation_values.size
-                    else None
-                ),
-                "p95_rad": (
-                    float(np.percentile(orientation_values, 95))
-                    if orientation_values.size
-                    else None
-                ),
+                "mean_rad": (float(np.mean(orientation_values)) if orientation_values.size else None),
+                "median_rad": (float(np.median(orientation_values)) if orientation_values.size else None),
+                "p95_rad": (float(np.percentile(orientation_values, 95)) if orientation_values.size else None),
             },
             "orientation_per_link": per_link_orientation,
             "mapped_position_error": {
@@ -318,25 +262,13 @@ def _result_summary(result_path: Path, elapsed_seconds: float) -> dict[str, Any]
             },
             "mapped_position_error_per_link": per_link_position,
             "actuated_motion_smoothness": {
-                "mean_step_rad": (
-                    float(np.mean(joint_steps))
-                    if joint_steps.size
-                    else 0.0
-                ),
-                "p95_step_rad": (
-                    float(np.percentile(joint_steps, 95))
-                    if joint_steps.size
-                    else 0.0
-                ),
+                "mean_step_rad": (float(np.mean(joint_steps)) if joint_steps.size else 0.0),
+                "p95_step_rad": (float(np.percentile(joint_steps, 95)) if joint_steps.size else 0.0),
                 "mean_second_difference_rad": (
-                    float(np.mean(joint_accelerations))
-                    if joint_accelerations.size
-                    else 0.0
+                    float(np.mean(joint_accelerations)) if joint_accelerations.size else 0.0
                 ),
                 "p95_second_difference_rad": (
-                    float(np.percentile(joint_accelerations, 95))
-                    if joint_accelerations.size
-                    else 0.0
+                    float(np.percentile(joint_accelerations, 95)) if joint_accelerations.size else 0.0
                 ),
             },
             "sqp_iterations": {
@@ -344,12 +276,8 @@ def _result_summary(result_path: Path, elapsed_seconds: float) -> dict[str, Any]
                 "p95": float(np.percentile(sqp_iterations, 95)),
                 "max": int(np.max(sqp_iterations)),
             },
-            "foot_sticking_fallback_frames": int(
-                np.asarray(data["foot_sticking_fallback_frames"]).size
-            ),
-            "foot_sticking_release_frames": int(
-                np.asarray(data["foot_sticking_release_frames"]).size
-            ),
+            "foot_sticking_fallback_frames": int(np.asarray(data["foot_sticking_fallback_frames"]).size),
+            "foot_sticking_release_frames": int(np.asarray(data["foot_sticking_release_frames"]).size),
             "object_non_penetration_release_frames": int(
                 np.asarray(data["object_non_penetration_release_frames"]).size
             ),
@@ -364,32 +292,20 @@ def _comparisons_to_baseline(
         return {}
     baseline_orientation = baseline["orientation_overall"]["mean_rad"]
     baseline_position = baseline["mapped_position_error"]["mean_m"]
-    baseline_smoothness = baseline["actuated_motion_smoothness"][
-        "mean_second_difference_rad"
-    ]
+    baseline_smoothness = baseline["actuated_motion_smoothness"]["mean_second_difference_rad"]
     comparisons: dict[str, dict[str, float]] = {}
     for run_name, summary in summaries.items():
         if run_name == "baseline" or "orientation_overall" not in summary:
             continue
         orientation = summary["orientation_overall"]["mean_rad"]
         position = summary["mapped_position_error"]["mean_m"]
-        smoothness = summary["actuated_motion_smoothness"][
-            "mean_second_difference_rad"
-        ]
+        smoothness = summary["actuated_motion_smoothness"]["mean_second_difference_rad"]
         comparisons[run_name] = {
-            "orientation_mean_delta_rad": float(
-                orientation - baseline_orientation
-            ),
-            "orientation_mean_change_percent": float(
-                100.0 * (orientation / baseline_orientation - 1.0)
-            ),
+            "orientation_mean_delta_rad": float(orientation - baseline_orientation),
+            "orientation_mean_change_percent": float(100.0 * (orientation / baseline_orientation - 1.0)),
             "position_mean_delta_m": float(position - baseline_position),
-            "position_mean_change_percent": float(
-                100.0 * (position / baseline_position - 1.0)
-            ),
-            "joint_second_difference_delta_rad": float(
-                smoothness - baseline_smoothness
-            ),
+            "position_mean_change_percent": float(100.0 * (position / baseline_position - 1.0)),
+            "joint_second_difference_delta_rad": float(smoothness - baseline_smoothness),
         }
     return comparisons
 
@@ -517,9 +433,7 @@ def main(cfg: Config) -> None:
         encoding="utf-8",
     )
     if failures:
-        raise RuntimeError(
-            f"Orientation ablations failed: {failures}; see {summary_path}"
-        )
+        raise RuntimeError(f"Orientation ablations failed: {failures}; see {summary_path}")
 
 
 if __name__ == "__main__":

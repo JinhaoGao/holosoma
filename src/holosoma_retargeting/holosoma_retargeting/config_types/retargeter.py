@@ -149,12 +149,21 @@ class RetargeterConfig:
     """Per-human-joint SO(3) tracking weights. Empty or all-zero disables
     orientation tracking and preserves the position-only solver path."""
 
-    orientation_alignment_mode: Literal["first_frame", "explicit"] = "first_frame"
-    """How fixed human-to-robot link-frame offsets are obtained."""
+    orientation_alignment_mode: Literal[
+        "t_pose",
+        "first_frame",
+        "explicit",
+    ] = "t_pose"
+    """How fixed human-to-robot link-frame offsets are obtained. T-pose
+    calibration is the safe default; first_frame is retained only for legacy
+    reproducibility."""
 
-    orientation_alignment_quaternions_wxyz: dict[
-        str,
-        tuple[float, float, float, float],
-    ] | None = None
+    orientation_alignment_quaternions_wxyz: (
+        dict[
+            str,
+            tuple[float, float, float, float],
+        ]
+        | None
+    ) = None
     """Explicit per-human-joint alignment quaternions used when
     orientation_alignment_mode is 'explicit'."""

@@ -158,9 +158,7 @@ def create_task_constants(
         task_constants.OBJECT_MESH_FILE = None
     elif task_type == "object_interaction":
         if task_config.object_name is None:
-            raise ValueError(
-                "object_interaction constants require a resolved object name"
-            )
+            raise ValueError("object_interaction constants require a resolved object name")
         obj_name = task_config.object_name
         object_asset = get_omomo_object_asset(obj_name)
         task_constants.OBJECT_NAME = obj_name
@@ -250,9 +248,7 @@ def load_motion_data(
     )
     human_joints = motion.joints.copy()
     human_joint_quaternions = (
-        None
-        if motion.global_joint_quaternions_wxyz is None
-        else motion.global_joint_quaternions_wxyz.copy()
+        None if motion.global_joint_quaternions_wxyz is None else motion.global_joint_quaternions_wxyz.copy()
     )
     constants.SOURCE_FPS = motion.fps
     constants.SOURCE_ROOT_QUATERNIONS = motion.root_quaternions_wxyz
@@ -494,9 +490,7 @@ def build_retargeter_kwargs_from_config(
         "release_object_non_penetration_on_infeasible": (
             retargeter_config.release_object_non_penetration_on_infeasible
         ),
-        "retry_without_foot_sticking_on_infeasible": (
-            retargeter_config.retry_without_foot_sticking_on_infeasible
-        ),
+        "retry_without_foot_sticking_on_infeasible": (retargeter_config.retry_without_foot_sticking_on_infeasible),
         "self_collision": retargeter_config.self_collision,
         "step_size": retargeter_config.step_size,
         "sqp_max_iterations": retargeter_config.sqp_max_iterations,
@@ -516,9 +510,10 @@ def build_retargeter_kwargs_from_config(
         "orientation_joints_mapping": constants.ORIENTATION_JOINTS_MAPPING,
         "orientation_weights": retargeter_config.orientation_weights,
         "orientation_alignment_mode": retargeter_config.orientation_alignment_mode,
-        "orientation_alignment_quaternions_wxyz": (
-            retargeter_config.orientation_alignment_quaternions_wxyz
-        ),
+        "orientation_t_pose_human_quaternions_wxyz": (constants.ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ),
+        "orientation_t_pose_robot_base_quaternion_wxyz": (constants.ORIENTATION_T_POSE_ROBOT_BASE_QUATERNION_WXYZ),
+        "orientation_t_pose_robot_joint_positions": (constants.ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS),
+        "orientation_alignment_quaternions_wxyz": (retargeter_config.orientation_alignment_quaternions_wxyz),
     }
     if task_type == "climbing":
         kwargs["nominal_tracking_tau"] = retargeter_config.nominal_tracking_tau
@@ -696,9 +691,7 @@ def main(cfg: RetargetingConfig) -> None:
         object_poses,
         human_joint_quaternions,
         smpl_scale,
-    ) = load_motion_data(
-        task_type, data_format, data_path, task_name, constants, cfg.motion_data_config
-    )
+    ) = load_motion_data(task_type, data_format, data_path, task_name, constants, cfg.motion_data_config)
 
     # Get toe names from motion data config (depends only on data_format)
     toe_names = cfg.motion_data_config.toe_names

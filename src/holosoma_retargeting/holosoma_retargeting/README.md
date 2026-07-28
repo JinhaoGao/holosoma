@@ -388,6 +388,18 @@ the SO(3) geodesic residual `Log(R_target R_robot^T)` through MuJoCo world
 angular Jacobians. The default empty `orientation_weights` keeps the legacy
 position-only path unchanged.
 
+Orientation targets use a T-pose calibration by default. For every mapped
+joint/link pair, `R_align = R_human,T^T R_robot,T` and
+`R_target(t) = R_human(t) R_align`. The canonical Noetix zero-rotation
+skeleton faces world +Y, while E1 qpos0 faces +X, so the E1 reference root is
+rotated +90 degrees about world Z and its shoulder-roll joints are set to
+`+pi/2` on the left and `-pi/2` on the right. This forms a geometric robot
+T-pose instead of the E1 model's arms-down qpos0. MuJoCo FK then derives all 13
+fixed link offsets and automatically captures the E1 elbow/hand links' fixed
+frame rotations.
+The legacy `first_frame` mode remains available only for reproducibility,
+because an arbitrary first motion frame is not a valid calibration pose.
+
 Run the reproducible `breaking+hippop` baseline, grouped-link, and full-link
 ablations with the `gmr_legs` profile mirroring the hip, knee, and foot chains
 whose rotation costs are enabled by GMR's primary E1 task. The `shoulders`

@@ -314,9 +314,9 @@ python data_utils/convert_noetix_bvh.py \
 
 ### Noetix E1 朝向跟踪与消融
 
-朝向跟踪是独立于位置 Interaction Mesh 的软目标。它参考 GMR 的全局刚体 FrameTask 思路，为人体关节和机器人 link 建立固定帧对齐，但仍保留本项目原有的 SQP、碰撞和接触约束。每一帧使用 SO(3) 测地误差 `Log(R_target R_robot^T)`，并通过 MuJoCo 世界角速度雅可比线性化。默认 `orientation_weights={}`，因此旧配置和位置-only 求解路径保持不变；`first_frame` 对齐会在序列第一帧计算固定的人体关节到机器人 link 局部帧偏置。
+朝向跟踪是独立于位置 Interaction Mesh 的软目标。它参考 GMR 的全局刚体 FrameTask 和逐 link 固定旋转偏置，为人体关节和机器人 link 建立 T-pose 帧对齐，同时保留本项目原有的 SQP、碰撞和接触约束。默认的 `t_pose` 模式使用 `R_align = R_human,T^T R_robot,T`，每帧目标为 `R_target(t) = R_human(t) R_align`，再最小化 SO(3) 测地误差 `Log(R_target R_robot^T)`。Noetix 零旋转 T-pose 的人体局部帧为单位阵，但骨架解剖前向是世界 `+Y`；E1 零位模型前向是 `+X` 且双臂自然下垂，所以机器人 T-pose 参考根节点先绕世界 Z 轴旋转 `+90°`，左、右肩 roll 再分别设为 `+π/2` 和 `−π/2`，由此形成真正的几何 T-pose，而不是直接把 E1 的 qpos0 当成 T-pose。随后通过实际 MJCF 正向运动学为全部 13 个 link 推导偏置，肘部和手部还会自动包含 E1 模型固定的 link frame 旋转。`first_frame` 仅为复现旧结果保留，不再作为默认值，因为动作第一帧通常不是 T-pose，会把第一帧姿态错误地烘焙进永久偏置。
 
-可复现实验入口固定使用 `breaking+hippop.bvh_Skeleton1`，并生成 baseline、root、feet、gmr_legs、shoulders、upper 和 full 七组结果、每次运行的 manifest 以及统一 `summary.json`。其中 `gmr_legs` 对应 GMR E1 主任务实际启用旋转代价的髋、膝和足链，`shoulders` 只对 `LeftArm/RightArm → l/r_arm_shoulder_yaw_link` 加入朝向代价，其他十一个诊断 link 的权重严格为零；本项目不会直接照搬 GMR 的数值权重和固定四元数，因为两套 E1 MJCF、坐标变换和目标函数标度不同：
+可复现实验入口固定使用 `breaking+hippop.bvh_Skeleton1`，并生成 baseline、root、feet、gmr_legs、shoulders、upper 和 full 七组结果、每次运行的 manifest 以及统一 `summary.json`。其中 `gmr_legs` 对应 GMR E1 主任务实际启用旋转代价的髋、膝和足链，`shoulders` 只对 `LeftArm/RightArm → l/r_arm_shoulder_yaw_link` 加入朝向代价，其他十一个诊断 link 的权重严格为零。本项目沿用 GMR 的逐 link 偏置设计，但从 Noetix T-pose 和本项目实际 E1 MJCF 自动推导偏置，不照搬另一套模型的四元数或数值权重：
 
 ```bash
 python examples/run_orientation_ablation.py \

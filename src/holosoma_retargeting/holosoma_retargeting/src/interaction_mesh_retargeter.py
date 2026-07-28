@@ -86,7 +86,20 @@ class InteractionMeshRetargeter:
         nominal_tracking_tau: float = 10.0,
         orientation_joints_mapping: dict[str, str] | None = None,
         orientation_weights: dict[str, float] | None = None,
-        orientation_alignment_mode: str = "first_frame",
+        orientation_alignment_mode: str = "t_pose",
+        orientation_t_pose_human_quaternions_wxyz: dict[
+            str,
+            tuple[float, float, float, float],
+        ]
+        | None = None,
+        orientation_t_pose_robot_base_quaternion_wxyz: tuple[
+            float,
+            float,
+            float,
+            float,
+        ]
+        | None = None,
+        orientation_t_pose_robot_joint_positions: dict[str, float] | None = None,
         orientation_alignment_quaternions_wxyz: dict[
             str,
             tuple[float, float, float, float],
@@ -173,12 +186,8 @@ class InteractionMeshRetargeter:
             None if foot_sticking_fallback_tolerance is None else float(foot_sticking_fallback_tolerance)
         )
         self.release_foot_sticking_on_infeasible = bool(release_foot_sticking_on_infeasible)
-        self.release_object_non_penetration_on_infeasible = bool(
-            release_object_non_penetration_on_infeasible
-        )
-        self.retry_without_foot_sticking_on_infeasible = bool(
-            retry_without_foot_sticking_on_infeasible
-        )
+        self.release_object_non_penetration_on_infeasible = bool(release_object_non_penetration_on_infeasible)
+        self.retry_without_foot_sticking_on_infeasible = bool(retry_without_foot_sticking_on_infeasible)
         if self.foot_sticking_tolerance < 0:
             raise ValueError("foot_sticking_tolerance must be non-negative")
         if (
@@ -186,8 +195,7 @@ class InteractionMeshRetargeter:
             and self.foot_sticking_fallback_tolerance < self.foot_sticking_tolerance
         ):
             raise ValueError(
-                "foot_sticking_fallback_tolerance must be greater than or equal to "
-                "foot_sticking_tolerance"
+                "foot_sticking_fallback_tolerance must be greater than or equal to foot_sticking_tolerance"
             )
         self.foot_sticking_fallback_frames: set[int] = set()
         self.foot_sticking_release_frames: set[int] = set()
@@ -291,9 +299,10 @@ class InteractionMeshRetargeter:
             orientation_joints_mapping=orientation_joints_mapping,
             orientation_weights=orientation_weights,
             orientation_alignment_mode=orientation_alignment_mode,
-            orientation_alignment_quaternions_wxyz=(
-                orientation_alignment_quaternions_wxyz
-            ),
+            orientation_t_pose_human_quaternions_wxyz=(orientation_t_pose_human_quaternions_wxyz),
+            orientation_t_pose_robot_base_quaternion_wxyz=(orientation_t_pose_robot_base_quaternion_wxyz),
+            orientation_t_pose_robot_joint_positions=(orientation_t_pose_robot_joint_positions),
+            orientation_alignment_quaternions_wxyz=(orientation_alignment_quaternions_wxyz),
         )
 
     def _init_orientation_tracking(
@@ -302,6 +311,19 @@ class InteractionMeshRetargeter:
         orientation_joints_mapping: dict[str, str] | None,
         orientation_weights: dict[str, float] | None,
         orientation_alignment_mode: str,
+        orientation_t_pose_human_quaternions_wxyz: dict[
+            str,
+            tuple[float, float, float, float],
+        ]
+        | None,
+        orientation_t_pose_robot_base_quaternion_wxyz: tuple[
+            float,
+            float,
+            float,
+            float,
+        ]
+        | None,
+        orientation_t_pose_robot_joint_positions: dict[str, float] | None,
         orientation_alignment_quaternions_wxyz: dict[
             str,
             tuple[float, float, float, float],
@@ -310,44 +332,24 @@ class InteractionMeshRetargeter:
     ) -> None:
         """Validate and cache the independent SO(3) tracking configuration."""
         mapping = dict(orientation_joints_mapping or {})
-        weights = {
-            name: float(weight)
-            for name, weight in (orientation_weights or {}).items()
-        }
+        weights = {name: float(weight) for name, weight in (orientation_weights or {}).items()}
         unknown_weights = sorted(set(weights) - set(mapping))
         if unknown_weights:
-            raise ValueError(
-                "Orientation weights reference joints outside the orientation "
-                f"mapping: {unknown_weights}"
-            )
-        invalid_weights = {
-            name: weight
-            for name, weight in weights.items()
-            if not np.isfinite(weight) or weight < 0.0
-        }
+            raise ValueError(f"Orientation weights reference joints outside the orientation mapping: {unknown_weights}")
+        invalid_weights = {name: weight for name, weight in weights.items() if not np.isfinite(weight) or weight < 0.0}
         if invalid_weights:
-            raise ValueError(
-                "Orientation weights must be finite and non-negative: "
-                f"{invalid_weights}"
-            )
-        if orientation_alignment_mode not in {"first_frame", "explicit"}:
-            raise ValueError(
-                "orientation_alignment_mode must be 'first_frame' or 'explicit'"
-            )
+            raise ValueError(f"Orientation weights must be finite and non-negative: {invalid_weights}")
+        if orientation_alignment_mode not in {
+            "t_pose",
+            "first_frame",
+            "explicit",
+        }:
+            raise ValueError("orientation_alignment_mode must be 't_pose', 'first_frame', or 'explicit'")
 
-        tracked_human_joints = [
-            name
-            for name in mapping
-            if name in weights
-        ]
-        missing_human_joints = [
-            name for name in tracked_human_joints if name not in self.demo_joints
-        ]
+        tracked_human_joints = [name for name in mapping if name in weights]
+        missing_human_joints = [name for name in tracked_human_joints if name not in self.demo_joints]
         if missing_human_joints:
-            raise ValueError(
-                "Orientation mapping references unknown human joints: "
-                f"{missing_human_joints}"
-            )
+            raise ValueError(f"Orientation mapping references unknown human joints: {missing_human_joints}")
         tracked_robot_links = [mapping[name] for name in tracked_human_joints]
         missing_robot_links = [
             link_name
@@ -360,56 +362,104 @@ class InteractionMeshRetargeter:
             < 0
         ]
         if missing_robot_links:
-            raise ValueError(
-                "Orientation mapping references unknown MuJoCo bodies: "
-                f"{missing_robot_links}"
-            )
+            raise ValueError(f"Orientation mapping references unknown MuJoCo bodies: {missing_robot_links}")
 
-        explicit_alignments = dict(
-            orientation_alignment_quaternions_wxyz or {}
-        )
-        if orientation_alignment_mode == "explicit":
-            missing_alignments = [
-                name
-                for name in tracked_human_joints
-                if name not in explicit_alignments
-            ]
-            if missing_alignments:
+        explicit_alignments = dict(orientation_alignment_quaternions_wxyz or {})
+        t_pose_human_quaternions = dict(orientation_t_pose_human_quaternions_wxyz or {})
+        t_pose_robot_joint_positions = {
+            name: float(value) for name, value in (orientation_t_pose_robot_joint_positions or {}).items()
+        }
+        if orientation_alignment_mode == "t_pose" and tracked_human_joints:
+            missing_t_pose_frames = [name for name in tracked_human_joints if name not in t_pose_human_quaternions]
+            if missing_t_pose_frames:
                 raise ValueError(
-                    "Explicit orientation alignment is missing joints: "
-                    f"{missing_alignments}"
+                    f"T-pose orientation alignment is missing source-human frames: {missing_t_pose_frames}"
                 )
+            for name in tracked_human_joints:
+                quaternion = np.asarray(
+                    t_pose_human_quaternions[name],
+                    dtype=np.float64,
+                )
+                if quaternion.shape != (4,) or not np.isfinite(quaternion).all() or np.linalg.norm(quaternion) <= 1e-8:
+                    raise ValueError(f"T-pose source-human quaternion for {name!r} must be finite, non-zero wxyz")
+            robot_base_quaternion = np.asarray(
+                orientation_t_pose_robot_base_quaternion_wxyz,
+                dtype=np.float64,
+            )
+            if (
+                robot_base_quaternion.shape != (4,)
+                or not np.isfinite(robot_base_quaternion).all()
+                or np.linalg.norm(robot_base_quaternion) <= 1e-8
+            ):
+                raise ValueError("T-pose robot base quaternion must be finite, non-zero wxyz")
+            robot_base_quaternion /= np.linalg.norm(robot_base_quaternion)
+
+            scalar_joint_types = {
+                int(mujoco.mjtJoint.mjJNT_SLIDE),
+                int(mujoco.mjtJoint.mjJNT_HINGE),
+            }
+            for joint_name, joint_position in t_pose_robot_joint_positions.items():
+                joint_id = mujoco.mj_name2id(
+                    self.robot_model,
+                    mujoco.mjtObj.mjOBJ_JOINT,
+                    joint_name,
+                )
+                if joint_id < 0:
+                    raise ValueError(f"T-pose robot joint {joint_name!r} does not exist in the MuJoCo model")
+                if int(self.robot_model.jnt_type[joint_id]) not in scalar_joint_types:
+                    raise ValueError(f"T-pose robot joint {joint_name!r} must be a scalar hinge or slide joint")
+                if not np.isfinite(joint_position):
+                    raise ValueError(f"T-pose robot joint position for {joint_name!r} must be finite")
+                if self.robot_model.jnt_limited[joint_id]:
+                    lower, upper = self.robot_model.jnt_range[joint_id]
+                    if joint_position < lower - 1e-9 or joint_position > upper + 1e-9:
+                        raise ValueError(
+                            f"T-pose robot joint position for {joint_name!r}={joint_position} "
+                            f"is outside [{lower}, {upper}]"
+                        )
+        else:
+            robot_base_quaternion = np.empty((0,), dtype=np.float64)
+        if orientation_alignment_mode == "explicit":
+            missing_alignments = [name for name in tracked_human_joints if name not in explicit_alignments]
+            if missing_alignments:
+                raise ValueError(f"Explicit orientation alignment is missing joints: {missing_alignments}")
             for name in tracked_human_joints:
                 quaternion = np.asarray(
                     explicit_alignments[name],
                     dtype=np.float64,
                 )
-                if (
-                    quaternion.shape != (4,)
-                    or not np.isfinite(quaternion).all()
-                    or np.linalg.norm(quaternion) <= 1e-8
-                ):
+                if quaternion.shape != (4,) or not np.isfinite(quaternion).all() or np.linalg.norm(quaternion) <= 1e-8:
                     raise ValueError(
-                        "Explicit orientation alignment quaternion for "
-                        f"{name!r} must be finite, non-zero wxyz"
+                        f"Explicit orientation alignment quaternion for {name!r} must be finite, non-zero wxyz"
                     )
 
         self.orientation_joints_mapping = mapping
         self.orientation_weights_by_human_joint = weights
         self.orientation_alignment_mode = orientation_alignment_mode
+        self.orientation_t_pose_human_quaternions_wxyz = t_pose_human_quaternions
+        self.orientation_t_pose_robot_base_quaternion_wxyz = robot_base_quaternion
+        self.orientation_t_pose_robot_joint_positions = t_pose_robot_joint_positions
         self.orientation_alignment_quaternions_wxyz_config = explicit_alignments
         self.orientation_human_joint_names = tracked_human_joints
         self.orientation_robot_link_names = tracked_robot_links
-        self.orientation_human_joint_indices = [
-            self.demo_joints.index(name) for name in tracked_human_joints
-        ]
+        self.orientation_human_joint_indices = [self.demo_joints.index(name) for name in tracked_human_joints]
         self.orientation_weight_values = np.asarray(
             [weights[name] for name in tracked_human_joints],
             dtype=np.float64,
         )
         self.orientation_diagnostics_enabled = bool(tracked_human_joints)
-        self.orientation_tracking_enabled = bool(
-            np.any(self.orientation_weight_values > 0.0)
+        self.orientation_tracking_enabled = bool(np.any(self.orientation_weight_values > 0.0))
+        self.orientation_reference_human_matrices = np.empty(
+            (0, 3, 3),
+            dtype=np.float64,
+        )
+        self.orientation_reference_robot_matrices = np.empty(
+            (0, 3, 3),
+            dtype=np.float64,
+        )
+        self.orientation_reference_robot_qpos = np.empty(
+            (0,),
+            dtype=np.float64,
         )
 
     def _init_foot_lock(self, foot_lock: FootLockConfig | None) -> None:
@@ -686,13 +736,29 @@ class InteractionMeshRetargeter:
             "object_points_target_world": np.asarray(obj_pts_list, dtype=np.float32),
         }
 
+    def _apply_dynamic_object_poses(
+        self,
+        q_locked_list: np.ndarray,
+        object_poses_augmented: np.ndarray,
+    ) -> None:
+        """Write object free-joint poses only when the model contains one."""
+
+        if not self.has_dynamic_object:
+            return
+        object_poses_array = np.asarray(
+            object_poses_augmented,
+            dtype=np.float64,
+        )
+        expected_shape = (q_locked_list.shape[0], 7)
+        if object_poses_array.shape != expected_shape:
+            raise ValueError(f"Dynamic-object poses must have shape {expected_shape}, got {object_poses_array.shape}")
+        q_locked_list[:, -7:] = object_poses_array
+
     @staticmethod
     def _wxyz_to_matrices(quaternions_wxyz: np.ndarray) -> np.ndarray:
         quaternions = np.asarray(quaternions_wxyz, dtype=np.float64)
         if quaternions.shape[-1] != 4:
-            raise ValueError(
-                f"Expected wxyz quaternions with final dimension 4, got {quaternions.shape}"
-            )
+            raise ValueError(f"Expected wxyz quaternions with final dimension 4, got {quaternions.shape}")
         if quaternions.size == 0:
             return np.empty((*quaternions.shape[:-1], 3, 3), dtype=np.float64)
         norms = np.linalg.norm(quaternions, axis=-1)
@@ -707,9 +773,7 @@ class InteractionMeshRetargeter:
     def _matrices_to_wxyz(matrices: np.ndarray) -> np.ndarray:
         matrices = np.asarray(matrices, dtype=np.float64)
         if matrices.shape[-2:] != (3, 3):
-            raise ValueError(
-                f"Expected rotation matrices with shape (..., 3, 3), got {matrices.shape}"
-            )
+            raise ValueError(f"Expected rotation matrices with shape (..., 3, 3), got {matrices.shape}")
         if matrices.size == 0:
             return np.empty((*matrices.shape[:-2], 4), dtype=np.float64)
         xyzw = Rotation.from_matrix(matrices.reshape(-1, 3, 3)).as_quat()
@@ -732,9 +796,7 @@ class InteractionMeshRetargeter:
         if target_matrices.size == 0:
             return np.empty((*target_matrices.shape[:-2], 3), dtype=np.float64)
         relative = target_matrices @ np.swapaxes(current_matrices, -1, -2)
-        return Rotation.from_matrix(
-            relative.reshape(-1, 3, 3)
-        ).as_rotvec().reshape(*relative.shape[:-2], 3)
+        return Rotation.from_matrix(relative.reshape(-1, 3, 3)).as_rotvec().reshape(*relative.shape[:-2], 3)
 
     def _get_robot_link_orientation_data(
         self,
@@ -746,11 +808,7 @@ class InteractionMeshRetargeter:
         """Return world orientations and optional world angular Jacobians."""
         self.robot_data.qpos[:] = np.asarray(q, dtype=np.float64)
         mujoco.mj_forward(self.robot_model, self.robot_data)
-        transform_qdot_to_qvel = (
-            self._build_transform_qdot_to_qvel_fast()
-            if with_jacobians
-            else None
-        )
+        transform_qdot_to_qvel = self._build_transform_qdot_to_qvel_fast() if with_jacobians else None
         matrices: list[np.ndarray] = []
         jacobians: list[np.ndarray] = []
         for link_name in link_names:
@@ -804,6 +862,20 @@ class InteractionMeshRetargeter:
             ),
         )
 
+    def _orientation_t_pose_robot_qpos(self) -> np.ndarray:
+        """Build the robot configuration used for canonical T-pose alignment."""
+        reference_q = self.robot_model.qpos0.copy()
+        reference_q[3:7] = self.orientation_t_pose_robot_base_quaternion_wxyz
+        for joint_name, joint_position in self.orientation_t_pose_robot_joint_positions.items():
+            joint_id = mujoco.mj_name2id(
+                self.robot_model,
+                mujoco.mjtObj.mjOBJ_JOINT,
+                joint_name,
+            )
+            qpos_address = int(self.robot_model.jnt_qposadr[joint_id])
+            reference_q[qpos_address] = joint_position
+        return reference_q
+
     def _prepare_orientation_targets(
         self,
         human_joint_quaternions_wxyz: np.ndarray | None,
@@ -816,12 +888,9 @@ class InteractionMeshRetargeter:
             return (
                 np.empty((num_frames, 0, 3, 3), dtype=np.float64),
                 np.empty((0, 3, 3), dtype=np.float64),
-        )
-        if human_joint_quaternions_wxyz is None:
-            raise ValueError(
-                "Configured orientation tracking or diagnostics require source "
-                "global joint orientations"
             )
+        if human_joint_quaternions_wxyz is None:
+            raise ValueError("Configured orientation tracking or diagnostics require source global joint orientations")
         quaternions = np.asarray(
             human_joint_quaternions_wxyz,
             dtype=np.float64,
@@ -829,8 +898,7 @@ class InteractionMeshRetargeter:
         expected_shape = (num_frames, len(self.demo_joints), 4)
         if quaternions.shape != expected_shape:
             raise ValueError(
-                "Source global joint orientations must have shape "
-                f"{expected_shape}, got {quaternions.shape}"
+                f"Source global joint orientations must have shape {expected_shape}, got {quaternions.shape}"
             )
         selected_quaternions = quaternions[
             :,
@@ -839,16 +907,29 @@ class InteractionMeshRetargeter:
         ]
         human_matrices = self._wxyz_to_matrices(selected_quaternions)
 
-        if self.orientation_alignment_mode == "first_frame":
+        if self.orientation_alignment_mode == "t_pose":
+            reference_human_quaternions = np.asarray(
+                [self.orientation_t_pose_human_quaternions_wxyz[name] for name in self.orientation_human_joint_names],
+                dtype=np.float64,
+            )
+            reference_human_matrices = self._wxyz_to_matrices(reference_human_quaternions)
+            reference_robot_q = self._orientation_t_pose_robot_qpos()
+            reference_robot_matrices, _ = self._get_robot_link_orientation_data(
+                reference_robot_q,
+                self.orientation_robot_link_names,
+                with_jacobians=False,
+            )
+            alignment_matrices = np.swapaxes(reference_human_matrices, -1, -2) @ reference_robot_matrices
+        elif self.orientation_alignment_mode == "first_frame":
             initial_robot_matrices, _ = self._get_robot_link_orientation_data(
                 initial_q,
                 self.orientation_robot_link_names,
                 with_jacobians=False,
             )
-            alignment_matrices = (
-                np.swapaxes(human_matrices[0], -1, -2)
-                @ initial_robot_matrices
-            )
+            reference_human_matrices = human_matrices[0].copy()
+            reference_robot_matrices = initial_robot_matrices.copy()
+            reference_robot_q = np.asarray(initial_q, dtype=np.float64).copy()
+            alignment_matrices = np.swapaxes(human_matrices[0], -1, -2) @ initial_robot_matrices
         else:
             alignment_quaternions = np.asarray(
                 [
@@ -858,9 +939,24 @@ class InteractionMeshRetargeter:
                 dtype=np.float64,
             )
             alignment_matrices = self._wxyz_to_matrices(alignment_quaternions)
+            reference_human_matrices = np.empty(
+                (0, 3, 3),
+                dtype=np.float64,
+            )
+            reference_robot_matrices = np.empty(
+                (0, 3, 3),
+                dtype=np.float64,
+            )
+            reference_robot_q = np.empty(
+                (0,),
+                dtype=np.float64,
+            )
 
         if alignment_matrices.shape != (tracked_count, 3, 3):
             raise RuntimeError("Unexpected orientation alignment shape")
+        self.orientation_reference_human_matrices = reference_human_matrices
+        self.orientation_reference_robot_matrices = reference_robot_matrices
+        self.orientation_reference_robot_qpos = reference_robot_q
         target_matrices = human_matrices @ alignment_matrices[None, ...]
         return target_matrices, alignment_matrices
 
@@ -934,7 +1030,10 @@ class InteractionMeshRetargeter:
             q_locked_list = np.zeros((num_frames, self.nq))
             q_locked_list[0, self.q_a_indices] = q_a_init
 
-        q_locked_list[:, -7:] = object_poses_augmented
+        self._apply_dynamic_object_poses(
+            q_locked_list,
+            object_poses_augmented,
+        )
         q = np.copy(q_locked_list[0])
         retargeted_motions = [q]
         (
@@ -1056,11 +1155,7 @@ class InteractionMeshRetargeter:
                         obj_pts_local=object_points_local,
                         foot_sticking=foot_sticking_sequences[i],
                         w_nominal_tracking=w_nominal_tracking,
-                        q_a_nominal=(
-                            q_nominal_list[i, self.q_a_indices]
-                            if q_nominal_list is not None
-                            else None
-                        ),
+                        q_a_nominal=(q_nominal_list[i, self.q_a_indices] if q_nominal_list is not None else None),
                         init_t=i == 0,
                         frame_idx=i,
                         orientation_target_matrices=orientation_target_matrices[i],
@@ -1087,12 +1182,10 @@ class InteractionMeshRetargeter:
                 )  # n_mapped_links X 3
                 mapped_robot_joints_w_list.append(robot_link_positions.astype(np.float32))
                 if self.orientation_diagnostics_enabled:
-                    robot_orientation_matrices, _ = (
-                        self._get_robot_link_orientation_data(
-                            q,
-                            self.orientation_robot_link_names,
-                            with_jacobians=False,
-                        )
+                    robot_orientation_matrices, _ = self._get_robot_link_orientation_data(
+                        q,
+                        self.orientation_robot_link_names,
+                        with_jacobians=False,
                     )
                     error_vectors = self._so3_error_vectors(
                         orientation_target_matrices[i],
@@ -1100,18 +1193,11 @@ class InteractionMeshRetargeter:
                     )
                     error_angles = np.linalg.norm(error_vectors, axis=-1)
                     orientation_robot_quaternions_wxyz.append(
-                        self._matrices_to_wxyz(robot_orientation_matrices).astype(
-                            np.float32
-                        )
+                        self._matrices_to_wxyz(robot_orientation_matrices).astype(np.float32)
                     )
                     orientation_errors_rad.append(error_angles.astype(np.float32))
                     orientation_frame_costs.append(
-                        float(
-                            np.sum(
-                                self.orientation_weight_values
-                                * np.square(error_angles)
-                            )
-                        )
+                        float(np.sum(self.orientation_weight_values * np.square(error_angles)))
                     )
                 if collect_interaction_mesh:
                     if source_vertices_w is None:
@@ -1214,9 +1300,7 @@ class InteractionMeshRetargeter:
         mapped_human_joint_names = list(self.laplacian_match_links.keys())
         tracked_count = len(self.orientation_human_joint_names)
         if self.orientation_diagnostics_enabled:
-            target_quaternions_wxyz = self._matrices_to_wxyz(
-                orientation_target_matrices
-            ).astype(np.float32)
+            target_quaternions_wxyz = self._matrices_to_wxyz(orientation_target_matrices).astype(np.float32)
             robot_quaternions_wxyz = np.asarray(
                 orientation_robot_quaternions_wxyz,
                 dtype=np.float32,
@@ -1261,17 +1345,13 @@ class InteractionMeshRetargeter:
             "contains_object_in_qpos": np.asarray(bool(self.object_model_path) and bool(self.has_dynamic_object)),
             "foot_sticking_tolerance": np.asarray(self.foot_sticking_tolerance),
             "foot_sticking_fallback_tolerance": np.asarray(
-                np.nan
-                if self.foot_sticking_fallback_tolerance is None
-                else self.foot_sticking_fallback_tolerance
+                np.nan if self.foot_sticking_fallback_tolerance is None else self.foot_sticking_fallback_tolerance
             ),
             "foot_sticking_fallback_frames": np.asarray(
                 sorted(self.foot_sticking_fallback_frames),
                 dtype=np.int32,
             ),
-            "release_foot_sticking_on_infeasible": np.asarray(
-                self.release_foot_sticking_on_infeasible
-            ),
+            "release_foot_sticking_on_infeasible": np.asarray(self.release_foot_sticking_on_infeasible),
             "foot_sticking_release_frames": np.asarray(
                 sorted(self.foot_sticking_release_frames),
                 dtype=np.int32,
@@ -1283,9 +1363,7 @@ class InteractionMeshRetargeter:
                 sorted(self.object_non_penetration_release_frames),
                 dtype=np.int32,
             ),
-            "foot_sticking_enabled_for_saved_trajectory": np.asarray(
-                self.activate_foot_sticking
-            ),
+            "foot_sticking_enabled_for_saved_trajectory": np.asarray(self.activate_foot_sticking),
             "foot_sticking_full_sequence_retry_frame": np.asarray(
                 -1
                 if self.foot_sticking_full_sequence_retry_frame is None
@@ -1295,12 +1373,8 @@ class InteractionMeshRetargeter:
             "frame_costs": np.asarray(frame_costs, dtype=np.float64),
             "sqp_iteration_counts": np.asarray(sqp_iteration_counts, dtype=np.int32),
             "sqp_stop_reasons": np.asarray(sqp_stop_reasons, dtype=str),
-            "orientation_tracking_enabled": np.asarray(
-                self.orientation_tracking_enabled
-            ),
-            "orientation_diagnostics_enabled": np.asarray(
-                self.orientation_diagnostics_enabled
-            ),
+            "orientation_tracking_enabled": np.asarray(self.orientation_tracking_enabled),
+            "orientation_diagnostics_enabled": np.asarray(self.orientation_diagnostics_enabled),
             "orientation_human_joint_names": np.asarray(
                 self.orientation_human_joint_names,
                 dtype=str,
@@ -1309,14 +1383,18 @@ class InteractionMeshRetargeter:
                 self.orientation_robot_link_names,
                 dtype=str,
             ),
-            "orientation_weights": self.orientation_weight_values.astype(
-                np.float64
-            ),
+            "orientation_weights": self.orientation_weight_values.astype(np.float64),
+            "orientation_alignment_mode": np.asarray(self.orientation_alignment_mode),
             "orientation_alignment_quaternions_wxyz": (
-                self._matrices_to_wxyz(
-                    orientation_alignment_matrices
-                ).astype(np.float32)
+                self._matrices_to_wxyz(orientation_alignment_matrices).astype(np.float32)
             ),
+            "orientation_reference_human_quaternions_wxyz": (
+                self._matrices_to_wxyz(self.orientation_reference_human_matrices).astype(np.float32)
+            ),
+            "orientation_reference_robot_quaternions_wxyz": (
+                self._matrices_to_wxyz(self.orientation_reference_robot_matrices).astype(np.float32)
+            ),
+            "orientation_reference_robot_qpos": self.orientation_reference_robot_qpos.astype(np.float32),
             "orientation_target_quaternions_wxyz": target_quaternions_wxyz,
             "orientation_robot_quaternions_wxyz": robot_quaternions_wxyz,
             "orientation_errors_rad": orientation_error_array,
@@ -1672,9 +1750,7 @@ class InteractionMeshRetargeter:
 
         if self.orientation_tracking_enabled:
             if orientation_target_matrices is None:
-                raise ValueError(
-                    "Orientation tracking requires per-frame target matrices"
-                )
+                raise ValueError("Orientation tracking requires per-frame target matrices")
             (
                 current_orientation_matrices,
                 orientation_jacobians,
@@ -1691,11 +1767,7 @@ class InteractionMeshRetargeter:
             )
             for link_idx, weight in enumerate(self.orientation_weight_values):
                 obj_terms.append(
-                    weight
-                    * cp.sum_squares(
-                        orientation_jacobians[link_idx] @ dqa
-                        - orientation_errors[link_idx]
-                    )
+                    weight * cp.sum_squares(orientation_jacobians[link_idx] @ dqa - orientation_errors[link_idx])
                 )
 
         # nominal tracking for selected indices
@@ -1736,9 +1808,7 @@ class InteractionMeshRetargeter:
             solver_kwargs=solver_kwargs,
             remove_soc_on_failure=init_t,
             release_on_failure=self.release_foot_sticking_on_infeasible,
-            release_object_non_penetration_on_failure=(
-                self.release_object_non_penetration_on_infeasible
-            ),
+            release_object_non_penetration_on_failure=(self.release_object_non_penetration_on_infeasible),
         )
 
         if problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
@@ -1750,10 +1820,7 @@ class InteractionMeshRetargeter:
                 "release object non-penetration on infeasible="
                 f"{self.release_object_non_penetration_on_infeasible}"
             )
-        if (
-            foot_sticking_resolution == "relaxed"
-            and frame_idx not in self.foot_sticking_fallback_frames
-        ):
+        if foot_sticking_resolution == "relaxed" and frame_idx not in self.foot_sticking_fallback_frames:
             self.foot_sticking_fallback_frames.add(frame_idx)
             print(
                 "WARNING: Retried infeasible foot-sticking constraints at "
@@ -1762,10 +1829,7 @@ class InteractionMeshRetargeter:
                 f"(normal {self.foot_sticking_tolerance:.6g} m).",
                 flush=True,
             )
-        elif (
-            foot_sticking_resolution == "released"
-            and frame_idx not in self.foot_sticking_release_frames
-        ):
+        elif foot_sticking_resolution == "released" and frame_idx not in self.foot_sticking_release_frames:
             self.foot_sticking_fallback_frames.add(frame_idx)
             self.foot_sticking_release_frames.add(frame_idx)
             print(
@@ -1774,10 +1838,7 @@ class InteractionMeshRetargeter:
                 "remained infeasible; all other constraints are preserved.",
                 flush=True,
             )
-        if (
-            object_non_penetration_released
-            and frame_idx not in self.object_non_penetration_release_frames
-        ):
+        if object_non_penetration_released and frame_idx not in self.object_non_penetration_release_frames:
             self.object_non_penetration_release_frames.add(frame_idx)
             print(
                 "WARNING: Released robot-object non-penetration constraints at "
@@ -1817,11 +1878,7 @@ class InteractionMeshRetargeter:
             *,
             include_object_non_penetration: bool = True,
         ) -> cp.Problem:
-            object_constraints = (
-                object_non_penetration_constraints
-                if include_object_non_penetration
-                else []
-            )
+            object_constraints = object_non_penetration_constraints if include_object_non_penetration else []
             problem = cp.Problem(
                 objective,
                 [
@@ -1834,10 +1891,7 @@ class InteractionMeshRetargeter:
             return problem
 
         problem = _solve(foot_sticking_constraints)
-        if (
-            problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
-            and remove_soc_on_failure
-        ):
+        if problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE) and remove_soc_on_failure:
             active_base_constraints = [
                 constraint
                 for constraint in active_base_constraints
@@ -2290,9 +2344,7 @@ class InteractionMeshRetargeter:
         """Normalize MuJoCo named-accessor IDs across NumPy/MuJoCo versions."""
         array = np.asarray(value)
         if array.size != 1:
-            raise ValueError(
-                f"{name} must contain exactly one ID, got shape {array.shape}."
-            )
+            raise ValueError(f"{name} must contain exactly one ID, got shape {array.shape}.")
         return int(array.reshape(-1)[0])
 
     def _compute_jacobian_for_contact_relative(self, geom1, geom2, geom1_name, geom2_name, fromto, dist):
@@ -2409,10 +2461,7 @@ class InteractionMeshRetargeter:
 
         if self.object_name in {"", "ground"}:
             return False
-        return (
-            self.object_name in self._geom_names[geom1_id]
-            or self.object_name in self._geom_names[geom2_id]
-        )
+        return self.object_name in self._geom_names[geom1_id] or self.object_name in self._geom_names[geom2_id]
 
     def _environment_collision_pair_is_active(self, geom1_name: str, geom2_name: str) -> bool:
         """Select ground pairs and, when enabled, object pairs for hard constraints."""
