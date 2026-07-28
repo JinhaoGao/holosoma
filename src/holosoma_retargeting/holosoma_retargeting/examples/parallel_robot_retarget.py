@@ -252,13 +252,23 @@ def process_single_task(args):
     constants = create_task_constants(robot_config, motion_data_config, task_config, task_type)
 
     # Load motion data
-    human_joints, object_poses, smpl_scale = load_motion_data(
+    (
+        human_joints,
+        object_poses,
+        human_joint_quaternions,
+        smpl_scale,
+    ) = load_motion_data(
         task_type, data_format, data_path, task_name, constants, motion_data_config
     )
 
     # Preserve original data (preprocess_motion_data modifies them in place)
     human_joints_original = human_joints.copy()
     object_poses_original = object_poses.copy()
+    human_joint_quaternions_original = (
+        None
+        if human_joint_quaternions is None
+        else human_joint_quaternions.copy()
+    )
 
     # Get toe names from motion data config (depends only on data_format)
     toe_names = motion_data_config.toe_names
@@ -272,6 +282,11 @@ def process_single_task(args):
         # Use fresh copies for each iteration
         human_joints = human_joints_original.copy()
         object_poses = object_poses_original.copy()
+        human_joint_quaternions = (
+            None
+            if human_joint_quaternions_original is None
+            else human_joint_quaternions_original.copy()
+        )
         aug_name = aug_config["name"]
         file_name = str(_output_path(save_dir, task_type, task_name, aug_name))
 
@@ -363,6 +378,7 @@ def process_single_task(args):
         # Retarget motion
         retargeter.retarget_motion(
             human_joint_motions=human_joints,
+            human_joint_quaternions_wxyz=human_joint_quaternions,
             object_poses=object_poses,
             object_poses_augmented=object_poses_augmented,
             object_points_local_demo=object_local_pts_demo,

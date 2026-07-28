@@ -373,6 +373,24 @@ JOINTS_MAPPINGS = {
     },
 }
 
+ORIENTATION_JOINTS_MAPPINGS: dict[tuple[str, str], dict[str, str]] = {
+    ("noetix_mocap", "e1"): {
+        "Hips": "base_link",
+        "LeftUpLeg": "l_leg_hip_pitch_link",
+        "RightUpLeg": "r_leg_hip_pitch_link",
+        "LeftLeg": "l_leg_knee_link",
+        "RightLeg": "r_leg_knee_link",
+        "LeftFoot": "l_leg_ankle_roll_link",
+        "RightFoot": "r_leg_ankle_roll_link",
+        "LeftArm": "l_arm_shoulder_yaw_link",
+        "RightArm": "r_arm_shoulder_yaw_link",
+        "LeftForeArm": "l_arm_elbow_pitch_link",
+        "RightForeArm": "r_arm_elbow_pitch_link",
+        "LeftHand": "l_hand_sphere_link",
+        "RightHand": "r_hand_sphere_link",
+    },
+}
+
 # Noetix is a separate company-collected dataset and has its own loader and
 # converter. Its normalized skeleton reuses only the LAFAN joint-name topology
 # and robot mapping. AMASS and GVHMR both use the first 22 SMPL-X body joints.
@@ -438,6 +456,7 @@ class MotionDataConfig:
     # Optional overrides - if None, will use defaults from data_format
     demo_joints: list[str] | None = None
     joints_mapping: dict[str, str] | None = None
+    orientation_joints_mapping: dict[str, str] | None = None
 
     @property
     def resolved_demo_joints(self) -> list[str]:
@@ -460,6 +479,16 @@ class MotionDataConfig:
         raise ValueError(f"No joint mapping found for data_format={self.data_format}, robot_type={self.robot_type}")
 
     @property
+    def resolved_orientation_joints_mapping(self) -> dict[str, str]:
+        """Get the independent human-joint to robot-body orientation mapping."""
+        if self.orientation_joints_mapping is not None:
+            return self.orientation_joints_mapping
+        return ORIENTATION_JOINTS_MAPPINGS.get(
+            (self.data_format, self.robot_type),
+            {},
+        )
+
+    @property
     def toe_names(self) -> list[str]:
         """Get toe joint names for this data format."""
         if self.data_format not in TOE_NAMES_BY_FORMAT:
@@ -474,5 +503,6 @@ class MotionDataConfig:
         return {
             "DEMO_JOINTS": self.resolved_demo_joints,
             "JOINTS_MAPPING": self.resolved_joints_mapping,
+            "ORIENTATION_JOINTS_MAPPING": self.resolved_orientation_joints_mapping,
             "TOE_NAMES": self.toe_names,
         }

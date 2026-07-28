@@ -65,7 +65,7 @@ class InteractionMeshRetargeter:
         foot_sticking_tolerance: float = 1e-3,
         foot_sticking_fallback_tolerance: float | None = 0.02,
         release_foot_sticking_on_infeasible: bool = True,
-        release_object_non_penetration_on_infeasible: bool = True,
+        release_object_non_penetration_on_infeasible: bool = False,
         retry_without_foot_sticking_on_infeasible: bool = True,
         foot_lock: FootLockConfig | None = None,
         self_collision: SelfCollisionConfig | None = None,
@@ -84,6 +84,14 @@ class InteractionMeshRetargeter:
         interaction_mesh_line_width: float = 1.0,
         w_nominal_tracking_init: float = 5.0,
         nominal_tracking_tau: float = 10.0,
+        orientation_joints_mapping: dict[str, str] | None = None,
+        orientation_weights: dict[str, float] | None = None,
+        orientation_alignment_mode: str = "first_frame",
+        orientation_alignment_quaternions_wxyz: dict[
+            str,
+            tuple[float, float, float, float],
+        ]
+        | None = None,
     ):
         """This kinematic retargeter solves the diffIK problem with hard constraints in SQP style.
         During each SQP iteration, the problem is solved with the following constraints and costs:
@@ -279,6 +287,130 @@ class InteractionMeshRetargeter:
         self.w_nominal_tracking_init = w_nominal_tracking_init
         self.nominal_tracking_tau = nominal_tracking_tau
         self.track_nominal_indices = task_constants.NOMINAL_TRACKING_INDICES
+        self._init_orientation_tracking(
+            orientation_joints_mapping=orientation_joints_mapping,
+            orientation_weights=orientation_weights,
+            orientation_alignment_mode=orientation_alignment_mode,
+            orientation_alignment_quaternions_wxyz=(
+                orientation_alignment_quaternions_wxyz
+            ),
+        )
+
+    def _init_orientation_tracking(
+        self,
+        *,
+        orientation_joints_mapping: dict[str, str] | None,
+        orientation_weights: dict[str, float] | None,
+        orientation_alignment_mode: str,
+        orientation_alignment_quaternions_wxyz: dict[
+            str,
+            tuple[float, float, float, float],
+        ]
+        | None,
+    ) -> None:
+        """Validate and cache the independent SO(3) tracking configuration."""
+        mapping = dict(orientation_joints_mapping or {})
+        weights = {
+            name: float(weight)
+            for name, weight in (orientation_weights or {}).items()
+        }
+        unknown_weights = sorted(set(weights) - set(mapping))
+        if unknown_weights:
+            raise ValueError(
+                "Orientation weights reference joints outside the orientation "
+                f"mapping: {unknown_weights}"
+            )
+        invalid_weights = {
+            name: weight
+            for name, weight in weights.items()
+            if not np.isfinite(weight) or weight < 0.0
+        }
+        if invalid_weights:
+            raise ValueError(
+                "Orientation weights must be finite and non-negative: "
+                f"{invalid_weights}"
+            )
+        if orientation_alignment_mode not in {"first_frame", "explicit"}:
+            raise ValueError(
+                "orientation_alignment_mode must be 'first_frame' or 'explicit'"
+            )
+
+        tracked_human_joints = [
+            name
+            for name in mapping
+            if name in weights
+        ]
+        missing_human_joints = [
+            name for name in tracked_human_joints if name not in self.demo_joints
+        ]
+        if missing_human_joints:
+            raise ValueError(
+                "Orientation mapping references unknown human joints: "
+                f"{missing_human_joints}"
+            )
+        tracked_robot_links = [mapping[name] for name in tracked_human_joints]
+        missing_robot_links = [
+            link_name
+            for link_name in tracked_robot_links
+            if mujoco.mj_name2id(
+                self.robot_model,
+                mujoco.mjtObj.mjOBJ_BODY,
+                link_name,
+            )
+            < 0
+        ]
+        if missing_robot_links:
+            raise ValueError(
+                "Orientation mapping references unknown MuJoCo bodies: "
+                f"{missing_robot_links}"
+            )
+
+        explicit_alignments = dict(
+            orientation_alignment_quaternions_wxyz or {}
+        )
+        if orientation_alignment_mode == "explicit":
+            missing_alignments = [
+                name
+                for name in tracked_human_joints
+                if name not in explicit_alignments
+            ]
+            if missing_alignments:
+                raise ValueError(
+                    "Explicit orientation alignment is missing joints: "
+                    f"{missing_alignments}"
+                )
+            for name in tracked_human_joints:
+                quaternion = np.asarray(
+                    explicit_alignments[name],
+                    dtype=np.float64,
+                )
+                if (
+                    quaternion.shape != (4,)
+                    or not np.isfinite(quaternion).all()
+                    or np.linalg.norm(quaternion) <= 1e-8
+                ):
+                    raise ValueError(
+                        "Explicit orientation alignment quaternion for "
+                        f"{name!r} must be finite, non-zero wxyz"
+                    )
+
+        self.orientation_joints_mapping = mapping
+        self.orientation_weights_by_human_joint = weights
+        self.orientation_alignment_mode = orientation_alignment_mode
+        self.orientation_alignment_quaternions_wxyz_config = explicit_alignments
+        self.orientation_human_joint_names = tracked_human_joints
+        self.orientation_robot_link_names = tracked_robot_links
+        self.orientation_human_joint_indices = [
+            self.demo_joints.index(name) for name in tracked_human_joints
+        ]
+        self.orientation_weight_values = np.asarray(
+            [weights[name] for name in tracked_human_joints],
+            dtype=np.float64,
+        )
+        self.orientation_diagnostics_enabled = bool(tracked_human_joints)
+        self.orientation_tracking_enabled = bool(
+            np.any(self.orientation_weight_values > 0.0)
+        )
 
     def _init_foot_lock(self, foot_lock: FootLockConfig | None) -> None:
         """Initialize foot lock configuration and normalize window mappings."""
@@ -554,6 +686,184 @@ class InteractionMeshRetargeter:
             "object_points_target_world": np.asarray(obj_pts_list, dtype=np.float32),
         }
 
+    @staticmethod
+    def _wxyz_to_matrices(quaternions_wxyz: np.ndarray) -> np.ndarray:
+        quaternions = np.asarray(quaternions_wxyz, dtype=np.float64)
+        if quaternions.shape[-1] != 4:
+            raise ValueError(
+                f"Expected wxyz quaternions with final dimension 4, got {quaternions.shape}"
+            )
+        if quaternions.size == 0:
+            return np.empty((*quaternions.shape[:-1], 3, 3), dtype=np.float64)
+        norms = np.linalg.norm(quaternions, axis=-1)
+        if not np.isfinite(quaternions).all() or np.any(norms <= 1e-8):
+            raise ValueError("Orientation quaternions must be finite and non-zero")
+        normalized = quaternions / norms[..., None]
+        flat = normalized.reshape(-1, 4)
+        matrices = Rotation.from_quat(flat[:, [1, 2, 3, 0]]).as_matrix()
+        return matrices.reshape(*quaternions.shape[:-1], 3, 3)
+
+    @staticmethod
+    def _matrices_to_wxyz(matrices: np.ndarray) -> np.ndarray:
+        matrices = np.asarray(matrices, dtype=np.float64)
+        if matrices.shape[-2:] != (3, 3):
+            raise ValueError(
+                f"Expected rotation matrices with shape (..., 3, 3), got {matrices.shape}"
+            )
+        if matrices.size == 0:
+            return np.empty((*matrices.shape[:-2], 4), dtype=np.float64)
+        xyzw = Rotation.from_matrix(matrices.reshape(-1, 3, 3)).as_quat()
+        wxyz = xyzw[:, [3, 0, 1, 2]]
+        return wxyz.reshape(*matrices.shape[:-2], 4)
+
+    @staticmethod
+    def _so3_error_vectors(
+        target_matrices: np.ndarray,
+        current_matrices: np.ndarray,
+    ) -> np.ndarray:
+        """Return world-frame Log(R_target R_current^T) vectors."""
+        target_matrices = np.asarray(target_matrices, dtype=np.float64)
+        current_matrices = np.asarray(current_matrices, dtype=np.float64)
+        if target_matrices.shape != current_matrices.shape:
+            raise ValueError(
+                "Target and current orientation matrices must have equal shape, "
+                f"got {target_matrices.shape} and {current_matrices.shape}"
+            )
+        if target_matrices.size == 0:
+            return np.empty((*target_matrices.shape[:-2], 3), dtype=np.float64)
+        relative = target_matrices @ np.swapaxes(current_matrices, -1, -2)
+        return Rotation.from_matrix(
+            relative.reshape(-1, 3, 3)
+        ).as_rotvec().reshape(*relative.shape[:-2], 3)
+
+    def _get_robot_link_orientation_data(
+        self,
+        q: np.ndarray,
+        link_names: list[str],
+        *,
+        with_jacobians: bool,
+    ) -> tuple[np.ndarray, np.ndarray | None]:
+        """Return world orientations and optional world angular Jacobians."""
+        self.robot_data.qpos[:] = np.asarray(q, dtype=np.float64)
+        mujoco.mj_forward(self.robot_model, self.robot_data)
+        transform_qdot_to_qvel = (
+            self._build_transform_qdot_to_qvel_fast()
+            if with_jacobians
+            else None
+        )
+        matrices: list[np.ndarray] = []
+        jacobians: list[np.ndarray] = []
+        for link_name in link_names:
+            body_id = mujoco.mj_name2id(
+                self.robot_model,
+                mujoco.mjtObj.mjOBJ_BODY,
+                link_name,
+            )
+            if body_id < 0:
+                raise ValueError(f"Body {link_name!r} not found in MuJoCo model")
+            matrices.append(
+                np.array(
+                    self.robot_data.xmat[body_id].reshape(3, 3),
+                    dtype=np.float64,
+                    copy=True,
+                )
+            )
+            if with_jacobians:
+                jacobian_position = np.zeros(
+                    (3, self.robot_model.nv),
+                    dtype=np.float64,
+                )
+                jacobian_rotation = np.zeros(
+                    (3, self.robot_model.nv),
+                    dtype=np.float64,
+                )
+                mujoco.mj_jacBody(
+                    self.robot_model,
+                    self.robot_data,
+                    jacobian_position,
+                    jacobian_rotation,
+                    body_id,
+                )
+                jacobian_qpos = jacobian_rotation @ transform_qdot_to_qvel
+                jacobians.append(
+                    np.array(
+                        jacobian_qpos[:, self.q_a_indices],
+                        dtype=np.float64,
+                        copy=True,
+                    )
+                )
+        matrix_array = np.asarray(matrices, dtype=np.float64).reshape(-1, 3, 3)
+        if not with_jacobians:
+            return matrix_array, None
+        return (
+            matrix_array,
+            np.asarray(jacobians, dtype=np.float64).reshape(
+                -1,
+                3,
+                self.nq_a,
+            ),
+        )
+
+    def _prepare_orientation_targets(
+        self,
+        human_joint_quaternions_wxyz: np.ndarray | None,
+        initial_q: np.ndarray,
+        num_frames: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Validate source orientations and construct fixed-alignment targets."""
+        tracked_count = len(self.orientation_human_joint_names)
+        if not self.orientation_diagnostics_enabled:
+            return (
+                np.empty((num_frames, 0, 3, 3), dtype=np.float64),
+                np.empty((0, 3, 3), dtype=np.float64),
+        )
+        if human_joint_quaternions_wxyz is None:
+            raise ValueError(
+                "Configured orientation tracking or diagnostics require source "
+                "global joint orientations"
+            )
+        quaternions = np.asarray(
+            human_joint_quaternions_wxyz,
+            dtype=np.float64,
+        )
+        expected_shape = (num_frames, len(self.demo_joints), 4)
+        if quaternions.shape != expected_shape:
+            raise ValueError(
+                "Source global joint orientations must have shape "
+                f"{expected_shape}, got {quaternions.shape}"
+            )
+        selected_quaternions = quaternions[
+            :,
+            self.orientation_human_joint_indices,
+            :,
+        ]
+        human_matrices = self._wxyz_to_matrices(selected_quaternions)
+
+        if self.orientation_alignment_mode == "first_frame":
+            initial_robot_matrices, _ = self._get_robot_link_orientation_data(
+                initial_q,
+                self.orientation_robot_link_names,
+                with_jacobians=False,
+            )
+            alignment_matrices = (
+                np.swapaxes(human_matrices[0], -1, -2)
+                @ initial_robot_matrices
+            )
+        else:
+            alignment_quaternions = np.asarray(
+                [
+                    self.orientation_alignment_quaternions_wxyz_config[name]
+                    for name in self.orientation_human_joint_names
+                ],
+                dtype=np.float64,
+            )
+            alignment_matrices = self._wxyz_to_matrices(alignment_quaternions)
+
+        if alignment_matrices.shape != (tracked_count, 3, 3):
+            raise RuntimeError("Unexpected orientation alignment shape")
+        target_matrices = human_matrices @ alignment_matrices[None, ...]
+        return target_matrices, alignment_matrices
+
     def draw_interaction_meshes(
         self,
         source_vertices: np.ndarray,
@@ -596,6 +906,7 @@ class InteractionMeshRetargeter:
         original=True,
         dest_res_path=None,
         fps=30.0,
+        human_joint_quaternions_wxyz: np.ndarray | None = None,
         _foot_sticking_retry: bool = False,
     ):
         """
@@ -603,6 +914,8 @@ class InteractionMeshRetargeter:
 
         Args:
             human_joint_motions (np.ndarray): (num_frames, num_joints, 3) array.
+            human_joint_quaternions_wxyz (np.ndarray | None): Optional
+                (num_frames, num_joints, 4) global human orientations in wxyz.
             object_poses (np.ndarray): (num_frames, 7) array of demo object poses (quat, trans).
             object_poses_augmented (np.ndarray): (num_frames, 7) array of augmented object poses (quat, trans).
             object_points_local_demo (np.ndarray): Demo object points in local frame (rest pose).
@@ -624,6 +937,14 @@ class InteractionMeshRetargeter:
         q_locked_list[:, -7:] = object_poses_augmented
         q = np.copy(q_locked_list[0])
         retargeted_motions = [q]
+        (
+            orientation_target_matrices,
+            orientation_alignment_matrices,
+        ) = self._prepare_orientation_targets(
+            human_joint_quaternions_wxyz,
+            q,
+            num_frames,
+        )
 
         tetrahedra = []
         obj_pts_demo_list = []  # source/demo object pts after human-scale normalization
@@ -634,6 +955,9 @@ class InteractionMeshRetargeter:
         frame_costs = []
         sqp_iteration_counts = []
         sqp_stop_reasons = []
+        orientation_robot_quaternions_wxyz: list[np.ndarray] = []
+        orientation_errors_rad: list[np.ndarray] = []
+        orientation_frame_costs: list[float] = []
         self.foot_sticking_fallback_frames.clear()
         self.foot_sticking_release_frames.clear()
         self.object_non_penetration_release_frames.clear()
@@ -739,6 +1063,7 @@ class InteractionMeshRetargeter:
                         ),
                         init_t=i == 0,
                         frame_idx=i,
+                        orientation_target_matrices=orientation_target_matrices[i],
                     )
                 except RuntimeError as exc:
                     should_retry_without_foot_sticking = (
@@ -761,6 +1086,33 @@ class InteractionMeshRetargeter:
                     q, self.laplacian_match_links.values()
                 )  # n_mapped_links X 3
                 mapped_robot_joints_w_list.append(robot_link_positions.astype(np.float32))
+                if self.orientation_diagnostics_enabled:
+                    robot_orientation_matrices, _ = (
+                        self._get_robot_link_orientation_data(
+                            q,
+                            self.orientation_robot_link_names,
+                            with_jacobians=False,
+                        )
+                    )
+                    error_vectors = self._so3_error_vectors(
+                        orientation_target_matrices[i],
+                        robot_orientation_matrices,
+                    )
+                    error_angles = np.linalg.norm(error_vectors, axis=-1)
+                    orientation_robot_quaternions_wxyz.append(
+                        self._matrices_to_wxyz(robot_orientation_matrices).astype(
+                            np.float32
+                        )
+                    )
+                    orientation_errors_rad.append(error_angles.astype(np.float32))
+                    orientation_frame_costs.append(
+                        float(
+                            np.sum(
+                                self.orientation_weight_values
+                                * np.square(error_angles)
+                            )
+                        )
+                    )
                 if collect_interaction_mesh:
                     if source_vertices_w is None:
                         raise RuntimeError("Expected source interaction mesh vertices to be materialized")
@@ -842,6 +1194,7 @@ class InteractionMeshRetargeter:
             try:
                 return self.retarget_motion(
                     human_joint_motions=human_joint_motions,
+                    human_joint_quaternions_wxyz=human_joint_quaternions_wxyz,
                     object_poses=object_poses,
                     object_poses_augmented=object_poses_augmented,
                     object_points_local_demo=object_points_local_demo,
@@ -859,6 +1212,40 @@ class InteractionMeshRetargeter:
 
         # Save results
         mapped_human_joint_names = list(self.laplacian_match_links.keys())
+        tracked_count = len(self.orientation_human_joint_names)
+        if self.orientation_diagnostics_enabled:
+            target_quaternions_wxyz = self._matrices_to_wxyz(
+                orientation_target_matrices
+            ).astype(np.float32)
+            robot_quaternions_wxyz = np.asarray(
+                orientation_robot_quaternions_wxyz,
+                dtype=np.float32,
+            ).reshape(num_frames, tracked_count, 4)
+            orientation_error_array = np.asarray(
+                orientation_errors_rad,
+                dtype=np.float32,
+            ).reshape(num_frames, tracked_count)
+            orientation_frame_cost_array = np.asarray(
+                orientation_frame_costs,
+                dtype=np.float64,
+            )
+        else:
+            target_quaternions_wxyz = np.empty(
+                (num_frames, 0, 4),
+                dtype=np.float32,
+            )
+            robot_quaternions_wxyz = np.empty(
+                (num_frames, 0, 4),
+                dtype=np.float32,
+            )
+            orientation_error_array = np.empty(
+                (num_frames, 0),
+                dtype=np.float32,
+            )
+            orientation_frame_cost_array = np.zeros(
+                num_frames,
+                dtype=np.float64,
+            )
         save_payload = {
             "qpos": np.array(retargeted_motions)[1:],
             "human_joints": human_joint_motions,
@@ -908,6 +1295,32 @@ class InteractionMeshRetargeter:
             "frame_costs": np.asarray(frame_costs, dtype=np.float64),
             "sqp_iteration_counts": np.asarray(sqp_iteration_counts, dtype=np.int32),
             "sqp_stop_reasons": np.asarray(sqp_stop_reasons, dtype=str),
+            "orientation_tracking_enabled": np.asarray(
+                self.orientation_tracking_enabled
+            ),
+            "orientation_diagnostics_enabled": np.asarray(
+                self.orientation_diagnostics_enabled
+            ),
+            "orientation_human_joint_names": np.asarray(
+                self.orientation_human_joint_names,
+                dtype=str,
+            ),
+            "orientation_robot_link_names": np.asarray(
+                self.orientation_robot_link_names,
+                dtype=str,
+            ),
+            "orientation_weights": self.orientation_weight_values.astype(
+                np.float64
+            ),
+            "orientation_alignment_quaternions_wxyz": (
+                self._matrices_to_wxyz(
+                    orientation_alignment_matrices
+                ).astype(np.float32)
+            ),
+            "orientation_target_quaternions_wxyz": target_quaternions_wxyz,
+            "orientation_robot_quaternions_wxyz": robot_quaternions_wxyz,
+            "orientation_errors_rad": orientation_error_array,
+            "orientation_frame_costs": orientation_frame_cost_array,
             "fps": float(fps),
             "cost": cost,
         }
@@ -1095,6 +1508,7 @@ class InteractionMeshRetargeter:
         verbose=False,
         init_t=False,
         frame_idx: int = 0,
+        orientation_target_matrices: np.ndarray | None = None,
     ):
         """The main function to solve a single iteration of the DiffIK problem.
         Args:
@@ -1255,6 +1669,34 @@ class InteractionMeshRetargeter:
         obj_terms = []
 
         obj_terms.append(cp.sum_squares(cp.multiply(sqrt_w3, lap_var - target_lap_vec)))
+
+        if self.orientation_tracking_enabled:
+            if orientation_target_matrices is None:
+                raise ValueError(
+                    "Orientation tracking requires per-frame target matrices"
+                )
+            (
+                current_orientation_matrices,
+                orientation_jacobians,
+            ) = self._get_robot_link_orientation_data(
+                q,
+                self.orientation_robot_link_names,
+                with_jacobians=True,
+            )
+            if orientation_jacobians is None:
+                raise RuntimeError("Expected orientation Jacobians")
+            orientation_errors = self._so3_error_vectors(
+                orientation_target_matrices,
+                current_orientation_matrices,
+            )
+            for link_idx, weight in enumerate(self.orientation_weight_values):
+                obj_terms.append(
+                    weight
+                    * cp.sum_squares(
+                        orientation_jacobians[link_idx] @ dqa
+                        - orientation_errors[link_idx]
+                    )
+                )
 
         # nominal tracking for selected indices
         if (w_nominal_tracking > 0) and (q_a_nominal is not None):
@@ -1517,6 +1959,7 @@ class InteractionMeshRetargeter:
         init_t: bool = False,
         n_iter: int | None = None,
         frame_idx: int = 0,
+        orientation_target_matrices: np.ndarray | None = None,
     ):
         """Run SQP until its cost stalls, with a maximum-iteration safety cap.
 
@@ -1547,6 +1990,7 @@ class InteractionMeshRetargeter:
                 w_nominal_tracking=w_nominal_tracking,
                 init_t=init_t,
                 frame_idx=frame_idx,
+                orientation_target_matrices=orientation_target_matrices,
             )
 
             cost = float(cost)
@@ -1841,6 +2285,16 @@ class InteractionMeshRetargeter:
             edge_mode="all",
         )
 
+    @staticmethod
+    def _as_scalar_id(value, name: str) -> int:
+        """Normalize MuJoCo named-accessor IDs across NumPy/MuJoCo versions."""
+        array = np.asarray(value)
+        if array.size != 1:
+            raise ValueError(
+                f"{name} must contain exactly one ID, got shape {array.shape}."
+            )
+        return int(array.reshape(-1)[0])
+
     def _compute_jacobian_for_contact_relative(self, geom1, geom2, geom1_name, geom2_name, fromto, dist):
         # Get closest points from fromto buffer
         pos1 = fromto[:3]  # closest point on geom1
@@ -1860,8 +2314,10 @@ class InteractionMeshRetargeter:
         else:
             nhat_BA_W = np.array([0.0, 0.0, 0.0])
 
-        J_bodyA = self._calc_contact_jacobian_from_point(geom1.bodyid, pos1, input_world=True)
-        J_bodyB = self._calc_contact_jacobian_from_point(geom2.bodyid, pos2, input_world=True)
+        body1_id = self._as_scalar_id(geom1.bodyid, f"{geom1_name}.bodyid")
+        body2_id = self._as_scalar_id(geom2.bodyid, f"{geom2_name}.bodyid")
+        J_bodyA = self._calc_contact_jacobian_from_point(body1_id, pos1, input_world=True)
+        J_bodyB = self._calc_contact_jacobian_from_point(body2_id, pos2, input_world=True)
 
         # Compute relative Jacobian
         Jc = J_bodyA - J_bodyB

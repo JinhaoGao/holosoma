@@ -144,3 +144,17 @@ class RetargeterConfig:
 
     nominal_tracking_tau: float = 1e6
     """Time constant for the nominal tracking cost."""
+
+    orientation_weights: dict[str, float] = field(default_factory=dict)
+    """Per-human-joint SO(3) tracking weights. Empty or all-zero disables
+    orientation tracking and preserves the position-only solver path."""
+
+    orientation_alignment_mode: Literal["first_frame", "explicit"] = "first_frame"
+    """How fixed human-to-robot link-frame offsets are obtained."""
+
+    orientation_alignment_quaternions_wxyz: dict[
+        str,
+        tuple[float, float, float, float],
+    ] | None = None
+    """Explicit per-human-joint alignment quaternions used when
+    orientation_alignment_mode is 'explicit'."""

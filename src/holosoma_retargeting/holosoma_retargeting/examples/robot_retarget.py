@@ -219,7 +219,7 @@ def load_motion_data(
     task_name: str,
     constants: SimpleNamespace,
     motion_data_config: MotionDataConfig,
-) -> tuple[np.ndarray, np.ndarray, float]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None, float]:
     """Load motion data based on task type and format.
 
     Args:
@@ -231,9 +231,10 @@ def load_motion_data(
         motion_data_config: Motion data configuration
 
     Returns:
-        Tuple of (human_joints, object_poses, smpl_scale)
+        Tuple of (human_joints, object_poses, human_joint_quaternions, smpl_scale)
         - human_joints: (T, J, 3) array of joint positions
         - object_poses: (T, 7) array of object poses [qw, qx, qy, qz, x, y, z]
+        - human_joint_quaternions: optional (T, J, 4) global wxyz orientations
         - smpl_scale: Scaling factor for SMPL compatibility
 
     Raises:
@@ -248,6 +249,11 @@ def load_motion_data(
         human_height=motion_data_config.human_height,
     )
     human_joints = motion.joints.copy()
+    human_joint_quaternions = (
+        None
+        if motion.global_joint_quaternions_wxyz is None
+        else motion.global_joint_quaternions_wxyz.copy()
+    )
     constants.SOURCE_FPS = motion.fps
     constants.SOURCE_ROOT_QUATERNIONS = motion.root_quaternions_wxyz
     constants.SOURCE_DATA_FORMAT = canonical_format
@@ -273,7 +279,7 @@ def load_motion_data(
         motion.joints.shape[0],
         smpl_scale,
     )
-    return human_joints, object_poses, smpl_scale
+    return human_joints, object_poses, human_joint_quaternions, smpl_scale
 
 
 def setup_object_data(
@@ -507,6 +513,12 @@ def build_retargeter_kwargs_from_config(
         "interaction_mesh_edges": retargeter_config.interaction_mesh_edges,
         "interaction_mesh_line_width": retargeter_config.interaction_mesh_line_width,
         "w_nominal_tracking_init": retargeter_config.w_nominal_tracking_init,
+        "orientation_joints_mapping": constants.ORIENTATION_JOINTS_MAPPING,
+        "orientation_weights": retargeter_config.orientation_weights,
+        "orientation_alignment_mode": retargeter_config.orientation_alignment_mode,
+        "orientation_alignment_quaternions_wxyz": (
+            retargeter_config.orientation_alignment_quaternions_wxyz
+        ),
     }
     if task_type == "climbing":
         kwargs["nominal_tracking_tau"] = retargeter_config.nominal_tracking_tau
@@ -679,7 +691,12 @@ def main(cfg: RetargetingConfig) -> None:
     )
 
     # Load motion data
-    human_joints, object_poses, smpl_scale = load_motion_data(
+    (
+        human_joints,
+        object_poses,
+        human_joint_quaternions,
+        smpl_scale,
+    ) = load_motion_data(
         task_type, data_format, data_path, task_name, constants, cfg.motion_data_config
     )
 
@@ -744,6 +761,7 @@ def main(cfg: RetargetingConfig) -> None:
     logger.info("Starting retargeting...")
     retargeter.retarget_motion(
         human_joint_motions=human_joints,
+        human_joint_quaternions_wxyz=human_joint_quaternions,
         object_poses=object_poses,
         object_poses_augmented=object_poses_augmented,
         object_points_local_demo=object_local_pts_demo,
