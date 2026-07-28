@@ -1,0 +1,545 @@
+"""Parallel search for balanced Noetix E1 position/orientation weights."""
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import json
+import logging
+import multiprocessing
+import os
+import re
+import subprocess
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import tyro
+
+from holosoma_retargeting.examples.robot_retarget import main as run_retargeting
+from holosoma_retargeting.examples.run_orientation_ablation import (
+    DEFAULT_TASK_NAME,
+    ORIENTATION_JOINTS,
+    PACKAGE_ROOT,
+    _result_summary,
+    _retargeting_config,
+)
+
+ORIENTATION_GROUPS: dict[str, tuple[str, ...]] = {
+    "root": ("Hips",),
+    "hips": ("LeftUpLeg", "RightUpLeg"),
+    "knees": ("LeftLeg", "RightLeg"),
+    "ankles": ("LeftFoot", "RightFoot"),
+    "toes": ("LeftToeBase", "RightToeBase"),
+    "shoulders": ("LeftArm", "RightArm"),
+    "forearms": ("LeftForeArm", "RightForeArm"),
+    "hands": ("LeftHand", "RightHand"),
+}
+
+_RUN_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+@dataclass(frozen=True)
+class Config:
+    candidate_file: Path
+    """JSON mapping candidate names to group or per-joint weights."""
+
+    data_path: Path = PACKAGE_ROOT / "demo_data" / "noetix_mocap" / "0724_BEITI"
+    task_name: str = DEFAULT_TASK_NAME
+    output_root: Path = PACKAGE_ROOT / "demo_results_orientation" / "orientation_weight_search"
+    frame_starts: tuple[int, ...] = (0, 900, 1800, 2450)
+    frame_count: int = 120
+    max_workers: int = 8
+    overwrite: bool = False
+    fail_fast: bool = False
+
+
+def expand_candidate_weights(specification: dict[str, float]) -> dict[str, float]:
+    """Expand all/group/joint keys into the complete 15-link weight table."""
+
+    allowed_keys = {"all", *ORIENTATION_GROUPS, *ORIENTATION_JOINTS}
+    unknown = sorted(set(specification) - allowed_keys)
+    if unknown:
+        raise ValueError(f"Unknown orientation weight keys: {unknown}")
+
+    numeric_specification = {name: float(value) for name, value in specification.items()}
+    invalid = {name: value for name, value in numeric_specification.items() if not np.isfinite(value) or value < 0.0}
+    if invalid:
+        raise ValueError(f"Orientation weights must be finite and non-negative: {invalid}")
+
+    weights = dict.fromkeys(
+        ORIENTATION_JOINTS,
+        numeric_specification.get("all", 0.0),
+    )
+    for group_name, joint_names in ORIENTATION_GROUPS.items():
+        if group_name not in numeric_specification:
+            continue
+        for joint_name in joint_names:
+            weights[joint_name] = numeric_specification[group_name]
+    for joint_name in ORIENTATION_JOINTS:
+        if joint_name in numeric_specification:
+            weights[joint_name] = numeric_specification[joint_name]
+    return {name: float(value) for name, value in weights.items()}
+
+
+def _load_candidates(path: Path) -> dict[str, dict[str, float]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError("Candidate JSON must be a non-empty object")
+
+    candidates: dict[str, dict[str, float]] = {}
+    for run_name, specification in payload.items():
+        if not isinstance(run_name, str) or not _RUN_NAME_PATTERN.fullmatch(run_name):
+            raise ValueError(f"Invalid candidate name: {run_name!r}")
+        if not isinstance(specification, dict):
+            raise ValueError(f"Candidate {run_name!r} must map weight keys to numbers")
+        candidates[run_name] = expand_candidate_weights(specification)
+    if "baseline" not in candidates:
+        raise ValueError("Candidate JSON must include a zero-weight 'baseline'")
+    if any(candidates["baseline"].values()):
+        raise ValueError("The baseline candidate must have all orientation weights equal to zero")
+    return candidates
+
+
+def _source_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _git_commit() -> str:
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=PACKAGE_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else "unknown"
+
+
+def _prepare_window_inputs(
+    *,
+    source_path: Path,
+    destination_root: Path,
+    frame_starts: tuple[int, ...],
+    frame_count: int,
+    overwrite: bool,
+) -> dict[int, Path]:
+    if frame_count <= 0:
+        raise ValueError("frame_count must be positive")
+    if len(set(frame_starts)) != len(frame_starts):
+        raise ValueError("frame_starts must be unique")
+
+    with np.load(source_path, allow_pickle=False) as data:
+        source_frames = int(np.asarray(data["global_joint_positions"]).shape[0])
+        payload = {key: np.asarray(data[key]) for key in data.files}
+
+    inputs: dict[int, Path] = {}
+    for frame_start in frame_starts:
+        frame_end = frame_start + frame_count
+        if frame_start < 0 or frame_end > source_frames:
+            raise ValueError(f"Invalid window [{frame_start}, {frame_end}) for source with {source_frames} frames")
+        window_dir = destination_root / f"window_{frame_start:06d}"
+        window_dir.mkdir(parents=True, exist_ok=True)
+        window_path = window_dir / source_path.name
+        if overwrite or not window_path.is_file():
+            window_payload = {
+                key: (value[frame_start:frame_end] if value.ndim > 0 and value.shape[0] == source_frames else value)
+                for key, value in payload.items()
+            }
+            np.savez_compressed(window_path, **window_payload)
+        inputs[frame_start] = window_path
+    return inputs
+
+
+def _run_candidate_window(
+    *,
+    run_name: str,
+    orientation_weights: dict[str, float],
+    frame_start: int,
+    input_path: Path,
+    output_root: Path,
+    task_name: str,
+    source_hash: str,
+    git_commit: str,
+    overwrite: bool,
+) -> dict[str, Any]:
+    output_dir = output_root / "runs" / run_name / f"window_{frame_start:06d}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    result_path = output_dir / f"{task_name}.npz"
+    manifest_path = output_dir / "manifest.json"
+    log_path = output_dir / "run.log"
+    manifest: dict[str, Any] = {
+        "run_name": run_name,
+        "frame_start": frame_start,
+        "orientation_weights": orientation_weights,
+        "input_path": str(input_path),
+        "source_sha256": source_hash,
+        "git_commit": git_commit,
+        "result_path": str(result_path),
+        "status": "running",
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    if result_path.is_file() and not overwrite:
+        manifest["status"] = "reused"
+        manifest["elapsed_seconds"] = 0.0
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return {
+            "run_name": run_name,
+            "frame_start": frame_start,
+            "result_path": str(result_path),
+            "summary": _result_summary(result_path, elapsed_seconds=0.0),
+        }
+
+    retargeting_config = _retargeting_config(
+        input_dir=input_path.parent,
+        output_dir=output_dir,
+        task_name=task_name,
+        orientation_weights=orientation_weights,
+    )
+    start_time = time.monotonic()
+    try:
+        with contextlib.ExitStack() as stack:
+            log_file = stack.enter_context(log_path.open("w", encoding="utf-8"))
+            stack.enter_context(contextlib.redirect_stdout(log_file))
+            stack.enter_context(contextlib.redirect_stderr(log_file))
+            stream_handlers = [
+                handler for handler in logging.getLogger().handlers if isinstance(handler, logging.StreamHandler)
+            ]
+            original_streams = [handler.stream for handler in stream_handlers]
+            try:
+                for handler in stream_handlers:
+                    handler.setStream(log_file)
+                run_retargeting(retargeting_config)
+            finally:
+                for handler, original_stream in zip(
+                    stream_handlers,
+                    original_streams,
+                    strict=True,
+                ):
+                    handler.setStream(original_stream)
+        elapsed_seconds = time.monotonic() - start_time
+        manifest["status"] = "completed"
+        manifest["elapsed_seconds"] = elapsed_seconds
+        summary = _result_summary(
+            result_path,
+            elapsed_seconds=elapsed_seconds,
+        )
+        return {
+            "run_name": run_name,
+            "frame_start": frame_start,
+            "result_path": str(result_path),
+            "summary": summary,
+        }
+    except Exception as exc:
+        manifest["status"] = "failed"
+        manifest["error"] = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+
+def _candidate_metrics(result_paths: list[Path]) -> dict[str, Any]:
+    orientation_errors: list[np.ndarray] = []
+    position_errors: list[np.ndarray] = []
+    joint_accelerations: list[np.ndarray] = []
+    sqp_iterations: list[np.ndarray] = []
+    sqp_stop_reasons: list[np.ndarray] = []
+    orientation_names: tuple[str, ...] | None = None
+    position_names: tuple[str, ...] | None = None
+    orientation_weights: np.ndarray | None = None
+    release_count = 0
+    frame_count = 0
+
+    for result_path in result_paths:
+        with np.load(result_path, allow_pickle=False) as data:
+            current_orientation_names = tuple(
+                str(name) for name in np.asarray(data["orientation_human_joint_names"]).tolist()
+            )
+            current_position_names = tuple(str(name) for name in np.asarray(data["mapped_human_joint_names"]).tolist())
+            current_weights = np.asarray(data["orientation_weights"], dtype=np.float64)
+            if orientation_names is None:
+                orientation_names = current_orientation_names
+                position_names = current_position_names
+                orientation_weights = current_weights
+            elif (
+                current_orientation_names != orientation_names
+                or current_position_names != position_names
+                or not np.array_equal(current_weights, orientation_weights)
+            ):
+                raise ValueError(f"Inconsistent result schema for candidate: {result_path}")
+
+            qpos = np.asarray(data["qpos"], dtype=np.float64)
+            human_positions = np.asarray(data["mapped_human_joints"], dtype=np.float64)
+            robot_positions = np.asarray(data["mapped_robot_joints"], dtype=np.float64)
+            orientation_errors.append(np.asarray(data["orientation_errors_rad"], dtype=np.float64))
+            position_errors.append(np.linalg.norm(robot_positions - human_positions, axis=-1))
+            if qpos.shape[0] >= 3:
+                joint_accelerations.append(np.linalg.norm(np.diff(qpos[:, 7:], n=2, axis=0), axis=1))
+            sqp_iterations.append(np.asarray(data["sqp_iteration_counts"], dtype=np.float64))
+            sqp_stop_reasons.append(np.asarray(data["sqp_stop_reasons"], dtype=str))
+            release_count += sum(
+                int(np.asarray(data[key]).size)
+                for key in (
+                    "foot_sticking_release_frames",
+                    "object_non_penetration_release_frames",
+                )
+            )
+            frame_count += qpos.shape[0]
+
+    assert orientation_names is not None
+    assert position_names is not None
+    assert orientation_weights is not None
+    orientation_array = np.concatenate(orientation_errors, axis=0)
+    position_array = np.concatenate(position_errors, axis=0)
+    acceleration_array = (
+        np.concatenate(joint_accelerations) if joint_accelerations else np.empty((0,), dtype=np.float64)
+    )
+    sqp_array = np.concatenate(sqp_iterations)
+    stop_reason_array = np.concatenate(sqp_stop_reasons)
+
+    return {
+        "frames": frame_count,
+        "orientation_joint_names": list(orientation_names),
+        "position_joint_names": list(position_names),
+        "orientation_weights": orientation_weights.tolist(),
+        "orientation_mean_rad": float(np.mean(orientation_array)),
+        "orientation_p95_rad": float(np.percentile(orientation_array, 95)),
+        "position_mean_m": float(np.mean(position_array)),
+        "position_p95_m": float(np.percentile(position_array, 95)),
+        "joint_second_difference_mean_rad": (float(np.mean(acceleration_array)) if acceleration_array.size else 0.0),
+        "sqp_iterations_mean": float(np.mean(sqp_array)),
+        "sqp_iterations_p95": float(np.percentile(sqp_array, 95)),
+        "sqp_max_iteration_fraction": float(np.mean(stop_reason_array == "max_iterations")),
+        "constraint_release_count": release_count,
+        "orientation_per_link_mean_rad": {
+            name: float(np.mean(orientation_array[:, index])) for index, name in enumerate(orientation_names)
+        },
+        "orientation_per_link_p95_rad": {
+            name: float(np.percentile(orientation_array[:, index], 95)) for index, name in enumerate(orientation_names)
+        },
+        "position_per_link_mean_m": {
+            name: float(np.mean(position_array[:, index])) for index, name in enumerate(position_names)
+        },
+        "position_per_link_p95_m": {
+            name: float(np.percentile(position_array[:, index], 95)) for index, name in enumerate(position_names)
+        },
+    }
+
+
+def balanced_score(
+    metrics: dict[str, Any],
+    baseline: dict[str, Any],
+) -> tuple[float, dict[str, float]]:
+    """Return an equal mean/tail position-orientation score plus stability penalty."""
+
+    ratios = {
+        "position_mean": metrics["position_mean_m"] / baseline["position_mean_m"],
+        "position_p95": metrics["position_p95_m"] / baseline["position_p95_m"],
+        "orientation_mean": metrics["orientation_mean_rad"] / baseline["orientation_mean_rad"],
+        "orientation_p95": metrics["orientation_p95_rad"] / baseline["orientation_p95_rad"],
+        "smoothness": (
+            metrics["joint_second_difference_mean_rad"] / baseline["joint_second_difference_mean_rad"]
+            if baseline["joint_second_difference_mean_rad"] > 0.0
+            else 1.0
+        ),
+    }
+    core_score = (
+        0.35 * ratios["position_mean"]
+        + 0.15 * ratios["position_p95"]
+        + 0.35 * ratios["orientation_mean"]
+        + 0.15 * ratios["orientation_p95"]
+    )
+    stability_penalty = (
+        0.10 * max(0.0, ratios["smoothness"] - 1.0)
+        + 0.25 * metrics["sqp_max_iteration_fraction"]
+        + float(metrics["constraint_release_count"] > 0)
+    )
+    return float(core_score + stability_penalty), ratios
+
+
+def pareto_front(candidate_metrics: dict[str, dict[str, Any]]) -> list[str]:
+    """Return candidates not dominated across mean/tail tracking and smoothness."""
+
+    metric_names = (
+        "position_mean_m",
+        "position_p95_m",
+        "orientation_mean_rad",
+        "orientation_p95_rad",
+        "joint_second_difference_mean_rad",
+    )
+    front: list[str] = []
+    for candidate_name, metrics in candidate_metrics.items():
+        values = np.asarray([metrics[name] for name in metric_names])
+        dominated = False
+        for other_name, other_metrics in candidate_metrics.items():
+            if other_name == candidate_name:
+                continue
+            other_values = np.asarray([other_metrics[name] for name in metric_names])
+            if np.all(other_values <= values) and np.any(other_values < values):
+                dominated = True
+                break
+        if not dominated:
+            front.append(candidate_name)
+    return sorted(front)
+
+
+def main(config: Config) -> None:
+    if config.max_workers <= 0:
+        raise ValueError("max_workers must be positive")
+    source_path = config.data_path / f"{config.task_name}.npz"
+    if not source_path.is_file():
+        raise FileNotFoundError(f"Input motion not found: {source_path}")
+
+    candidates = _load_candidates(config.candidate_file)
+    config.output_root.mkdir(parents=True, exist_ok=True)
+    window_inputs = _prepare_window_inputs(
+        source_path=source_path,
+        destination_root=config.output_root / "_inputs",
+        frame_starts=config.frame_starts,
+        frame_count=config.frame_count,
+        overwrite=config.overwrite,
+    )
+    source_hash = _source_sha256(source_path)
+    git_commit = _git_commit()
+    task_records: dict[str, list[dict[str, Any]]] = {name: [] for name in candidates}
+    failures: dict[str, str] = {}
+
+    for environment_name in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        os.environ[environment_name] = "1"
+
+    tasks = [
+        {
+            "run_name": run_name,
+            "orientation_weights": weights,
+            "frame_start": frame_start,
+            "input_path": input_path,
+            "output_root": config.output_root,
+            "task_name": config.task_name,
+            "source_hash": source_hash,
+            "git_commit": git_commit,
+            "overwrite": config.overwrite,
+        }
+        for run_name, weights in candidates.items()
+        for frame_start, input_path in window_inputs.items()
+    ]
+    print(
+        f"[orientation-search] candidates={len(candidates)}, "
+        f"windows={len(window_inputs)}, tasks={len(tasks)}, workers={config.max_workers}",
+        flush=True,
+    )
+    completed_count = 0
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(
+        max_workers=min(config.max_workers, len(tasks)),
+        mp_context=context,
+    ) as executor:
+        futures = {executor.submit(_run_candidate_window, **task): task for task in tasks}
+        for future in as_completed(futures):
+            task = futures[future]
+            task_key = f"{task['run_name']}/window_{task['frame_start']:06d}"
+            try:
+                record = future.result()
+                task_records[task["run_name"]].append(record)
+                completed_count += 1
+                print(
+                    f"[orientation-search] {completed_count}/{len(tasks)} completed: {task_key}",
+                    flush=True,
+                )
+            except Exception as exc:
+                failures[task_key] = f"{type(exc).__name__}: {exc}"
+                print(
+                    f"[orientation-search] failed: {task_key}: {failures[task_key]}",
+                    flush=True,
+                )
+                if config.fail_fast:
+                    for pending_future in futures:
+                        pending_future.cancel()
+                    raise
+
+    metrics: dict[str, dict[str, Any]] = {}
+    for run_name, records in task_records.items():
+        if len(records) != len(window_inputs):
+            continue
+        ordered_records = sorted(
+            records,
+            key=lambda record: int(record["frame_start"]),
+        )
+        metrics[run_name] = _candidate_metrics([Path(record["result_path"]) for record in ordered_records])
+
+    if "baseline" not in metrics:
+        raise RuntimeError("Baseline did not complete; balanced scores cannot be computed")
+    baseline = metrics["baseline"]
+    scored_candidates: dict[str, Any] = {}
+    for run_name, candidate_metrics in metrics.items():
+        score, ratios = balanced_score(candidate_metrics, baseline)
+        scored_candidates[run_name] = {
+            "score": score,
+            "normalized_ratios": ratios,
+            "weights": candidates[run_name],
+            "metrics": candidate_metrics,
+        }
+    ranking = sorted(
+        scored_candidates,
+        key=lambda name: scored_candidates[name]["score"],
+    )
+    payload = {
+        "task_name": config.task_name,
+        "source_path": str(source_path),
+        "source_sha256": source_hash,
+        "git_commit": git_commit,
+        "frame_starts": list(config.frame_starts),
+        "frame_count": config.frame_count,
+        "score_definition": {
+            "core": (
+                "0.35*position_mean_ratio + 0.15*position_p95_ratio + "
+                "0.35*orientation_mean_ratio + 0.15*orientation_p95_ratio"
+            ),
+            "stability_penalty": (
+                "0.10*max(0,smoothness_ratio-1) + 0.25*max_iteration_fraction + any_constraint_release"
+            ),
+        },
+        "ranking": ranking,
+        "best_candidate": ranking[0],
+        "pareto_front": pareto_front(metrics),
+        "candidates": scored_candidates,
+        "failures": failures,
+    }
+    summary_path = config.output_root / "search_summary.json"
+    summary_path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    print(
+        f"[orientation-search] best={ranking[0]}, "
+        f"score={scored_candidates[ranking[0]]['score']:.6f}, "
+        f"pareto={payload['pareto_front']}, summary={summary_path}",
+        flush=True,
+    )
+    if failures:
+        raise RuntimeError(f"Some orientation-search tasks failed: {failures}")
+
+
+if __name__ == "__main__":
+    main(tyro.cli(Config))

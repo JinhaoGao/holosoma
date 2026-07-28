@@ -22,9 +22,72 @@ from holosoma_retargeting.examples.run_orientation_ablation import (  # noqa: E4
     main,
     orientation_weights_for_variant,
 )
+from holosoma_retargeting.examples.search_orientation_weights import (  # noqa: E402
+    balanced_score,
+    expand_candidate_weights,
+    pareto_front,
+)
 
 
 class OrientationAblationTests(unittest.TestCase):
+    def test_search_candidate_expansion_respects_group_and_joint_overrides(self):
+        weights = expand_candidate_weights(
+            {
+                "all": 0.1,
+                "ankles": 0.2,
+                "LeftFoot": 0.3,
+            }
+        )
+
+        self.assertEqual(tuple(weights), ORIENTATION_JOINTS)
+        self.assertEqual(weights["Hips"], 0.1)
+        self.assertEqual(weights["RightFoot"], 0.2)
+        self.assertEqual(weights["LeftFoot"], 0.3)
+
+    def test_balanced_score_is_dimensionless_and_penalizes_instability(self):
+        baseline = {
+            "position_mean_m": 0.05,
+            "position_p95_m": 0.10,
+            "orientation_mean_rad": 0.50,
+            "orientation_p95_rad": 1.00,
+            "joint_second_difference_mean_rad": 0.20,
+            "sqp_max_iteration_fraction": 0.0,
+            "constraint_release_count": 0,
+        }
+        baseline_score, ratios = balanced_score(baseline, baseline)
+        unstable = dict(baseline)
+        unstable["joint_second_difference_mean_rad"] = 0.40
+        unstable_score, _ = balanced_score(unstable, baseline)
+
+        self.assertAlmostEqual(baseline_score, 1.0)
+        self.assertEqual(
+            set(ratios), {"position_mean", "position_p95", "orientation_mean", "orientation_p95", "smoothness"}
+        )
+        self.assertGreater(unstable_score, baseline_score)
+
+    def test_pareto_front_excludes_dominated_candidates(self):
+        baseline_metrics = {
+            "position_mean_m": 1.0,
+            "position_p95_m": 1.0,
+            "orientation_mean_rad": 1.0,
+            "orientation_p95_rad": 1.0,
+            "joint_second_difference_mean_rad": 1.0,
+        }
+        improved_metrics = dict(baseline_metrics)
+        improved_metrics["orientation_mean_rad"] = 0.5
+        dominated_metrics = {name: value * 2.0 for name, value in baseline_metrics.items()}
+
+        self.assertEqual(
+            pareto_front(
+                {
+                    "baseline": baseline_metrics,
+                    "improved": improved_metrics,
+                    "dominated": dominated_metrics,
+                }
+            ),
+            ["improved"],
+        )
+
     def test_profiles_share_diagnostic_links_and_only_enable_selected_groups(self):
         baseline = orientation_weights_for_variant("baseline", 1.0)
         feet = orientation_weights_for_variant("feet", 0.5)
