@@ -60,7 +60,8 @@ class RetargeterConfig:
     """Whether to enforce joint limits during retargeting."""
 
     activate_obj_non_penetration: bool = True
-    """Whether to enforce object non-penetration constraints."""
+    """Whether to enforce object non-penetration constraints.
+    Ground non-penetration remains active when this is disabled."""
 
     activate_foot_sticking: bool = True
     """Whether to enforce foot sticking constraints."""
@@ -71,11 +72,44 @@ class RetargeterConfig:
     foot_sticking_tolerance: float = 1e-3
     """Tolerance for foot sticking constraints in x, y."""
 
+    foot_sticking_fallback_tolerance: float | None = 0.02
+    """Fallback XY tolerance used only when the normal foot-sticking problem is infeasible.
+    Set to None to disable the fallback."""
+
+    release_foot_sticking_on_infeasible: bool = True
+    """Whether to release only the current frame's foot-sticking constraints if
+    both the normal and relaxed problems remain infeasible."""
+
+    release_object_non_penetration_on_infeasible: bool = False
+    """Opt in to releasing only the current frame's robot-object non-penetration
+    constraints as a last local fallback. Ground constraints remain enabled.
+    Disabled by default because such frames no longer satisfy the collision
+    acceptance criterion."""
+
+    retry_without_foot_sticking_on_infeasible: bool = True
+    """Whether to retry an entire sequence without foot sticking when a local
+    release still cannot recover a feasible trajectory."""
+
     foot_lock: FootLockConfig = field(default_factory=FootLockConfig)
     """Configuration for explicit frame-range based foot locking."""
 
     step_size: float = 0.2
     """Trust region for each SQP iteration."""
+
+    sqp_max_iterations: int = 50
+    """Safety cap for SQP iterations per frame."""
+
+    sqp_min_iterations: int = 4
+    """Minimum SQP iterations before convergence-based stopping is allowed."""
+
+    sqp_convergence_patience: int = 3
+    """Stop after this many consecutive iterations without a significant cost decrease."""
+
+    sqp_abs_cost_tolerance: float = 1e-9
+    """Absolute cost decrease below which an SQP iteration counts as stalled."""
+
+    sqp_rel_cost_tolerance: float = 1e-7
+    """Relative cost decrease below which an SQP iteration counts as stalled."""
 
     visualize: bool = False
     """Whether to visualize the retargeting process."""

@@ -1,0 +1,2111 @@
+{
+  "generator": {
+    "name": "CoACD",
+    "parameters": {
+      "apx_mode": "ch",
+      "decimate": false,
+      "extrude": false,
+      "extrude_margin": 0.01,
+      "max_ch_vertex": 64,
+      "max_convex_hull": 64,
+      "mcts_iterations": 150,
+      "mcts_max_depth": 3,
+      "mcts_nodes": 20,
+      "merge": true,
+      "pca": false,
+      "preprocess_mode": "auto",
+      "preprocess_resolution": 60,
+      "real_metric": true,
+      "resolution": 3000,
+      "seed": 0,
+      "threshold": 0.02
+    },
+    "version": "1.0.11"
+  },
+  "objects": {
+    "clothesstand": {
+      "collision_part_count": 26,
+      "collision_to_global_hull_volume_ratio": 0.09771986495521638,
+      "collision_volume_sum_m3": 0.009663667802264011,
+      "global_convex_hull_volume_m3": 0.09889153865176474,
+      "parts": [
+        {
+          "faces": 568,
+          "file": "clothesstand/collision/clothesstand_collision_000.obj",
+          "sha256": "120ce9d7aac5dbe207eaf2eff863e8c410d4aa0d05eb5b9c8084d5f51a560675",
+          "vertices": 286,
+          "volume_m3": 0.0021001093102907104
+        },
+        {
+          "faces": 302,
+          "file": "clothesstand/collision/clothesstand_collision_001.obj",
+          "sha256": "7dfa461b9ade554998ff1efe668408bb26e5a7d3cfc222bacc9036a84d6df3a3",
+          "vertices": 153,
+          "volume_m3": 0.001340327516805278
+        },
+        {
+          "faces": 124,
+          "file": "clothesstand/collision/clothesstand_collision_002.obj",
+          "sha256": "d204da07609a8296335a718fc288e3f24fe3b7b6efb8c046f6213d73396f4eb1",
+          "vertices": 64,
+          "volume_m3": 0.0002044746791077134
+        },
+        {
+          "faces": 202,
+          "file": "clothesstand/collision/clothesstand_collision_003.obj",
+          "sha256": "805409397d80f02dabee0a20b7a988f0b1deae28b16ba860c813ef11ea329eed",
+          "vertices": 103,
+          "volume_m3": 0.00033660949219827143
+        },
+        {
+          "faces": 154,
+          "file": "clothesstand/collision/clothesstand_collision_004.obj",
+          "sha256": "7d1a36d502240b00cdb7b5e5f80b78c312dfdc99f7b9860a28a238f5df28efb9",
+          "vertices": 79,
+          "volume_m3": 0.0003666964185706655
+        },
+        {
+          "faces": 204,
+          "file": "clothesstand/collision/clothesstand_collision_005.obj",
+          "sha256": "048a47e2cd80e095ef3a8339413e0f2ac0550bad237e19a8a00058829c162394",
+          "vertices": 104,
+          "volume_m3": 0.00038592452451842495
+        },
+        {
+          "faces": 536,
+          "file": "clothesstand/collision/clothesstand_collision_006.obj",
+          "sha256": "eb70794e88e6fb0e75c2716f828e89339a7dffb18e801bcb267375babd1efac1",
+          "vertices": 270,
+          "volume_m3": 0.001676683184685914
+        },
+        {
+          "faces": 192,
+          "file": "clothesstand/collision/clothesstand_collision_007.obj",
+          "sha256": "975dbfbd94062b3b279730516e64f7090821d31c2561e2b3e2d9048f8e050df8",
+          "vertices": 98,
+          "volume_m3": 0.0004921267124566812
+        },
+        {
+          "faces": 116,
+          "file": "clothesstand/collision/clothesstand_collision_008.obj",
+          "sha256": "698da87523fc11c5850e255879d4babf71244db11501c008f3ce611c8e4977fe",
+          "vertices": 60,
+          "volume_m3": 0.00010581022856068425
+        },
+        {
+          "faces": 98,
+          "file": "clothesstand/collision/clothesstand_collision_009.obj",
+          "sha256": "7691756118690325648f9dda5345a77025e5d37decb20984225d239184e2db2c",
+          "vertices": 51,
+          "volume_m3": 0.00021651929573656304
+        },
+        {
+          "faces": 200,
+          "file": "clothesstand/collision/clothesstand_collision_010.obj",
+          "sha256": "bb5a51d4a739d7abd0d2a6767e07b71843b11e39f0c0b283cece83d8d6809580",
+          "vertices": 102,
+          "volume_m3": 0.00019039242541567825
+        },
+        {
+          "faces": 190,
+          "file": "clothesstand/collision/clothesstand_collision_011.obj",
+          "sha256": "7025636e7a65ae2274904e1c209b8a5017de36f23a4872dc62f7bda40be36276",
+          "vertices": 97,
+          "volume_m3": 0.00012358914668751642
+        },
+        {
+          "faces": 192,
+          "file": "clothesstand/collision/clothesstand_collision_012.obj",
+          "sha256": "fd5662328d85c673ba6efa3c07b49ad5fe96b89c45df95c3f02ccdb718101070",
+          "vertices": 98,
+          "volume_m3": 0.00023311567215608531
+        },
+        {
+          "faces": 134,
+          "file": "clothesstand/collision/clothesstand_collision_013.obj",
+          "sha256": "0d57e1d8b48a709e2881b201d9ca24a31759b147ff58f72b004ee64f67fd1786",
+          "vertices": 69,
+          "volume_m3": 7.43146632981284e-05
+        },
+        {
+          "faces": 172,
+          "file": "clothesstand/collision/clothesstand_collision_014.obj",
+          "sha256": "324c6c9e13d82a0ae20a72a2e656ceebb3e455bf3f875cd3333818210f5e4315",
+          "vertices": 88,
+          "volume_m3": 0.0005054701495950167
+        },
+        {
+          "faces": 220,
+          "file": "clothesstand/collision/clothesstand_collision_015.obj",
+          "sha256": "3d5354ed69bad0fe9280b245e3c8123bad56c1fce4ec9803ab93e40d9cf291e5",
+          "vertices": 112,
+          "volume_m3": 0.00020141014234665582
+        },
+        {
+          "faces": 116,
+          "file": "clothesstand/collision/clothesstand_collision_016.obj",
+          "sha256": "71c2d2dc857c9cc77e0de6c8dbe8f00f240ade3fe09778cb1c8462e3a13f1766",
+          "vertices": 60,
+          "volume_m3": 0.00010232622900443035
+        },
+        {
+          "faces": 234,
+          "file": "clothesstand/collision/clothesstand_collision_017.obj",
+          "sha256": "06b7f115d180439275de331aa5dfda6ce3dd1fa83022e4be01d5d9956c10a997",
+          "vertices": 119,
+          "volume_m3": 0.00025190661440590184
+        },
+        {
+          "faces": 158,
+          "file": "clothesstand/collision/clothesstand_collision_018.obj",
+          "sha256": "f5fbd6bfc7965adf0b032672772a0d4085a8f7da2fedd8d4d039f111e0adf892",
+          "vertices": 81,
+          "volume_m3": 0.0001148509691668247
+        },
+        {
+          "faces": 118,
+          "file": "clothesstand/collision/clothesstand_collision_019.obj",
+          "sha256": "1893fa3ae77f321b866332577a82c3980a1910676013a718f70d0255e5c79683",
+          "vertices": 61,
+          "volume_m3": 3.442200286475867e-05
+        },
+        {
+          "faces": 134,
+          "file": "clothesstand/collision/clothesstand_collision_020.obj",
+          "sha256": "e71580e276d837e50175213e894b04e44f105a369676e5dec83a844f1e2e41e0",
+          "vertices": 69,
+          "volume_m3": 5.1210785563250476e-05
+        },
+        {
+          "faces": 202,
+          "file": "clothesstand/collision/clothesstand_collision_021.obj",
+          "sha256": "f77df1f8e9acb9ce27abc7452bef49438130c193251f5e71bddf326efc6ed77a",
+          "vertices": 103,
+          "volume_m3": 0.000223327516636335
+        },
+        {
+          "faces": 110,
+          "file": "clothesstand/collision/clothesstand_collision_022.obj",
+          "sha256": "9c43997c6740a5953ad239548be787b187c48ff92b0ee6179d4703a7f7ff2f71",
+          "vertices": 57,
+          "volume_m3": 5.2726564189770196e-05
+        },
+        {
+          "faces": 190,
+          "file": "clothesstand/collision/clothesstand_collision_023.obj",
+          "sha256": "2ab139cd82ccf8af2a696fa28f943a0138867fa475a15f8aeaebc2a078236730",
+          "vertices": 97,
+          "volume_m3": 0.00012807327189629032
+        },
+        {
+          "faces": 110,
+          "file": "clothesstand/collision/clothesstand_collision_024.obj",
+          "sha256": "9f2229abb8151c33cec71d3287d097eea7602252ff1e3502a15d0159d679fb52",
+          "vertices": 57,
+          "volume_m3": 7.510827415238989e-05
+        },
+        {
+          "faces": 106,
+          "file": "clothesstand/collision/clothesstand_collision_025.obj",
+          "sha256": "7a89c0e667e95dcc4b417e55aef9fc255437e6aad4572e7b1a7278707e39daef",
+          "vertices": 55,
+          "volume_m3": 7.614201195407428e-05
+        }
+      ],
+      "source_mesh": "clothesstand/clothesstand.obj",
+      "source_sha256": "60a20e223309f3f85bdcbb270a6eaaef657fbe90a83339795059395b7ee8a46d"
+    },
+    "floorlamp": {
+      "collision_part_count": 10,
+      "collision_to_global_hull_volume_ratio": 0.08404507629046373,
+      "collision_volume_sum_m3": 0.0067410914001458325,
+      "global_convex_hull_volume_m3": 0.0802080466540158,
+      "parts": [
+        {
+          "faces": 460,
+          "file": "floorlamp/collision/floorlamp_collision_000.obj",
+          "sha256": "4159ce7fca699ea16754136e501525ec2799dc60666e41713bc74cfca35c9239",
+          "vertices": 232,
+          "volume_m3": 0.0025900280934476444
+        },
+        {
+          "faces": 212,
+          "file": "floorlamp/collision/floorlamp_collision_001.obj",
+          "sha256": "029fe27acffc2cd7a4b6a07027462545b25cde95c8222e94e57d2cdff8e483a1",
+          "vertices": 108,
+          "volume_m3": 0.00018410541312410705
+        },
+        {
+          "faces": 618,
+          "file": "floorlamp/collision/floorlamp_collision_002.obj",
+          "sha256": "334343379da66f4b1d03ed24d4f5ff75b6e44ecc4074af78a3d2f879579108c2",
+          "vertices": 311,
+          "volume_m3": 0.001607188213947323
+        },
+        {
+          "faces": 232,
+          "file": "floorlamp/collision/floorlamp_collision_003.obj",
+          "sha256": "61848066e97738bd25a1ba8389583954592de3d7a889e17079c0e9718ccd53d2",
+          "vertices": 118,
+          "volume_m3": 0.000420862312891451
+        },
+        {
+          "faces": 436,
+          "file": "floorlamp/collision/floorlamp_collision_004.obj",
+          "sha256": "2d42e915d3a48a8666f46d4ba6dc063ac516771bda5dbff4b696e2ef0d818f3f",
+          "vertices": 220,
+          "volume_m3": 0.0011703552193297305
+        },
+        {
+          "faces": 58,
+          "file": "floorlamp/collision/floorlamp_collision_005.obj",
+          "sha256": "723cf210bf50e85b2a15cb003b853f79f8b724eb1df30151d5d3aa64757f2707",
+          "vertices": 31,
+          "volume_m3": 8.869827702334998e-05
+        },
+        {
+          "faces": 90,
+          "file": "floorlamp/collision/floorlamp_collision_006.obj",
+          "sha256": "51d9b533d7ed21117e9a6e9fbf72f1babb144da1fcddbfab3d9b8a7cb9f87680",
+          "vertices": 47,
+          "volume_m3": 4.21649946860909e-05
+        },
+        {
+          "faces": 262,
+          "file": "floorlamp/collision/floorlamp_collision_007.obj",
+          "sha256": "d3f3c2143bba1283e56c9370ac7666b5c3bf370b987e794c231b7bfa6903bbff",
+          "vertices": 133,
+          "volume_m3": 0.0003320224463846666
+        },
+        {
+          "faces": 158,
+          "file": "floorlamp/collision/floorlamp_collision_008.obj",
+          "sha256": "ae6ab18c5ab3117bcdb1ba79f8c2b059640b3a64915d9d8ec072c97c2c353029",
+          "vertices": 81,
+          "volume_m3": 0.00024218597807074775
+        },
+        {
+          "faces": 86,
+          "file": "floorlamp/collision/floorlamp_collision_009.obj",
+          "sha256": "f27fa4051b6ec2677460d3cee31469d73ec0154235ce3dcc43bc87bb2eaf1806",
+          "vertices": 45,
+          "volume_m3": 6.348045124072143e-05
+        }
+      ],
+      "source_mesh": "floorlamp/floorlamp.obj",
+      "source_sha256": "b6886bfd29cbaf80af583d2e6b1574d7e842b35703016d55466e1463db08c029"
+    },
+    "largebox": {
+      "collision_part_count": 9,
+      "collision_to_global_hull_volume_ratio": 0.9671765994710936,
+      "collision_volume_sum_m3": 0.036205426912102025,
+      "global_convex_hull_volume_m3": 0.0374341427738235,
+      "parts": [
+        {
+          "faces": 536,
+          "file": "largebox/collision/largebox_collision_000.obj",
+          "sha256": "b95e35980c29d1f060f247519d4abd8be6a562fc7550e33eba885ab663c30c13",
+          "vertices": 270,
+          "volume_m3": 0.0049877058975025595
+        },
+        {
+          "faces": 460,
+          "file": "largebox/collision/largebox_collision_001.obj",
+          "sha256": "bc28cc784eba25d37dd3339be8317f429d8df3a4e322cbd60d40e172fea98d8c",
+          "vertices": 232,
+          "volume_m3": 0.001104315446420423
+        },
+        {
+          "faces": 298,
+          "file": "largebox/collision/largebox_collision_002.obj",
+          "sha256": "cc291b0dddbe3c625cebaaff0f7cc1819282b6956b53a19acc6acdd8dada6695",
+          "vertices": 151,
+          "volume_m3": 0.005380307672441311
+        },
+        {
+          "faces": 394,
+          "file": "largebox/collision/largebox_collision_003.obj",
+          "sha256": "1a7ee9d4a43271d7306b1962c8d98883f67c9b454364dc66ae5d2ff84e2732f5",
+          "vertices": 199,
+          "volume_m3": 0.006973341013554781
+        },
+        {
+          "faces": 274,
+          "file": "largebox/collision/largebox_collision_004.obj",
+          "sha256": "b9979fdeb8f1ec6f804be51f13c7cd0863559471dd9d1f4cabc08f77acf2dcc8",
+          "vertices": 139,
+          "volume_m3": 0.00778352796121365
+        },
+        {
+          "faces": 100,
+          "file": "largebox/collision/largebox_collision_005.obj",
+          "sha256": "2f8f75591be4d278e9ea31a727d45e8f6ff64de34db33e82624199f49cbb9445",
+          "vertices": 52,
+          "volume_m3": 0.003949382375130127
+        },
+        {
+          "faces": 512,
+          "file": "largebox/collision/largebox_collision_006.obj",
+          "sha256": "0b6ea1a83bb1a39d6017c7ec2115409deb09ff64ad67921a0ac22431cc295d15",
+          "vertices": 258,
+          "volume_m3": 0.0025231174770292395
+        },
+        {
+          "faces": 376,
+          "file": "largebox/collision/largebox_collision_007.obj",
+          "sha256": "bf3c60f3d42b225613870711c112a6bc237ce30dfb80b1f0c59811e4e82a06e9",
+          "vertices": 190,
+          "volume_m3": 0.0023024600965368576
+        },
+        {
+          "faces": 470,
+          "file": "largebox/collision/largebox_collision_008.obj",
+          "sha256": "453cfc4da1573f6b38c176318efe182134472aa51675d3e6748178da52b79cb9",
+          "vertices": 237,
+          "volume_m3": 0.0012012689722730797
+        }
+      ],
+      "source_mesh": "largebox/largebox.obj",
+      "source_sha256": "dbcc11281f62e9226f49165252375080d2e490e5a3f0ab6ba917acbd8f7abc1c"
+    },
+    "largetable": {
+      "collision_part_count": 6,
+      "collision_to_global_hull_volume_ratio": 0.1659601606346608,
+      "collision_volume_sum_m3": 0.023976585760864713,
+      "global_convex_hull_volume_m3": 0.14447193633203317,
+      "parts": [
+        {
+          "faces": 432,
+          "file": "largetable/collision/largetable_collision_000.obj",
+          "sha256": "65bd64f6191164b5c6f32827b3444da50ba2bc1bfa2d4361e1c93da784e7736c",
+          "vertices": 218,
+          "volume_m3": 0.0047404776908622675
+        },
+        {
+          "faces": 454,
+          "file": "largetable/collision/largetable_collision_001.obj",
+          "sha256": "6a6874dac99bbac515fc0d08ce3b5903d351d10fcea4c3c20b45c60e41148631",
+          "vertices": 229,
+          "volume_m3": 0.013765929519612178
+        },
+        {
+          "faces": 412,
+          "file": "largetable/collision/largetable_collision_002.obj",
+          "sha256": "4f42275a855435e30ec06d22f51794b31d5ea5435192dfa04b68f034eb6bb2c6",
+          "vertices": 208,
+          "volume_m3": 0.0012851736254710863
+        },
+        {
+          "faces": 334,
+          "file": "largetable/collision/largetable_collision_003.obj",
+          "sha256": "fea252425eae0fad442010f477635efcee10c2ed4c6c304f025047fc23a47f29",
+          "vertices": 169,
+          "volume_m3": 0.0014521352552234444
+        },
+        {
+          "faces": 392,
+          "file": "largetable/collision/largetable_collision_004.obj",
+          "sha256": "08147c2f1a1b4e0d86c6cdde0b0e8fb6231895cc0e2305cfa9772c801c8fdcb1",
+          "vertices": 198,
+          "volume_m3": 0.0012854615572135922
+        },
+        {
+          "faces": 344,
+          "file": "largetable/collision/largetable_collision_005.obj",
+          "sha256": "fc8ae4e4de08f6262fe15a2b88f768ced13feada5aa4c95bed395fcc1dbeba51",
+          "vertices": 174,
+          "volume_m3": 0.0014474081124821452
+        }
+      ],
+      "source_mesh": "largetable/largetable.obj",
+      "source_sha256": "b2375fe0d799a37d5ca1a0a8e15ae7cfb476bed0b0b5449a2698ed57d37e378c"
+    },
+    "monitor": {
+      "collision_part_count": 16,
+      "collision_to_global_hull_volume_ratio": 0.39724602707469847,
+      "collision_volume_sum_m3": 0.005552774103389494,
+      "global_convex_hull_volume_m3": 0.01397817404060619,
+      "parts": [
+        {
+          "faces": 286,
+          "file": "monitor/collision/monitor_collision_000.obj",
+          "sha256": "2d10ca9164f356258c5dda9a58ac2f7d74d2fe1b6373f8685342edf69b388407",
+          "vertices": 145,
+          "volume_m3": 4.995306120052626e-05
+        },
+        {
+          "faces": 256,
+          "file": "monitor/collision/monitor_collision_001.obj",
+          "sha256": "7b865002ce85a2884bd3a60d5150f39c8ec7281a7562c5c32717343db4ab066f",
+          "vertices": 130,
+          "volume_m3": 6.800257873886765e-05
+        },
+        {
+          "faces": 244,
+          "file": "monitor/collision/monitor_collision_002.obj",
+          "sha256": "a83dd174f576c027c2ec67ec82dc5be907b2deddea12d87c42e3c44e80b39594",
+          "vertices": 124,
+          "volume_m3": 8.435451304427137e-05
+        },
+        {
+          "faces": 444,
+          "file": "monitor/collision/monitor_collision_003.obj",
+          "sha256": "e57dc3114692d198a194012e00c784c21049246e0d654b7b99c5bbff557ff454",
+          "vertices": 224,
+          "volume_m3": 0.0008964172531042571
+        },
+        {
+          "faces": 494,
+          "file": "monitor/collision/monitor_collision_004.obj",
+          "sha256": "2a5b11768bd855d2ce25061cda9a79bfd8b74f5ad91c3083e463afa8bb2d6c2a",
+          "vertices": 249,
+          "volume_m3": 0.0009876948946414136
+        },
+        {
+          "faces": 138,
+          "file": "monitor/collision/monitor_collision_005.obj",
+          "sha256": "a884faf5cc4e910c4525b5d60e880d9f3ce0d1ddc4e1d02d4cef07fa58d54cb5",
+          "vertices": 71,
+          "volume_m3": 0.00011230057579923989
+        },
+        {
+          "faces": 250,
+          "file": "monitor/collision/monitor_collision_006.obj",
+          "sha256": "9d854efad5fa09df4d099981b998d36a34c6f1d1156a03b27315af04fae46650",
+          "vertices": 127,
+          "volume_m3": 0.0004451302674250521
+        },
+        {
+          "faces": 414,
+          "file": "monitor/collision/monitor_collision_007.obj",
+          "sha256": "09483ea4eac10281b0b7c64f5d2d75dc16a51e027d88c03ceb7a510885545c7d",
+          "vertices": 209,
+          "volume_m3": 0.0005247089005216572
+        },
+        {
+          "faces": 118,
+          "file": "monitor/collision/monitor_collision_008.obj",
+          "sha256": "b9bd134c557b7cac1a81fc024d2a7fb207e26074ec951903f7cbd37b3b5ab0c8",
+          "vertices": 61,
+          "volume_m3": 7.813299950604666e-05
+        },
+        {
+          "faces": 414,
+          "file": "monitor/collision/monitor_collision_009.obj",
+          "sha256": "1eae05ba3ec573bf1121010201a9f2cf6d9ad1f9b5dd55ec49f732e6c9e5982e",
+          "vertices": 209,
+          "volume_m3": 0.000799353371445976
+        },
+        {
+          "faces": 156,
+          "file": "monitor/collision/monitor_collision_010.obj",
+          "sha256": "6774b2541b6469208ec3f756ba83426e9a31f7e55495192c04e98a50e1d680d7",
+          "vertices": 80,
+          "volume_m3": 2.204334508968318e-05
+        },
+        {
+          "faces": 232,
+          "file": "monitor/collision/monitor_collision_011.obj",
+          "sha256": "1eaaa00b7535c492d769ee25f507b1366da3a12b30fb35dc7554e83470e052cc",
+          "vertices": 118,
+          "volume_m3": 7.824340835529835e-05
+        },
+        {
+          "faces": 454,
+          "file": "monitor/collision/monitor_collision_012.obj",
+          "sha256": "e4a926ab3a128f1948064c6a6bd029fd34f1ee794a051ae0a1767ea0f4fe4fd2",
+          "vertices": 229,
+          "volume_m3": 0.0007837472766295202
+        },
+        {
+          "faces": 778,
+          "file": "monitor/collision/monitor_collision_013.obj",
+          "sha256": "f250dee2368d54ab5f4017639842dd25be3d20e45c6bf99e756ae6baa50e693e",
+          "vertices": 391,
+          "volume_m3": 0.0005410041889583685
+        },
+        {
+          "faces": 78,
+          "file": "monitor/collision/monitor_collision_014.obj",
+          "sha256": "2ecc4de69438200a331f53255ec67e103b8e7451ca7ee5b9cb4e1bf0e049ebc0",
+          "vertices": 41,
+          "volume_m3": 7.4021497446851496e-06
+        },
+        {
+          "faces": 82,
+          "file": "monitor/collision/monitor_collision_015.obj",
+          "sha256": "cbbbb9991effa3eea18150746cff5864c6b1c467ec94e1f30c3e427cda8c656d",
+          "vertices": 43,
+          "volume_m3": 7.42853191846295e-05
+        }
+      ],
+      "source_mesh": "monitor/monitor.obj",
+      "source_sha256": "2b49ad22e4b6b0d333db6ffdc5aad4409766f0c73fa6e24ee5076edf4f87c074"
+    },
+    "plasticbox": {
+      "collision_part_count": 43,
+      "collision_to_global_hull_volume_ratio": 0.14811796377400482,
+      "collision_volume_sum_m3": 0.007647803610741477,
+      "global_convex_hull_volume_m3": 0.05163319435318683,
+      "parts": [
+        {
+          "faces": 62,
+          "file": "plasticbox/collision/plasticbox_collision_000.obj",
+          "sha256": "258dc40cf594b0e76fdfb8ab38b8238d057c3937721c47b29ecb826e21f8efba",
+          "vertices": 33,
+          "volume_m3": 0.00019946900689898415
+        },
+        {
+          "faces": 134,
+          "file": "plasticbox/collision/plasticbox_collision_001.obj",
+          "sha256": "e75fd9c4d730db5f86e50fb6c960a7fc7fe10aaeed6f32517fd4158d214c6c89",
+          "vertices": 69,
+          "volume_m3": 0.0009316192937473409
+        },
+        {
+          "faces": 176,
+          "file": "plasticbox/collision/plasticbox_collision_002.obj",
+          "sha256": "65a81cd7bfbfa3bd8419de7c22175f9ffc9a86753b8ff894f8f33c941b249a15",
+          "vertices": 90,
+          "volume_m3": 0.000809566028749308
+        },
+        {
+          "faces": 176,
+          "file": "plasticbox/collision/plasticbox_collision_003.obj",
+          "sha256": "d02c09524c5aba6fbd7f4ee381714bf3c9bf7b943635e0807f57f7dad87cb72e",
+          "vertices": 90,
+          "volume_m3": 0.000862539565117987
+        },
+        {
+          "faces": 104,
+          "file": "plasticbox/collision/plasticbox_collision_004.obj",
+          "sha256": "1e0963c3038228e865477166d85cce4d2b6f3bdfb5da550c382345d52ae71505",
+          "vertices": 54,
+          "volume_m3": 0.0001055163965464746
+        },
+        {
+          "faces": 250,
+          "file": "plasticbox/collision/plasticbox_collision_005.obj",
+          "sha256": "d6028f1e7c021a0d3f214053ecef6d10dfdce16e0b1a079bbb455aba2024fb10",
+          "vertices": 127,
+          "volume_m3": 2.170189307606461e-05
+        },
+        {
+          "faces": 124,
+          "file": "plasticbox/collision/plasticbox_collision_006.obj",
+          "sha256": "3af4dba3512c9813992fca9d2a3a806d8f27661be608ac97e9a7d78a9ff2ff99",
+          "vertices": 64,
+          "volume_m3": 0.00011481751626983778
+        },
+        {
+          "faces": 36,
+          "file": "plasticbox/collision/plasticbox_collision_007.obj",
+          "sha256": "34de70b41633aee4488fc1b67261f3f805f0d780a5001f0bdd522ed0cd839972",
+          "vertices": 20,
+          "volume_m3": 2.9893643268458814e-05
+        },
+        {
+          "faces": 240,
+          "file": "plasticbox/collision/plasticbox_collision_008.obj",
+          "sha256": "a8421a9dd56dcdbeb0f3dfc7d75ed7818ff0b7cb6bf03f59442c9789d403f14f",
+          "vertices": 122,
+          "volume_m3": 0.00026108853570120765
+        },
+        {
+          "faces": 62,
+          "file": "plasticbox/collision/plasticbox_collision_009.obj",
+          "sha256": "2a08956026d653570c96048364141b67ac9c5ccaa1ee3f182687acd9920443d1",
+          "vertices": 33,
+          "volume_m3": 0.00033796600891101806
+        },
+        {
+          "faces": 30,
+          "file": "plasticbox/collision/plasticbox_collision_010.obj",
+          "sha256": "fadb538a18027351a23863399f61df561d0b206800e5fdab4ade25d4c40e5b94",
+          "vertices": 17,
+          "volume_m3": 3.314636065500451e-05
+        },
+        {
+          "faces": 188,
+          "file": "plasticbox/collision/plasticbox_collision_011.obj",
+          "sha256": "777abc9ea3bb99863db2dc92b8f700c64d4000a9721bc9f29593c62579c1051d",
+          "vertices": 96,
+          "volume_m3": 8.638830408646414e-05
+        },
+        {
+          "faces": 210,
+          "file": "plasticbox/collision/plasticbox_collision_012.obj",
+          "sha256": "0cec3b2302002608a33b5134242cca8e81b349ac27cf29d98dca702f71aa2be9",
+          "vertices": 107,
+          "volume_m3": 0.0001605499580030343
+        },
+        {
+          "faces": 114,
+          "file": "plasticbox/collision/plasticbox_collision_013.obj",
+          "sha256": "20b9e88f9beacdd2b69f3d4a9409eab1182f88c95698f8e170bd8383b92e904e",
+          "vertices": 59,
+          "volume_m3": 0.0008251295950208601
+        },
+        {
+          "faces": 82,
+          "file": "plasticbox/collision/plasticbox_collision_014.obj",
+          "sha256": "d015f550c45f1ad7e79a3e1823392dd355fef45b4be4900e3bdc0f5b567f5f84",
+          "vertices": 43,
+          "volume_m3": 0.00011350131329735672
+        },
+        {
+          "faces": 76,
+          "file": "plasticbox/collision/plasticbox_collision_015.obj",
+          "sha256": "4ebc0e148176aafcd0442d8865a35f898bcef9936de88824f2c256854ed6c1ce",
+          "vertices": 40,
+          "volume_m3": 0.0004956704839253896
+        },
+        {
+          "faces": 84,
+          "file": "plasticbox/collision/plasticbox_collision_016.obj",
+          "sha256": "cef2165e8c26d1399ae6fd57f7003496aea42ec4c16e7551aede8f72c94d9a3b",
+          "vertices": 44,
+          "volume_m3": 0.00012023310264923247
+        },
+        {
+          "faces": 164,
+          "file": "plasticbox/collision/plasticbox_collision_017.obj",
+          "sha256": "4f1cd7fd8163268f55444e20b77c92f6b419166620abb42937a6be2afd404219",
+          "vertices": 84,
+          "volume_m3": 6.0405174549111196e-05
+        },
+        {
+          "faces": 114,
+          "file": "plasticbox/collision/plasticbox_collision_018.obj",
+          "sha256": "10cb8100b7e8399bd7322c207fb2ef6908810151567fb833e1bec64219f74bb8",
+          "vertices": 59,
+          "volume_m3": 2.352359651333022e-05
+        },
+        {
+          "faces": 138,
+          "file": "plasticbox/collision/plasticbox_collision_019.obj",
+          "sha256": "09b6251ca66771427d588bf18ac95bfad791c19dea73c2efc31dc042386162e2",
+          "vertices": 71,
+          "volume_m3": 2.329198607129061e-05
+        },
+        {
+          "faces": 122,
+          "file": "plasticbox/collision/plasticbox_collision_020.obj",
+          "sha256": "d11fe495b24813532dfe01f076d82339abe2a721de70974b84a5210fec874380",
+          "vertices": 63,
+          "volume_m3": 0.0002049855389655163
+        },
+        {
+          "faces": 68,
+          "file": "plasticbox/collision/plasticbox_collision_021.obj",
+          "sha256": "bb7c5583cfbe44666c24e47e638ad53c69c3439c7116fb9e0329abc3e7d652cd",
+          "vertices": 36,
+          "volume_m3": 3.552775325389404e-05
+        },
+        {
+          "faces": 234,
+          "file": "plasticbox/collision/plasticbox_collision_022.obj",
+          "sha256": "e3fdc63b1e6d131309796fe07de069e425c43927d33ad6dbf1da3d4652e35b5d",
+          "vertices": 119,
+          "volume_m3": 2.5067715566544006e-05
+        },
+        {
+          "faces": 204,
+          "file": "plasticbox/collision/plasticbox_collision_023.obj",
+          "sha256": "f6f2747f43bc23fa91f956d5a8d044c96129902e37eb4bccabc1052553b9d584",
+          "vertices": 104,
+          "volume_m3": 0.000160744242178459
+        },
+        {
+          "faces": 110,
+          "file": "plasticbox/collision/plasticbox_collision_024.obj",
+          "sha256": "81327b3949b5275d3145c9b123edaf8f1ae422c5cd8d074631df1577c74a42dd",
+          "vertices": 57,
+          "volume_m3": 5.8064264867300915e-05
+        },
+        {
+          "faces": 234,
+          "file": "plasticbox/collision/plasticbox_collision_025.obj",
+          "sha256": "7b53592e97aa1784e1922104c1f1b9a10492586f0139f977fd9fce7dc0ba6e3a",
+          "vertices": 119,
+          "volume_m3": 2.632548771103687e-05
+        },
+        {
+          "faces": 96,
+          "file": "plasticbox/collision/plasticbox_collision_026.obj",
+          "sha256": "3a53e9ae894c99242ffa3b890c1e2524f1c5319d9da0359702c493b065447bc9",
+          "vertices": 50,
+          "volume_m3": 0.0001494011647770807
+        },
+        {
+          "faces": 98,
+          "file": "plasticbox/collision/plasticbox_collision_027.obj",
+          "sha256": "798e8525dbcb9b8fda0020b200c97b58ccb6b019ed48c3428844a5df33edca95",
+          "vertices": 51,
+          "volume_m3": 2.3664592183921907e-05
+        },
+        {
+          "faces": 110,
+          "file": "plasticbox/collision/plasticbox_collision_028.obj",
+          "sha256": "c6826c26c13f28ce9f36a9837938e3ad1564ed7698f08a3e7ed107bc14404a28",
+          "vertices": 57,
+          "volume_m3": 0.0002158080563433341
+        },
+        {
+          "faces": 48,
+          "file": "plasticbox/collision/plasticbox_collision_029.obj",
+          "sha256": "c4783b329112d01eec37182beed7d5ffdfd1c6f09c1a7e36f70f811ac41b9759",
+          "vertices": 26,
+          "volume_m3": 0.00012468582550493172
+        },
+        {
+          "faces": 190,
+          "file": "plasticbox/collision/plasticbox_collision_030.obj",
+          "sha256": "1c5354ecfe46e54d3b9e07137295a322a0942eea6f1c41c95e9dfb965382f3bc",
+          "vertices": 97,
+          "volume_m3": 0.0001310176269797539
+        },
+        {
+          "faces": 180,
+          "file": "plasticbox/collision/plasticbox_collision_031.obj",
+          "sha256": "7d9b29a32baacd1347ad48cafee62faa6a360160d25b343c3d41f1b109bb5a8f",
+          "vertices": 92,
+          "volume_m3": 0.00013638681949239978
+        },
+        {
+          "faces": 110,
+          "file": "plasticbox/collision/plasticbox_collision_032.obj",
+          "sha256": "ee052bb4b034d450179c221955c2d96f5a5abe6861de20bffc298b945b6963ad",
+          "vertices": 57,
+          "volume_m3": 2.3562799906825323e-05
+        },
+        {
+          "faces": 76,
+          "file": "plasticbox/collision/plasticbox_collision_033.obj",
+          "sha256": "f41b66397465d4f1f719f420bbff8dd9775b8c1c3d9cf3195363c3ef8fdd416f",
+          "vertices": 40,
+          "volume_m3": 3.378876499511539e-05
+        },
+        {
+          "faces": 90,
+          "file": "plasticbox/collision/plasticbox_collision_034.obj",
+          "sha256": "c061a41c7410ff9517d0099adf25afc323c45d54a7bd22cbd2f009f5ff945fe5",
+          "vertices": 47,
+          "volume_m3": 2.121332227431679e-05
+        },
+        {
+          "faces": 126,
+          "file": "plasticbox/collision/plasticbox_collision_035.obj",
+          "sha256": "a7f1a26d1813020d2ea8ce14987ec0afe9f2943b2ed5145ade3263f18e4cee21",
+          "vertices": 65,
+          "volume_m3": 2.0253378949734094e-05
+        },
+        {
+          "faces": 106,
+          "file": "plasticbox/collision/plasticbox_collision_036.obj",
+          "sha256": "b2a179db496149a7b997576aad670368b3cb58ec401c94205190148af4f391f7",
+          "vertices": 55,
+          "volume_m3": 4.863713687353514e-05
+        },
+        {
+          "faces": 112,
+          "file": "plasticbox/collision/plasticbox_collision_037.obj",
+          "sha256": "9040e018922aaa97899ff626e52f9ff8a4e4d9a304ce78551738395ca2251a39",
+          "vertices": 58,
+          "volume_m3": 0.00013265984164120216
+        },
+        {
+          "faces": 208,
+          "file": "plasticbox/collision/plasticbox_collision_038.obj",
+          "sha256": "61953ada7372f8ca8cb054a8289c578876bea173e1498fdb8cab074308952cc4",
+          "vertices": 106,
+          "volume_m3": 0.00013491046411346982
+        },
+        {
+          "faces": 112,
+          "file": "plasticbox/collision/plasticbox_collision_039.obj",
+          "sha256": "d1678e7c784d5577d36b789b9229c274c93b2d73be1b136eda7ab5b7e73a2279",
+          "vertices": 58,
+          "volume_m3": 0.0001206245705094749
+        },
+        {
+          "faces": 122,
+          "file": "plasticbox/collision/plasticbox_collision_040.obj",
+          "sha256": "0b17169c6a33e299826fc94b5ecf121b081bb4f7f5c1f19922c4b1c30aace409",
+          "vertices": 63,
+          "volume_m3": 5.7711267283557046e-05
+        },
+        {
+          "faces": 84,
+          "file": "plasticbox/collision/plasticbox_collision_041.obj",
+          "sha256": "8a891c4380ca0a6f813ed9886070c1915dfd4a852f3fb16a304b78ac4851b5a7",
+          "vertices": 44,
+          "volume_m3": 0.00012944258948544297
+        },
+        {
+          "faces": 106,
+          "file": "plasticbox/collision/plasticbox_collision_042.obj",
+          "sha256": "f42d6b4e7c93af726565f2b4e7c44ed9658bfebdf6b691b7893d20d170f129d6",
+          "vertices": 55,
+          "volume_m3": 1.7302623826876235e-05
+        }
+      ],
+      "source_mesh": "plasticbox/plasticbox.obj",
+      "source_sha256": "33a4df8ed2e52e4de59a602bbe10d50816b243bc668630715ccdcc59e6e93fd9"
+    },
+    "smallbox": {
+      "collision_part_count": 2,
+      "collision_to_global_hull_volume_ratio": 1.0140072992454123,
+      "collision_volume_sum_m3": 0.012463293468854653,
+      "global_convex_hull_volume_m3": 0.012291127961435175,
+      "parts": [
+        {
+          "faces": 576,
+          "file": "smallbox/collision/smallbox_collision_000.obj",
+          "sha256": "cc60aa9a66b8cf1cb0c876aba27da51624362e73097f8c73fc1ebb127c63a241",
+          "vertices": 290,
+          "volume_m3": 0.004594809127742267
+        },
+        {
+          "faces": 1184,
+          "file": "smallbox/collision/smallbox_collision_001.obj",
+          "sha256": "2e29972d6b0dfe1e94f594efdb446316e0992fb0f5c9aaa1201e027a45f3857a",
+          "vertices": 594,
+          "volume_m3": 0.007868484341112385
+        }
+      ],
+      "source_mesh": "smallbox/smallbox.obj",
+      "source_sha256": "e263f3ffce33f85e55e083a6eae19c69e0ae4a2d0545a3c256d7d17d4fbaf116"
+    },
+    "smalltable": {
+      "collision_part_count": 6,
+      "collision_to_global_hull_volume_ratio": 0.13147162949241242,
+      "collision_volume_sum_m3": 0.005707269575747329,
+      "global_convex_hull_volume_m3": 0.04341065519444794,
+      "parts": [
+        {
+          "faces": 186,
+          "file": "smalltable/collision/smalltable_collision_000.obj",
+          "sha256": "604ad615ae02f3cf74c848f84f1efec3c88c6ad2e7cb697e48b3c1704edf6f79",
+          "vertices": 95,
+          "volume_m3": 0.0006155790754324625
+        },
+        {
+          "faces": 220,
+          "file": "smalltable/collision/smalltable_collision_001.obj",
+          "sha256": "316d75d2c6b83f84a0b6bb19a96206086dcc148e894c2d1f53340fe36fa6d6ae",
+          "vertices": 112,
+          "volume_m3": 0.0037787905677438265
+        },
+        {
+          "faces": 128,
+          "file": "smalltable/collision/smalltable_collision_002.obj",
+          "sha256": "5ccb05e2a808623c0f33e0bc85d7a56465b175535bd5b2df9c63d1733e57f9ca",
+          "vertices": 66,
+          "volume_m3": 0.0003314818553467015
+        },
+        {
+          "faces": 150,
+          "file": "smalltable/collision/smalltable_collision_003.obj",
+          "sha256": "099404b4b273ae2102fa5935b03907179252e028c964122c09c3f3ffdfccd5d2",
+          "vertices": 77,
+          "volume_m3": 0.0003288605321457843
+        },
+        {
+          "faces": 146,
+          "file": "smalltable/collision/smalltable_collision_004.obj",
+          "sha256": "06e41610caf31ca9ca25b2ffc6057517aa271ed2e31dcad585c1567df5719372",
+          "vertices": 75,
+          "volume_m3": 0.0003288597006059606
+        },
+        {
+          "faces": 162,
+          "file": "smalltable/collision/smalltable_collision_005.obj",
+          "sha256": "d4b9492ba84bb9c1ca4fb570f619951d6541ccb2d905ceaa41c0b2b31b00d523",
+          "vertices": 83,
+          "volume_m3": 0.0003236978444725947
+        }
+      ],
+      "source_mesh": "smalltable/smalltable.obj",
+      "source_sha256": "ffd6ddd0e5b479fd2636ec2c318fa5a783a99b8d333c52ced84cd186cd544996"
+    },
+    "suitcase": {
+      "collision_part_count": 14,
+      "collision_to_global_hull_volume_ratio": 0.9693505010391025,
+      "collision_volume_sum_m3": 0.04579471924640166,
+      "global_convex_hull_volume_m3": 0.04724268383552871,
+      "parts": [
+        {
+          "faces": 744,
+          "file": "suitcase/collision/suitcase_collision_000.obj",
+          "sha256": "1bde9ca7456499ee832fe1e9331b7801f88293cb6c157b0546908114521c5ee0",
+          "vertices": 374,
+          "volume_m3": 0.014239262352630148
+        },
+        {
+          "faces": 310,
+          "file": "suitcase/collision/suitcase_collision_001.obj",
+          "sha256": "e334e9da95525d5cb2156faa67abc069f23616845d2471bad741f15c3e629572",
+          "vertices": 157,
+          "volume_m3": 0.003617043547147167
+        },
+        {
+          "faces": 370,
+          "file": "suitcase/collision/suitcase_collision_002.obj",
+          "sha256": "68fb512319c5adf346688541536a83e7e324de853a658ad792dd8ab00034c07c",
+          "vertices": 187,
+          "volume_m3": 0.0033335569538407556
+        },
+        {
+          "faces": 384,
+          "file": "suitcase/collision/suitcase_collision_003.obj",
+          "sha256": "2a5375b10aed97ed8e5921f23968f1bfe457555d99adb23e7b24472225cc0f0e",
+          "vertices": 194,
+          "volume_m3": 0.005008640864994854
+        },
+        {
+          "faces": 290,
+          "file": "suitcase/collision/suitcase_collision_004.obj",
+          "sha256": "a1c9cad380a3a23c5b15cd8dc31c757769ebb3742c19c3e0fc58cf9761ff8db3",
+          "vertices": 147,
+          "volume_m3": 0.007978916378486588
+        },
+        {
+          "faces": 452,
+          "file": "suitcase/collision/suitcase_collision_005.obj",
+          "sha256": "cf9fcbf63e905238259be862828fd2e6b8bd2b52c2bd1dc8ed1a1aa1bd781c29",
+          "vertices": 228,
+          "volume_m3": 0.0019504812936958417
+        },
+        {
+          "faces": 70,
+          "file": "suitcase/collision/suitcase_collision_006.obj",
+          "sha256": "ce20cf48effde45f1790e0d974f229271b50f9f5e0dbdbf8b8407d93d6f0dfdc",
+          "vertices": 37,
+          "volume_m3": 0.00012668809884910798
+        },
+        {
+          "faces": 638,
+          "file": "suitcase/collision/suitcase_collision_007.obj",
+          "sha256": "f458c7a3559876b70c2fb8901e76f889aa7f9b00a45aef35df7fb576c44ced54",
+          "vertices": 321,
+          "volume_m3": 0.001371541497532284
+        },
+        {
+          "faces": 334,
+          "file": "suitcase/collision/suitcase_collision_008.obj",
+          "sha256": "f5f4a1457019230230608639d36ec04d1979a8b4368c45dd7bde552d2c57bdf8",
+          "vertices": 169,
+          "volume_m3": 0.0013637486674525478
+        },
+        {
+          "faces": 244,
+          "file": "suitcase/collision/suitcase_collision_009.obj",
+          "sha256": "c4bace6c86542405a8082369118b5d61e467c6b04c6bb46b30b8f034faa3265b",
+          "vertices": 124,
+          "volume_m3": 0.0008537793318066454
+        },
+        {
+          "faces": 422,
+          "file": "suitcase/collision/suitcase_collision_010.obj",
+          "sha256": "02b34e28a2d4d29c9e93c914cea2adf0c65f005ea07268804953fe6b37d07ee2",
+          "vertices": 213,
+          "volume_m3": 0.0013482828824311628
+        },
+        {
+          "faces": 366,
+          "file": "suitcase/collision/suitcase_collision_011.obj",
+          "sha256": "e9d4ba532baa0f3be5a168c85e0af7bb55adff522982b5dcbbc7c97d96ce461c",
+          "vertices": 185,
+          "volume_m3": 0.001124176607060174
+        },
+        {
+          "faces": 510,
+          "file": "suitcase/collision/suitcase_collision_012.obj",
+          "sha256": "ad3b86f54c484fe934322fb49aceadc2aa76c9f60626c6d266715cc5625aa3ed",
+          "vertices": 257,
+          "volume_m3": 0.0025989571593456827
+        },
+        {
+          "faces": 204,
+          "file": "suitcase/collision/suitcase_collision_013.obj",
+          "sha256": "99569571c8e13d270fe520382c8d77a77453f0a495a6bb13b1d3592b1bd70ac9",
+          "vertices": 104,
+          "volume_m3": 0.0008796436111287122
+        }
+      ],
+      "source_mesh": "suitcase/suitcase.obj",
+      "source_sha256": "4271f2e55ac85f2ebb2a4b80494c8392819476317d9bc5c95e25c20f9597e87b"
+    },
+    "trashcan": {
+      "collision_part_count": 31,
+      "collision_to_global_hull_volume_ratio": 0.21378569764498992,
+      "collision_volume_sum_m3": 0.0034431651493210657,
+      "global_convex_hull_volume_m3": 0.016105685213043328,
+      "parts": [
+        {
+          "faces": 314,
+          "file": "trashcan/collision/trashcan_collision_000.obj",
+          "sha256": "37645f0262c7be6478a57858aaa0fcce37241b49d1a758a25c7b1e851fd01f31",
+          "vertices": 159,
+          "volume_m3": 4.0112774688710166e-05
+        },
+        {
+          "faces": 488,
+          "file": "trashcan/collision/trashcan_collision_001.obj",
+          "sha256": "50d396f9620f1363a93a78d807b003d0f19cdd3e771a1c458ebff8ef2a967964",
+          "vertices": 246,
+          "volume_m3": 8.621925390787535e-05
+        },
+        {
+          "faces": 582,
+          "file": "trashcan/collision/trashcan_collision_002.obj",
+          "sha256": "853a2512d6f5d965a86bb915fffecdea084233b05e1f867cbdd9a831a0c87f4d",
+          "vertices": 293,
+          "volume_m3": 6.490678289183115e-05
+        },
+        {
+          "faces": 256,
+          "file": "trashcan/collision/trashcan_collision_003.obj",
+          "sha256": "71ef0b624fb01b4d913a4472b7faed3ae64d03b76f75d30e53112f26282a290d",
+          "vertices": 130,
+          "volume_m3": 0.0002864406279598012
+        },
+        {
+          "faces": 356,
+          "file": "trashcan/collision/trashcan_collision_004.obj",
+          "sha256": "41520a0bba2eadfb8f43a3f5a4a037b6dd7bb31a956fc9a0e7a2a03eae2c6c39",
+          "vertices": 180,
+          "volume_m3": 0.0005403499132109517
+        },
+        {
+          "faces": 286,
+          "file": "trashcan/collision/trashcan_collision_005.obj",
+          "sha256": "e4b514dcb132f746526b55565989e286ca5941cbbfe3c34f6c8b195d3badca84",
+          "vertices": 145,
+          "volume_m3": 0.0005206570148743315
+        },
+        {
+          "faces": 224,
+          "file": "trashcan/collision/trashcan_collision_006.obj",
+          "sha256": "e646a13b22bdcd9055e19503da44138587976ec15795d7ed8ebe2e75c459af23",
+          "vertices": 114,
+          "volume_m3": 0.00011849569171922436
+        },
+        {
+          "faces": 360,
+          "file": "trashcan/collision/trashcan_collision_007.obj",
+          "sha256": "f40d84ff2dad1f26e57287cd09ffac8471690425900db406f77e168b80d88b55",
+          "vertices": 182,
+          "volume_m3": 8.388301236457467e-05
+        },
+        {
+          "faces": 374,
+          "file": "trashcan/collision/trashcan_collision_008.obj",
+          "sha256": "e87e58bfc3419c2d0ad68fad3d8b88fb35165b4e2e1beba00f3f532c31a309ce",
+          "vertices": 189,
+          "volume_m3": 0.00010313744079474238
+        },
+        {
+          "faces": 246,
+          "file": "trashcan/collision/trashcan_collision_009.obj",
+          "sha256": "48b694e72994974036210fe70db1de395617525932d85ae000fda3e191be635a",
+          "vertices": 125,
+          "volume_m3": 1.91444365896187e-05
+        },
+        {
+          "faces": 226,
+          "file": "trashcan/collision/trashcan_collision_010.obj",
+          "sha256": "9438f35ea3e4b3d463699aabaee241c864e094c578dbfcaf0776dd639207af06",
+          "vertices": 115,
+          "volume_m3": 7.961104345966127e-05
+        },
+        {
+          "faces": 306,
+          "file": "trashcan/collision/trashcan_collision_011.obj",
+          "sha256": "3c28788483b6a6159f32d8188541ea0bfcc841d2c615854183cb672244ee960c",
+          "vertices": 155,
+          "volume_m3": 0.00018196009044795015
+        },
+        {
+          "faces": 148,
+          "file": "trashcan/collision/trashcan_collision_012.obj",
+          "sha256": "69dcbc2a7c303a21bbed4902e942358f77fe009154a68f1771bc5bec04bc154d",
+          "vertices": 76,
+          "volume_m3": 2.560064969822831e-05
+        },
+        {
+          "faces": 310,
+          "file": "trashcan/collision/trashcan_collision_013.obj",
+          "sha256": "8b025e2804a7c6745575fbeef2df779f76deeb08fb73a1f8c67547f82a1a2bd1",
+          "vertices": 157,
+          "volume_m3": 1.3773873879976342e-05
+        },
+        {
+          "faces": 236,
+          "file": "trashcan/collision/trashcan_collision_014.obj",
+          "sha256": "a20669afceb91783f280578ca3d501fd8d102651447f21d0c0c61a46372deb1f",
+          "vertices": 120,
+          "volume_m3": 0.00010889650376085094
+        },
+        {
+          "faces": 188,
+          "file": "trashcan/collision/trashcan_collision_015.obj",
+          "sha256": "6ee86cbf161b08772bc9d74f3f4b4559fe0e2e9745657232392f1ecbf2b2d0ab",
+          "vertices": 96,
+          "volume_m3": 0.00010217841551911334
+        },
+        {
+          "faces": 158,
+          "file": "trashcan/collision/trashcan_collision_016.obj",
+          "sha256": "e3bf3c779cc46424273ac1c13a8694d9fd9b9b6a5bf6f0577d038fb05227b4a3",
+          "vertices": 81,
+          "volume_m3": 0.0001482997986490786
+        },
+        {
+          "faces": 310,
+          "file": "trashcan/collision/trashcan_collision_017.obj",
+          "sha256": "c115d04895c755a25b9f16c3c8f87c7edc17de15d4aeff43d4a181ea2faca449",
+          "vertices": 157,
+          "volume_m3": 0.0002566626828656449
+        },
+        {
+          "faces": 262,
+          "file": "trashcan/collision/trashcan_collision_018.obj",
+          "sha256": "4d835b8657c72d1003b82a2ae478f5ea4e043b65fefe4f98c0f3a95c757dd40c",
+          "vertices": 133,
+          "volume_m3": 0.00022207206820674515
+        },
+        {
+          "faces": 324,
+          "file": "trashcan/collision/trashcan_collision_019.obj",
+          "sha256": "a2055183e34fffe30a7d48f6da06e5658d0fc26dff43bb425e403f2acb9a2b40",
+          "vertices": 164,
+          "volume_m3": 0.0001962742594401511
+        },
+        {
+          "faces": 178,
+          "file": "trashcan/collision/trashcan_collision_020.obj",
+          "sha256": "f301b0fc275718cce3a5fadf64e3ac12e47c422d759fe9c1c990c9165a40aab5",
+          "vertices": 91,
+          "volume_m3": 1.3201865257323186e-05
+        },
+        {
+          "faces": 232,
+          "file": "trashcan/collision/trashcan_collision_021.obj",
+          "sha256": "6af6730730338ba8b896f51ecdb07c5985084417ffd0335e1bcfa8f9ed127c70",
+          "vertices": 118,
+          "volume_m3": 2.3740629792027587e-05
+        },
+        {
+          "faces": 262,
+          "file": "trashcan/collision/trashcan_collision_022.obj",
+          "sha256": "c32a349dfa04cf29528148ed390d1f4a8c807515b3df41b253cc3739c9934a12",
+          "vertices": 133,
+          "volume_m3": 2.2612129156979487e-05
+        },
+        {
+          "faces": 256,
+          "file": "trashcan/collision/trashcan_collision_023.obj",
+          "sha256": "09cc96fcc53fde854b6129994f186e6324b088b7c51b7f7c9f0d0b4b7bb4ec3a",
+          "vertices": 130,
+          "volume_m3": 1.8380612289880314e-05
+        },
+        {
+          "faces": 452,
+          "file": "trashcan/collision/trashcan_collision_024.obj",
+          "sha256": "a8d3e5d75c20eb2bb5fc73b7a660552e74754dc9e59753802617e1144d3f20c1",
+          "vertices": 228,
+          "volume_m3": 2.8006041207200974e-05
+        },
+        {
+          "faces": 374,
+          "file": "trashcan/collision/trashcan_collision_025.obj",
+          "sha256": "abc42ef01a4f918bf1845014c5a5823404e07c2be83111e8b614369e044eafc7",
+          "vertices": 189,
+          "volume_m3": 2.8614015194460264e-05
+        },
+        {
+          "faces": 218,
+          "file": "trashcan/collision/trashcan_collision_026.obj",
+          "sha256": "f3ae717391cac0d9c5da4526cbd552d4890b7fe77bb43f107fd17df34b80c2dc",
+          "vertices": 111,
+          "volume_m3": 4.039801156418873e-05
+        },
+        {
+          "faces": 224,
+          "file": "trashcan/collision/trashcan_collision_027.obj",
+          "sha256": "6767a6028cc1eae9379a1a1f1fb8824201b47566e8d581eb2cef4f12658f86f6",
+          "vertices": 114,
+          "volume_m3": 1.277894341336067e-05
+        },
+        {
+          "faces": 238,
+          "file": "trashcan/collision/trashcan_collision_028.obj",
+          "sha256": "f66d444d22d558ed47e110fa6eee2e9ad5ab64c8428223ec72ec8f1c545272f5",
+          "vertices": 121,
+          "volume_m3": 2.8055605487907335e-05
+        },
+        {
+          "faces": 128,
+          "file": "trashcan/collision/trashcan_collision_029.obj",
+          "sha256": "4e07534d393561ff93819b426a390ec668ae9f1a7419a27c6f8d2f85fdaaa1c3",
+          "vertices": 66,
+          "volume_m3": 9.596042880578461e-06
+        },
+        {
+          "faces": 198,
+          "file": "trashcan/collision/trashcan_collision_030.obj",
+          "sha256": "05edb2fc20a47413b06990bf3a446fed7402cde05118412591aad532398edc19",
+          "vertices": 101,
+          "volume_m3": 1.910491814809747e-05
+        }
+      ],
+      "source_mesh": "trashcan/trashcan.obj",
+      "source_sha256": "d60fe42102072518c3ec74ce910b0d6d640520b50b66dbd715e6713e79c84b62"
+    },
+    "tripod": {
+      "collision_part_count": 12,
+      "collision_to_global_hull_volume_ratio": 0.053263525588293725,
+      "collision_volume_sum_m3": 0.001928347916113743,
+      "global_convex_hull_volume_m3": 0.036203910552581896,
+      "parts": [
+        {
+          "faces": 154,
+          "file": "tripod/collision/tripod_collision_000.obj",
+          "sha256": "d30ae900a962d6d9963c2dab7081d9004f300cc46756bd7cfc14f5e989eb53df",
+          "vertices": 79,
+          "volume_m3": 0.00018792057473541435
+        },
+        {
+          "faces": 148,
+          "file": "tripod/collision/tripod_collision_001.obj",
+          "sha256": "60cda52c02fdb5a8633d4d83c82c888137c37add21140c2bf2736cdd5b929a7c",
+          "vertices": 76,
+          "volume_m3": 0.00020343968149242296
+        },
+        {
+          "faces": 214,
+          "file": "tripod/collision/tripod_collision_002.obj",
+          "sha256": "249b38044c547b1535b7f499751b08e3118b642da918acc3ef773e7752d640ba",
+          "vertices": 109,
+          "volume_m3": 0.0006204584549996513
+        },
+        {
+          "faces": 174,
+          "file": "tripod/collision/tripod_collision_003.obj",
+          "sha256": "01e3d532ea94b7d37c3c99dce007616ffe368baaf2adb59bd0749d78c3c61347",
+          "vertices": 89,
+          "volume_m3": 0.00017029322545556095
+        },
+        {
+          "faces": 142,
+          "file": "tripod/collision/tripod_collision_004.obj",
+          "sha256": "f71cfd11a0e549cb8134af57e1e46f01855e7f2b20e2c8a6a91af6b2111b98cc",
+          "vertices": 73,
+          "volume_m3": 3.307585106254917e-05
+        },
+        {
+          "faces": 140,
+          "file": "tripod/collision/tripod_collision_005.obj",
+          "sha256": "3ffd3c8ee799dc21baa2a25326e635387a4bd7e0b6b5f181dc2618bba165bc0e",
+          "vertices": 72,
+          "volume_m3": 0.00010199021621360418
+        },
+        {
+          "faces": 156,
+          "file": "tripod/collision/tripod_collision_006.obj",
+          "sha256": "50d89b06a3ea5e4dcd6dbdff379cffc887f68b806392f3e35d4dd345ca5f05e4",
+          "vertices": 80,
+          "volume_m3": 0.00015144799784391384
+        },
+        {
+          "faces": 138,
+          "file": "tripod/collision/tripod_collision_007.obj",
+          "sha256": "f708d61abdcba764de79ef8973ffecb6a7a1a60a05210a5a3cca6c2a722ad71f",
+          "vertices": 71,
+          "volume_m3": 0.00010894113194862931
+        },
+        {
+          "faces": 130,
+          "file": "tripod/collision/tripod_collision_008.obj",
+          "sha256": "bd78c2202b61a431fe3bd8a1163b3ff5ddafd8ba57fc9e533b4b8687ab635714",
+          "vertices": 67,
+          "volume_m3": 6.776476783518775e-05
+        },
+        {
+          "faces": 242,
+          "file": "tripod/collision/tripod_collision_009.obj",
+          "sha256": "58496ecb7d3915aac0d5b01b5c452648d4811f4bd529e164f100eb2375bd188a",
+          "vertices": 123,
+          "volume_m3": 0.00011581525871042755
+        },
+        {
+          "faces": 110,
+          "file": "tripod/collision/tripod_collision_010.obj",
+          "sha256": "1d6e688693c0857968d208657919624cf52c77096aac0e91fc9b2398bb84e6dc",
+          "vertices": 57,
+          "volume_m3": 7.525710289839548e-05
+        },
+        {
+          "faces": 128,
+          "file": "tripod/collision/tripod_collision_011.obj",
+          "sha256": "9e94c21685b7d7c33cafba5a7dcd57a4f32085699ff090734b7ee9bb2974c9d5",
+          "vertices": 66,
+          "volume_m3": 9.194365291798587e-05
+        }
+      ],
+      "source_mesh": "tripod/tripod.obj",
+      "source_sha256": "435265929e6841c53d303196bca3a8cc13c9a2944d042b9b91c1a315a6206a24"
+    },
+    "whitechair": {
+      "collision_part_count": 59,
+      "collision_to_global_hull_volume_ratio": 0.07302168981816583,
+      "collision_volume_sum_m3": 0.008523665476607212,
+      "global_convex_hull_volume_m3": 0.11672785850111556,
+      "parts": [
+        {
+          "faces": 232,
+          "file": "whitechair/collision/whitechair_collision_000.obj",
+          "sha256": "b0af120dd335d0260b316a6b8254a80ff986172d89be49bf81fa3a9a2c0dee04",
+          "vertices": 118,
+          "volume_m3": 0.0002761690004329978
+        },
+        {
+          "faces": 178,
+          "file": "whitechair/collision/whitechair_collision_001.obj",
+          "sha256": "84f46841e5e958e7e23dc71dbdd9b0e9587c10c8f119c52e751828d8f7563cb1",
+          "vertices": 91,
+          "volume_m3": 0.00029459129615805275
+        },
+        {
+          "faces": 202,
+          "file": "whitechair/collision/whitechair_collision_002.obj",
+          "sha256": "53deeda47b5d6e7d0dd1a0e3d88307577d5ab95492c6fe3ad56da48b9bd1503a",
+          "vertices": 103,
+          "volume_m3": 0.00014839407865169487
+        },
+        {
+          "faces": 278,
+          "file": "whitechair/collision/whitechair_collision_003.obj",
+          "sha256": "bb0687c3f884e6f3ffb661cd625230ded5bdc17e315d74f0383168e9e5ce7497",
+          "vertices": 141,
+          "volume_m3": 0.0005938621326572984
+        },
+        {
+          "faces": 174,
+          "file": "whitechair/collision/whitechair_collision_004.obj",
+          "sha256": "9297f768bb30a015cc86bee227722e6010048da7642283ec2ce0bffb81252a0e",
+          "vertices": 89,
+          "volume_m3": 0.0002837026072772435
+        },
+        {
+          "faces": 52,
+          "file": "whitechair/collision/whitechair_collision_005.obj",
+          "sha256": "86325b9dafa6eec00ada9d66f04495056d7a549e26d0f48de5e6c9622593baae",
+          "vertices": 28,
+          "volume_m3": 8.488922071614369e-06
+        },
+        {
+          "faces": 24,
+          "file": "whitechair/collision/whitechair_collision_006.obj",
+          "sha256": "13ca6322ac1c9b9bf02e326e2001ff0ce9d63d50f6f8b64ac8058d38ae34ed30",
+          "vertices": 14,
+          "volume_m3": 6.360809195216851e-06
+        },
+        {
+          "faces": 268,
+          "file": "whitechair/collision/whitechair_collision_007.obj",
+          "sha256": "580b5d32bdd025a85b7c9417882c1ad9da18074ad434175d016d49111295ee03",
+          "vertices": 136,
+          "volume_m3": 0.00039947221454478656
+        },
+        {
+          "faces": 244,
+          "file": "whitechair/collision/whitechair_collision_008.obj",
+          "sha256": "b365abeec6f99cc5a79b06f257cee74270715dee18c6333f4fbab4a3d80a8e81",
+          "vertices": 124,
+          "volume_m3": 0.0002267261139677363
+        },
+        {
+          "faces": 72,
+          "file": "whitechair/collision/whitechair_collision_009.obj",
+          "sha256": "ee79f6e52266482178bfc16c3189e879e7446f0da53fe592815804e2e02d2e77",
+          "vertices": 38,
+          "volume_m3": 2.5298769565209125e-05
+        },
+        {
+          "faces": 100,
+          "file": "whitechair/collision/whitechair_collision_010.obj",
+          "sha256": "6a03158ea85d518d1fe85e7b209f30cb8a2c89b96886fff3b42a2d25acc1d940",
+          "vertices": 52,
+          "volume_m3": 4.252655255742328e-05
+        },
+        {
+          "faces": 334,
+          "file": "whitechair/collision/whitechair_collision_011.obj",
+          "sha256": "269134b90532c0faa613ba8ff80c42b4e7ca6908d51d01681f689c104f890bda",
+          "vertices": 169,
+          "volume_m3": 0.00027176409815730614
+        },
+        {
+          "faces": 518,
+          "file": "whitechair/collision/whitechair_collision_012.obj",
+          "sha256": "7c9abe02625d068433061e80b133f217192b535dd4af86512c8c343a1bcc3020",
+          "vertices": 261,
+          "volume_m3": 0.0004938843978675927
+        },
+        {
+          "faces": 280,
+          "file": "whitechair/collision/whitechair_collision_013.obj",
+          "sha256": "c943fe7196dbacd35a83730924dcbb6d0e6c4939c1bf65f31b67dc24fd36c7ad",
+          "vertices": 142,
+          "volume_m3": 7.811646276944562e-05
+        },
+        {
+          "faces": 176,
+          "file": "whitechair/collision/whitechair_collision_014.obj",
+          "sha256": "51ced1f04cd8f0e348e9964506666cfb8e8071eccb1da7d58c018a6ba49410ec",
+          "vertices": 90,
+          "volume_m3": 2.4167433845391853e-05
+        },
+        {
+          "faces": 156,
+          "file": "whitechair/collision/whitechair_collision_015.obj",
+          "sha256": "8fb9cf2be94256eeb51601a530e6c866068f6e55624b33f9fe2e346129e408ee",
+          "vertices": 80,
+          "volume_m3": 8.357456737947624e-05
+        },
+        {
+          "faces": 132,
+          "file": "whitechair/collision/whitechair_collision_016.obj",
+          "sha256": "d31da35319cfccf4041a6a95057e43a4448864df42329ec9e2e415baba7a71d7",
+          "vertices": 68,
+          "volume_m3": 3.2805074668576615e-05
+        },
+        {
+          "faces": 210,
+          "file": "whitechair/collision/whitechair_collision_017.obj",
+          "sha256": "f79cccf5576072fbe4c6da4195a6c076411ebf21055474cdcda4fa1ab6a3a611",
+          "vertices": 107,
+          "volume_m3": 8.929287584254268e-05
+        },
+        {
+          "faces": 254,
+          "file": "whitechair/collision/whitechair_collision_018.obj",
+          "sha256": "7abc11bbd7fdb46216ad89f86586d27c6b34402fb6b2900c52c80f23d2ecd50b",
+          "vertices": 129,
+          "volume_m3": 5.5691981698379617e-05
+        },
+        {
+          "faces": 92,
+          "file": "whitechair/collision/whitechair_collision_019.obj",
+          "sha256": "6e6ad138f0e6a131ad34f21bf9b6bbd22c842271ca1571cac3344288e7ab5a44",
+          "vertices": 48,
+          "volume_m3": 0.0002301722932445231
+        },
+        {
+          "faces": 296,
+          "file": "whitechair/collision/whitechair_collision_020.obj",
+          "sha256": "8be3ea73409178dddaf6013bafe8747b0aceb2c8575d2aa080eea18b5ca1f22b",
+          "vertices": 150,
+          "volume_m3": 0.0005580836023988853
+        },
+        {
+          "faces": 110,
+          "file": "whitechair/collision/whitechair_collision_021.obj",
+          "sha256": "5f27249ce685391b6486e317f0f662cfaecd484de7e89e33f21c8297dfa36763",
+          "vertices": 57,
+          "volume_m3": 0.00025284273295960255
+        },
+        {
+          "faces": 214,
+          "file": "whitechair/collision/whitechair_collision_022.obj",
+          "sha256": "4cf2ce29b0d97e42dd7abd17267adc6da93a178ba2b8b542965f45541e462ebe",
+          "vertices": 109,
+          "volume_m3": 0.00016862975643622757
+        },
+        {
+          "faces": 202,
+          "file": "whitechair/collision/whitechair_collision_023.obj",
+          "sha256": "5e44bbb063aa1c472f741275fcab3e6b0a19af1906edf4c92f2e7fb39e2a627f",
+          "vertices": 103,
+          "volume_m3": 0.0001887036843630618
+        },
+        {
+          "faces": 122,
+          "file": "whitechair/collision/whitechair_collision_024.obj",
+          "sha256": "0082a500d23f6de5fe80448fff2bd72b618028344654f8c17dfee3fa775f4b85",
+          "vertices": 63,
+          "volume_m3": 3.209324754699247e-05
+        },
+        {
+          "faces": 204,
+          "file": "whitechair/collision/whitechair_collision_025.obj",
+          "sha256": "9d7995a8472ee0078d927f7aca86b61ab7a62ce70f66534412ea685edbad991d",
+          "vertices": 104,
+          "volume_m3": 3.916520086986862e-05
+        },
+        {
+          "faces": 228,
+          "file": "whitechair/collision/whitechair_collision_026.obj",
+          "sha256": "45e6e89e74c2069e84fb7ee3560abce8a6a9570acc5dbcd51857a27c39ca9e74",
+          "vertices": 116,
+          "volume_m3": 0.00013639798070455735
+        },
+        {
+          "faces": 310,
+          "file": "whitechair/collision/whitechair_collision_027.obj",
+          "sha256": "a14af4e7acda26479c15fef4cb4fdb6ff5ca3b96c69f042158cffe9da30422e3",
+          "vertices": 157,
+          "volume_m3": 7.338494020904059e-05
+        },
+        {
+          "faces": 348,
+          "file": "whitechair/collision/whitechair_collision_028.obj",
+          "sha256": "16dd2ab72b3e1c6d9984c2873e9ca052853ff53a9a9875d57d5ae052d68f3f81",
+          "vertices": 176,
+          "volume_m3": 0.0001522744996538004
+        },
+        {
+          "faces": 178,
+          "file": "whitechair/collision/whitechair_collision_029.obj",
+          "sha256": "eb8de87dde2301d22554e6f2d3c72d522461d8402d837b1d5da25321f2664ddf",
+          "vertices": 91,
+          "volume_m3": 2.1147379439726007e-05
+        },
+        {
+          "faces": 76,
+          "file": "whitechair/collision/whitechair_collision_030.obj",
+          "sha256": "403f6cb72b7fe66ad8ea7700264e1a92783319d10035fd65afa4289661bbaea4",
+          "vertices": 40,
+          "volume_m3": 5.1086654687016986e-05
+        },
+        {
+          "faces": 138,
+          "file": "whitechair/collision/whitechair_collision_031.obj",
+          "sha256": "1e8cc4eb7b19ab5f68220228fc160c61c7dd8bc8060c0bc590d2af0fe6b3aa0f",
+          "vertices": 71,
+          "volume_m3": 5.027826164807653e-05
+        },
+        {
+          "faces": 186,
+          "file": "whitechair/collision/whitechair_collision_032.obj",
+          "sha256": "fa5ff7001fd88d9da3df550ad677a75cefee1729a93ffcce777f5871b67c2124",
+          "vertices": 95,
+          "volume_m3": 0.00010170646428890904
+        },
+        {
+          "faces": 108,
+          "file": "whitechair/collision/whitechair_collision_033.obj",
+          "sha256": "64d6d76024e45473a63e70406640079bfcbb9b081e8ec1abcd23e8f5df80f573",
+          "vertices": 56,
+          "volume_m3": 3.819249277555699e-05
+        },
+        {
+          "faces": 150,
+          "file": "whitechair/collision/whitechair_collision_034.obj",
+          "sha256": "3947481d2c765f100b9124de1b6061fcb8c04d6dd0b05fe2aaf903cdb39eb3a7",
+          "vertices": 77,
+          "volume_m3": 0.0007074817334738887
+        },
+        {
+          "faces": 124,
+          "file": "whitechair/collision/whitechair_collision_035.obj",
+          "sha256": "2ad3263f1755ee26b57c0aef44a71f07ab193458089d1747c02650f2ef0ea7b4",
+          "vertices": 64,
+          "volume_m3": 8.062070750050134e-05
+        },
+        {
+          "faces": 118,
+          "file": "whitechair/collision/whitechair_collision_036.obj",
+          "sha256": "fbbd47a8e093a51a13173a333c95b30b9788764836ddb7aeab7b4785cf600b44",
+          "vertices": 61,
+          "volume_m3": 0.000172463792246815
+        },
+        {
+          "faces": 200,
+          "file": "whitechair/collision/whitechair_collision_037.obj",
+          "sha256": "169bf53262c7be8cad3f3ca01ecafcced826bd96b3900ec730a0efc6a5fedb79",
+          "vertices": 102,
+          "volume_m3": 0.0001540463764729531
+        },
+        {
+          "faces": 170,
+          "file": "whitechair/collision/whitechair_collision_038.obj",
+          "sha256": "7c5a994406a210d6937cfc653e37bb8aa976e200e8ac714681fe3ce0fcb87b6f",
+          "vertices": 87,
+          "volume_m3": 0.0001247248501002793
+        },
+        {
+          "faces": 66,
+          "file": "whitechair/collision/whitechair_collision_039.obj",
+          "sha256": "ee06eeb5baf5dfbc665270193abdf58fac91481bd04888e380dfa73c87331c86",
+          "vertices": 35,
+          "volume_m3": 0.0001139307004033585
+        },
+        {
+          "faces": 64,
+          "file": "whitechair/collision/whitechair_collision_040.obj",
+          "sha256": "8e83a0a97301d24cf85442879bf99c61b2ad2352460b28b4fe748d2e48187698",
+          "vertices": 34,
+          "volume_m3": 2.5777433728019385e-05
+        },
+        {
+          "faces": 24,
+          "file": "whitechair/collision/whitechair_collision_041.obj",
+          "sha256": "9e08f4fed000895c02a9ccb2f688d0fc4cf005565cc352db9cc662d2014c4e14",
+          "vertices": 14,
+          "volume_m3": 1.1192931581016232e-07
+        },
+        {
+          "faces": 156,
+          "file": "whitechair/collision/whitechair_collision_042.obj",
+          "sha256": "06d8a4ff249bbf177eac468cc7124e87b3526f58b745420117f96f056ea72a44",
+          "vertices": 80,
+          "volume_m3": 0.000142696116164613
+        },
+        {
+          "faces": 224,
+          "file": "whitechair/collision/whitechair_collision_043.obj",
+          "sha256": "5f131fd5221c77f3574f06168c7cd8a3b28cb1ff528323182558904a0922c90d",
+          "vertices": 114,
+          "volume_m3": 7.679768928893058e-05
+        },
+        {
+          "faces": 90,
+          "file": "whitechair/collision/whitechair_collision_044.obj",
+          "sha256": "6ff70945254dc89af9e14d1c588b6f9800900346f0a723fa6d21dc9db832f47a",
+          "vertices": 47,
+          "volume_m3": 0.00018503636403777166
+        },
+        {
+          "faces": 130,
+          "file": "whitechair/collision/whitechair_collision_045.obj",
+          "sha256": "66e22162ef98179ced5e3b790b2d3f83602e374b66d11e9226f210e9f948ccae",
+          "vertices": 67,
+          "volume_m3": 0.00010940854442069473
+        },
+        {
+          "faces": 112,
+          "file": "whitechair/collision/whitechair_collision_046.obj",
+          "sha256": "966f7fa95f0d4adead0be83043c4fbd07fa112acdc4da38f0efee6284ff5f38d",
+          "vertices": 58,
+          "volume_m3": 0.0003258025039668683
+        },
+        {
+          "faces": 98,
+          "file": "whitechair/collision/whitechair_collision_047.obj",
+          "sha256": "a473fb1daf00c1378618f90f3be24bb8d4246b6805b7b700485ae4426130d7c2",
+          "vertices": 51,
+          "volume_m3": 0.00015989737874339544
+        },
+        {
+          "faces": 56,
+          "file": "whitechair/collision/whitechair_collision_048.obj",
+          "sha256": "6395025d5439a856a0876c04451b979aaca8705ae969c975d9d4f798e03338a2",
+          "vertices": 30,
+          "volume_m3": 0.00014837307721453312
+        },
+        {
+          "faces": 110,
+          "file": "whitechair/collision/whitechair_collision_049.obj",
+          "sha256": "43b4a486aaecf866e6237b14f393fb7a800dd500615bdca9007261d3efe633fb",
+          "vertices": 57,
+          "volume_m3": 0.0001242601922709703
+        },
+        {
+          "faces": 88,
+          "file": "whitechair/collision/whitechair_collision_050.obj",
+          "sha256": "4b4b50b0da3d19390c5c6f676745254a0eb32b6be03574eddb22a4de933b9b3f",
+          "vertices": 46,
+          "volume_m3": 3.098953287357381e-05
+        },
+        {
+          "faces": 94,
+          "file": "whitechair/collision/whitechair_collision_051.obj",
+          "sha256": "bf9f105fcb4c322f40a7ba867a9dffe38151ef6f0167b2ff45e384be4673ad66",
+          "vertices": 49,
+          "volume_m3": 3.9445991289306065e-05
+        },
+        {
+          "faces": 158,
+          "file": "whitechair/collision/whitechair_collision_052.obj",
+          "sha256": "a6ad8ec3bfeb2a21fdf1aa910c791445f487c9c272f2454d8eae1d9c662c9d7f",
+          "vertices": 81,
+          "volume_m3": 6.488590443927963e-05
+        },
+        {
+          "faces": 106,
+          "file": "whitechair/collision/whitechair_collision_053.obj",
+          "sha256": "0e2739bfd1d3bdf8ef06da63e438296ff7ec493e856ecf3ed65901ce490c53c6",
+          "vertices": 55,
+          "volume_m3": 2.5050588230029304e-05
+        },
+        {
+          "faces": 60,
+          "file": "whitechair/collision/whitechair_collision_054.obj",
+          "sha256": "2affe0f3983866b315daf0882ae73f90bf6bffd61dacc48bfb41452d43d397d2",
+          "vertices": 32,
+          "volume_m3": 2.81752970053211e-05
+        },
+        {
+          "faces": 64,
+          "file": "whitechair/collision/whitechair_collision_055.obj",
+          "sha256": "1f9911e81c781b5f4e0422d35ba7fcc7a19a82fe0d2d395f5e8e42906dc63abd",
+          "vertices": 34,
+          "volume_m3": 4.4535088240608816e-05
+        },
+        {
+          "faces": 92,
+          "file": "whitechair/collision/whitechair_collision_056.obj",
+          "sha256": "63a47c7970c96129531e76811e6a9275ee40a2b15595bdcd69596928158d7f8e",
+          "vertices": 48,
+          "volume_m3": 4.041724709140168e-05
+        },
+        {
+          "faces": 142,
+          "file": "whitechair/collision/whitechair_collision_057.obj",
+          "sha256": "a38f43281e24e23a35e3eff2932b9641a73f1b1393328ae658c997ccedc6f7d4",
+          "vertices": 73,
+          "volume_m3": 2.8440063927660768e-05
+        },
+        {
+          "faces": 80,
+          "file": "whitechair/collision/whitechair_collision_058.obj",
+          "sha256": "404eb830c83d4b66a1be614cc1c7470af0131cd85f2f13cdbc9957769bcf8f30",
+          "vertices": 42,
+          "volume_m3": 4.124779362679342e-05
+        }
+      ],
+      "source_mesh": "whitechair/whitechair.obj",
+      "source_sha256": "88b5da34924172bdcaa4ae8269332ff5ba2f965048f57dc09fa3c6bbe74ca63f"
+    },
+    "woodchair": {
+      "collision_part_count": 45,
+      "collision_to_global_hull_volume_ratio": 0.07083973394326111,
+      "collision_volume_sum_m3": 0.009668863742702264,
+      "global_convex_hull_volume_m3": 0.13648927239685166,
+      "parts": [
+        {
+          "faces": 282,
+          "file": "woodchair/collision/woodchair_collision_000.obj",
+          "sha256": "2b1f378ac579bf5d89c5c2d406ab2c6cc738c573ce56bcce2f658a2be296099e",
+          "vertices": 143,
+          "volume_m3": 0.0004279172900443191
+        },
+        {
+          "faces": 380,
+          "file": "woodchair/collision/woodchair_collision_001.obj",
+          "sha256": "2013e90cff46087bb06eabd428b8f964bd2d781d34ab3465198d524e1c550e99",
+          "vertices": 192,
+          "volume_m3": 0.00024411402245608604
+        },
+        {
+          "faces": 120,
+          "file": "woodchair/collision/woodchair_collision_002.obj",
+          "sha256": "2b3056f35cbc8c4f712d84b299eabae5be9050dc4dfa02929f334d159d18c212",
+          "vertices": 62,
+          "volume_m3": 0.0007341896120037211
+        },
+        {
+          "faces": 258,
+          "file": "woodchair/collision/woodchair_collision_003.obj",
+          "sha256": "3a7039744177dc63582c7267b77cfe28c930bedc30b37beda12c860849c8f7d8",
+          "vertices": 131,
+          "volume_m3": 0.0015450541770225055
+        },
+        {
+          "faces": 196,
+          "file": "woodchair/collision/woodchair_collision_004.obj",
+          "sha256": "4557a71deb35b24abc37b2c54ac5bb6d20e60372935172c1719c3caa246e7992",
+          "vertices": 100,
+          "volume_m3": 0.00010099621253537238
+        },
+        {
+          "faces": 294,
+          "file": "woodchair/collision/woodchair_collision_005.obj",
+          "sha256": "e5bb51fabccf9e63a06776ac3e5f7ac0ef8246aba554ea0fd541bf522b42b7d3",
+          "vertices": 149,
+          "volume_m3": 9.482651868529064e-05
+        },
+        {
+          "faces": 102,
+          "file": "woodchair/collision/woodchair_collision_006.obj",
+          "sha256": "86ca75e256ad3f0b6e2896110687d46461015766992ff9e4a0d5fae3916dba1b",
+          "vertices": 53,
+          "volume_m3": 0.0003663970797145126
+        },
+        {
+          "faces": 142,
+          "file": "woodchair/collision/woodchair_collision_007.obj",
+          "sha256": "957e7cad5766624b75548cd7c943797a443fa2bc272ef47bfd2defbf41f35499",
+          "vertices": 73,
+          "volume_m3": 0.0007084206020223951
+        },
+        {
+          "faces": 284,
+          "file": "woodchair/collision/woodchair_collision_008.obj",
+          "sha256": "386196cc0947adede625a9096e092d706fb40038481517c0e9402a989b5924be",
+          "vertices": 144,
+          "volume_m3": 0.00027430723953283205
+        },
+        {
+          "faces": 140,
+          "file": "woodchair/collision/woodchair_collision_009.obj",
+          "sha256": "07d81102ae74b640d57ba88901faff807c372279e248dbb78c8991574242be38",
+          "vertices": 72,
+          "volume_m3": 0.00038502428445979256
+        },
+        {
+          "faces": 460,
+          "file": "woodchair/collision/woodchair_collision_010.obj",
+          "sha256": "910d1cbe91056e60172bf22c396f29d152c35e32a5d737dbeb3f846b56d8e3ca",
+          "vertices": 232,
+          "volume_m3": 0.00030021648582694303
+        },
+        {
+          "faces": 164,
+          "file": "woodchair/collision/woodchair_collision_011.obj",
+          "sha256": "caf3bf6b675e9ec11d87b0e950f612ade8a2464c74c61e9fbb1a253a233c4f4f",
+          "vertices": 84,
+          "volume_m3": 0.00010914558482328183
+        },
+        {
+          "faces": 70,
+          "file": "woodchair/collision/woodchair_collision_012.obj",
+          "sha256": "08b05a031ff21f375bf682111ae11eff4a66fcbaa620c1fbb6ed2e8e271deb08",
+          "vertices": 37,
+          "volume_m3": 8.288824958824173e-05
+        },
+        {
+          "faces": 192,
+          "file": "woodchair/collision/woodchair_collision_013.obj",
+          "sha256": "fcf82c8e181b03337de8cf23aba47da9d58bbb99e066f747a11214ddedc380ec",
+          "vertices": 98,
+          "volume_m3": 0.00010877241320221468
+        },
+        {
+          "faces": 316,
+          "file": "woodchair/collision/woodchair_collision_014.obj",
+          "sha256": "8f6a8a3770994d11416a7d19a48dafdb5e5f28fa52f7b194017cb79f8b12d8ba",
+          "vertices": 160,
+          "volume_m3": 0.0002586944953986878
+        },
+        {
+          "faces": 186,
+          "file": "woodchair/collision/woodchair_collision_015.obj",
+          "sha256": "e2112b961da19c9c272510cc4fd681675bcd43d6a5b75882eafb255c41d49950",
+          "vertices": 95,
+          "volume_m3": 0.00012947824246368925
+        },
+        {
+          "faces": 126,
+          "file": "woodchair/collision/woodchair_collision_016.obj",
+          "sha256": "5df9e575bcf258379572f062af76eb299555fb0fa1984f04e750cb8dd612d88c",
+          "vertices": 65,
+          "volume_m3": 0.0002487659075397389
+        },
+        {
+          "faces": 334,
+          "file": "woodchair/collision/woodchair_collision_017.obj",
+          "sha256": "017d5dd235969905efa05f8072cac8f09f4b2027ba8b4b29583387179043b697",
+          "vertices": 169,
+          "volume_m3": 0.00017665675890566048
+        },
+        {
+          "faces": 144,
+          "file": "woodchair/collision/woodchair_collision_018.obj",
+          "sha256": "ca491e30322c5fe2c51fa1bb5e8c0a65491bccda11613288882372969b852fd5",
+          "vertices": 74,
+          "volume_m3": 2.623173110813023e-05
+        },
+        {
+          "faces": 224,
+          "file": "woodchair/collision/woodchair_collision_019.obj",
+          "sha256": "572d92ac75bf9c22c6311f2b341e98c5aa1def6f62de2b56d35067b8b9f6c92c",
+          "vertices": 114,
+          "volume_m3": 0.00011662078251847064
+        },
+        {
+          "faces": 254,
+          "file": "woodchair/collision/woodchair_collision_020.obj",
+          "sha256": "d4f08a3cf8522012fab405424694773d97c5edf60185d22b5c6f41e9bdefd4c3",
+          "vertices": 129,
+          "volume_m3": 0.0001036197649646578
+        },
+        {
+          "faces": 270,
+          "file": "woodchair/collision/woodchair_collision_021.obj",
+          "sha256": "fce74fe784cb8cd2dcd5f2cdcc3c089d75ffd3c10e4e2a944e313aecc613d7ad",
+          "vertices": 137,
+          "volume_m3": 0.0001562946365960738
+        },
+        {
+          "faces": 154,
+          "file": "woodchair/collision/woodchair_collision_022.obj",
+          "sha256": "7a84f99a219c89686d15510ab6cac334e549029e8be7d6851f90317f8fbb32e8",
+          "vertices": 79,
+          "volume_m3": 9.196947077953722e-05
+        },
+        {
+          "faces": 198,
+          "file": "woodchair/collision/woodchair_collision_023.obj",
+          "sha256": "fea6f546f0cb2727ee72748fd47138b3dcfd9d4ca441a4771c22b5de40cb206f",
+          "vertices": 101,
+          "volume_m3": 0.00027206621407258416
+        },
+        {
+          "faces": 150,
+          "file": "woodchair/collision/woodchair_collision_024.obj",
+          "sha256": "db5d368867f1857cd002578bfd8120b991f59cac18bddf4b976582e267732840",
+          "vertices": 77,
+          "volume_m3": 4.036787973568786e-05
+        },
+        {
+          "faces": 480,
+          "file": "woodchair/collision/woodchair_collision_025.obj",
+          "sha256": "af689003ab3b11b405684bad9d71efe946544b9a66102656b4400f0f6c415d41",
+          "vertices": 242,
+          "volume_m3": 0.0002622892900456337
+        },
+        {
+          "faces": 138,
+          "file": "woodchair/collision/woodchair_collision_026.obj",
+          "sha256": "f24d53f55de9ededd386ad68b1896ae86ad8e714df0e15ee61871dc668b2508c",
+          "vertices": 71,
+          "volume_m3": 0.00024957045773719874
+        },
+        {
+          "faces": 104,
+          "file": "woodchair/collision/woodchair_collision_027.obj",
+          "sha256": "ab95b7ca603ffe7ee8290953eec9e8367909c7d95988dbd5fe38dae702c2626b",
+          "vertices": 54,
+          "volume_m3": 3.714094690159634e-05
+        },
+        {
+          "faces": 164,
+          "file": "woodchair/collision/woodchair_collision_028.obj",
+          "sha256": "e42ec5443104bcd410c6ba3c9f651807f0ae879fa2aea1458da39995f6fe39c1",
+          "vertices": 84,
+          "volume_m3": 0.00018414538187440727
+        },
+        {
+          "faces": 340,
+          "file": "woodchair/collision/woodchair_collision_029.obj",
+          "sha256": "a79b042cc3c7d343142b5e8f3041db0af432d5564662445c0a942716deae577a",
+          "vertices": 172,
+          "volume_m3": 0.00012573810768351062
+        },
+        {
+          "faces": 220,
+          "file": "woodchair/collision/woodchair_collision_030.obj",
+          "sha256": "97b6810e01a9130d6c5a97472145fee1306bd1afc7289fbc7f18885e9f8006e2",
+          "vertices": 112,
+          "volume_m3": 0.00018641930862936767
+        },
+        {
+          "faces": 246,
+          "file": "woodchair/collision/woodchair_collision_031.obj",
+          "sha256": "a4b3c4e3996dd1aa0a035310a488486b7ddb5a45dd5bcf273c11cf8dba5932df",
+          "vertices": 125,
+          "volume_m3": 0.0004212784800324934
+        },
+        {
+          "faces": 250,
+          "file": "woodchair/collision/woodchair_collision_032.obj",
+          "sha256": "3de8d52ab5e7ef5e7b912435efc78cad91b8c7c7684347b665313f41ecfd8f85",
+          "vertices": 127,
+          "volume_m3": 8.230552946161225e-05
+        },
+        {
+          "faces": 130,
+          "file": "woodchair/collision/woodchair_collision_033.obj",
+          "sha256": "44f8ea4045e217e4138e42b7c10d1ec222404a0cec552645ff7ba0eb4800cf62",
+          "vertices": 67,
+          "volume_m3": 7.007395977787864e-05
+        },
+        {
+          "faces": 124,
+          "file": "woodchair/collision/woodchair_collision_034.obj",
+          "sha256": "c06fe6b188e14c17a7feaa296b99d3048b10ca81297f98e610ef62a517ac8022",
+          "vertices": 64,
+          "volume_m3": 6.838820307688225e-05
+        },
+        {
+          "faces": 230,
+          "file": "woodchair/collision/woodchair_collision_035.obj",
+          "sha256": "83c7707888b9012ee2a80176ef510352e0fdf7eb5ebc878f8af91a1da50eaa37",
+          "vertices": 117,
+          "volume_m3": 7.310935981136805e-05
+        },
+        {
+          "faces": 364,
+          "file": "woodchair/collision/woodchair_collision_036.obj",
+          "sha256": "676456f2a3637b7c448d6759eadb964fa6d9486cda4a6c296f5645e39b3860a3",
+          "vertices": 184,
+          "volume_m3": 0.00012511981695918786
+        },
+        {
+          "faces": 136,
+          "file": "woodchair/collision/woodchair_collision_037.obj",
+          "sha256": "014cc2802ac2c2d3c9098ec4e4b2a1fc80f9618a908224b7b5a71551950ffee7",
+          "vertices": 70,
+          "volume_m3": 3.0459562324392604e-05
+        },
+        {
+          "faces": 196,
+          "file": "woodchair/collision/woodchair_collision_038.obj",
+          "sha256": "eb77f471cc9ee4bf3cc442dda8ab5520492680d433ec85aa91e05c9b9949e969",
+          "vertices": 100,
+          "volume_m3": 4.871957826019347e-05
+        },
+        {
+          "faces": 174,
+          "file": "woodchair/collision/woodchair_collision_039.obj",
+          "sha256": "8ca07e0146d8dd6206f2e8c779802497d51f1cc4e02323db64d7ec6e88185eed",
+          "vertices": 89,
+          "volume_m3": 0.00010613675173506516
+        },
+        {
+          "faces": 104,
+          "file": "woodchair/collision/woodchair_collision_040.obj",
+          "sha256": "360f23a952c617f25f83632a134016bde2d4028659b4b290ad22662ab1a5f876",
+          "vertices": 54,
+          "volume_m3": 7.999405083566918e-05
+        },
+        {
+          "faces": 250,
+          "file": "woodchair/collision/woodchair_collision_041.obj",
+          "sha256": "3b1a5419f3fc2e5dbf4174ad06aa71c9289b04982c486d46a1eeff1ad7dd60e8",
+          "vertices": 127,
+          "volume_m3": 0.00011554418681069681
+        },
+        {
+          "faces": 334,
+          "file": "woodchair/collision/woodchair_collision_042.obj",
+          "sha256": "fe6e983759636715cc790cc896835dccb95b52d4ca2030dd776b4a8340708f72",
+          "vertices": 169,
+          "volume_m3": 0.0001645115979545983
+        },
+        {
+          "faces": 104,
+          "file": "woodchair/collision/woodchair_collision_043.obj",
+          "sha256": "2c316fb157e333f2d91ed86bd42b8a58781c323e979b6aa40bcc60c323577d72",
+          "vertices": 54,
+          "volume_m3": 3.641412045887306e-05
+        },
+        {
+          "faces": 302,
+          "file": "woodchair/collision/woodchair_collision_044.obj",
+          "sha256": "b97af07e7c563453b37a73d0cc456e25f1e904724dfbfcb20c28b0a0781c9d4f",
+          "vertices": 153,
+          "volume_m3": 9.846939633121356e-05
+        }
+      ],
+      "source_mesh": "woodchair/woodchair.obj",
+      "source_sha256": "734847bd49d0c015459b2b74e5256650e6660e077dfadfa3bfff622949f34403"
+    }
+  },
+  "schema_version": 1
+}

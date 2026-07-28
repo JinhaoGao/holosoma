@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import multiprocessing as mp
 import os
 import sys
@@ -9,9 +10,11 @@ import sys
 # Add src to path for direct execution
 import time
 import traceback
+from collections import Counter
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from typing import Iterable
 
 import numpy as np
 import tyro
@@ -24,6 +27,12 @@ from holosoma_retargeting.config_types.data_type import normalize_data_format  #
 from holosoma_retargeting.config_types.retargeting import ParallelRetargetingConfig  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 from holosoma_retargeting.data_utils.motion_data import discover_motion_files  # noqa: E402
+from holosoma_retargeting.data_utils.object_assets import default_models_root  # noqa: E402
+from holosoma_retargeting.data_utils.omomo import (  # noqa: E402
+    OMOMO_OBJECT_NAMES,
+    parse_omomo_sequence_name,
+    preflight_omomo_dataset,
+)
 
 # Import reusable functions from robot_retarget.py
 from holosoma_retargeting.examples.robot_retarget import (  # type: ignore[import-not-found]  # noqa: E402
@@ -32,6 +41,7 @@ from holosoma_retargeting.examples.robot_retarget import (  # type: ignore[impor
     create_task_constants,
     initialize_robot_pose,
     load_motion_data,
+    resolve_task_object_name,
     setup_object_data,
     validate_config,
 )
@@ -55,10 +65,79 @@ PARALLEL_SAVE_DIRS = {
 }
 
 
-def find_files(data_dir: Path, data_format: str, object_name: str | None = None) -> list[str]:
+@dataclass(frozen=True)
+class TaskProcessResult:
+    """Serializable result returned by one worker."""
+
+    task_name: str
+    object_name: str
+    generated_files: tuple[str, ...]
+    skipped_files: tuple[str, ...]
+    elapsed_seconds: float
+
+    @property
+    def status(self) -> str:
+        """Summarize whether this task generated or only skipped outputs."""
+
+        return "completed" if self.generated_files else "skipped"
+
+
+def resolve_batch_object_names(
+    task_type: str,
+    data_format: str,
+    task_object_name: str | None,
+    object_names: Iterable[str] | None,
+) -> tuple[str, ...] | None:
+    """Normalize multi-object filters and reject conflicting selections."""
+
+    requested = tuple(dict.fromkeys(object_names or ()))
+    if task_type != "object_interaction" or data_format != "omomo":
+        if requested:
+            raise ValueError("object_names is only supported for OMOMO object-interaction batches")
+        return (task_object_name,) if task_object_name else None
+
+    unknown = set(requested).difference(OMOMO_OBJECT_NAMES)
+    if unknown:
+        raise ValueError(f"Unknown OMOMO object filters: {', '.join(sorted(unknown))}")
+    if task_object_name is not None:
+        if requested and requested != (task_object_name,):
+            raise ValueError("task_config.object_name conflicts with object_names")
+        return (task_object_name,)
+    return requested or None
+
+
+def find_files(
+    data_dir: Path,
+    data_format: str,
+    object_names: Iterable[str] | str | None = None,
+) -> list[str]:
     """Discover files through the shared single/batch format registry."""
 
-    return [str(path) for path in discover_motion_files(data_dir, data_format, object_name)]
+    if isinstance(object_names, str):
+        selected_objects = (object_names,)
+    else:
+        selected_objects = tuple(object_names) if object_names is not None else None
+    files = discover_motion_files(data_dir, data_format)
+    if data_format == "omomo" and selected_objects is not None:
+        selected = set(selected_objects)
+        files = [path for path in files if parse_omomo_sequence_name(path).object_name in selected]
+    return [str(path) for path in files]
+
+
+def _output_path(save_dir: Path, task_type: str, task_name: str, augmentation_name: str) -> Path:
+    if task_type == "robot_only":
+        return save_dir / f"{task_name}.npz"
+    return save_dir / f"{task_name}_{augmentation_name}.npz"
+
+
+def _write_json_report(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+    temporary_path.write_text(
+        f"{json.dumps(payload, indent=2, sort_keys=True)}\n",
+        encoding="utf-8",
+    )
+    temporary_path.replace(path)
 
 
 def generate_augmentation_configs(task_type: str, augmentation: bool = True):
@@ -128,9 +207,12 @@ def process_single_task(args):
         task_config,
         retargeter_config,
         augmentation,
+        overwrite_existing,
     ) = args
 
+    task_start = time.monotonic()
     os.makedirs(save_dir, exist_ok=True)
+    save_dir = Path(save_dir)
     source_path = Path(file_path)
     if task_type == "climbing":
         task_dir = source_path.parent
@@ -141,9 +223,31 @@ def process_single_task(args):
         data_path = source_path.parent
     print(f"Processing: {task_name}")
 
+    resolved_object_name = resolve_task_object_name(
+        task_type,
+        data_format,
+        task_name,
+        task_config.object_name,
+    )
+    task_config = replace(task_config, object_name=resolved_object_name)
+
     # Task-specific object setup: set default object_dir for climbing if not provided
     if task_type == "climbing" and task_config.object_dir is None:
         task_config = replace(task_config, object_dir=task_dir)
+
+    augmentations = generate_augmentation_configs(task_type, augmentation)
+    expected_outputs = [
+        _output_path(save_dir, task_type, task_name, config["name"])
+        for config in augmentations
+    ]
+    if not overwrite_existing and all(path.exists() for path in expected_outputs):
+        return TaskProcessResult(
+            task_name=task_name,
+            object_name=resolved_object_name,
+            generated_files=(),
+            skipped_files=tuple(str(path) for path in expected_outputs),
+            elapsed_seconds=time.monotonic() - task_start,
+        )
 
     constants = create_task_constants(robot_config, motion_data_config, task_config, task_type)
 
@@ -160,22 +264,21 @@ def process_single_task(args):
     toe_names = motion_data_config.toe_names
 
     # Process all augmentations
-    augmentations = generate_augmentation_configs(task_type, augmentation)
     print("The number of augmentations: ", len(augmentations))
+    generated_files: list[str] = []
+    skipped_files: list[str] = []
 
     for k, aug_config in enumerate(augmentations):
         # Use fresh copies for each iteration
         human_joints = human_joints_original.copy()
         object_poses = object_poses_original.copy()
         aug_name = aug_config["name"]
-        if task_type == "robot_only":
-            file_name = str(Path(save_dir) / f"{task_name}.npz")
-        else:
-            file_name = str(Path(save_dir) / f"{task_name}_{aug_name}.npz")
+        file_name = str(_output_path(save_dir, task_type, task_name, aug_name))
 
         print(f"  Processing augmentation: {aug_name}")
-        if Path(file_name).exists():
+        if Path(file_name).exists() and not overwrite_existing:
             print(f"  Skipping existing result: {file_name}")
+            skipped_files.append(file_name)
             continue
 
         # Setup object data
@@ -271,6 +374,15 @@ def process_single_task(args):
             dest_res_path=file_name,
             fps=constants.SOURCE_FPS,
         )
+        generated_files.append(file_name)
+
+    return TaskProcessResult(
+        task_name=task_name,
+        object_name=resolved_object_name,
+        generated_files=tuple(generated_files),
+        skipped_files=tuple(skipped_files),
+        elapsed_seconds=time.monotonic() - task_start,
+    )
 
 
 def main(cfg: ParallelRetargetingConfig) -> None:
@@ -292,6 +404,8 @@ def main(cfg: ParallelRetargetingConfig) -> None:
     )
     data_dir = cfg.data_dir
 
+    save_dir = Path(save_dir)
+    data_dir = Path(data_dir)
     os.makedirs(save_dir, exist_ok=True)
     print(f"Task type: {task_type}, Format: {data_format}")
     print(f"Data dir: {data_dir}, Save dir: {save_dir}")
@@ -303,13 +417,80 @@ def main(cfg: ParallelRetargetingConfig) -> None:
     if cfg.motion_data_config.robot_type != robot or cfg.motion_data_config.data_format != data_format:
         cfg.motion_data_config = replace(cfg.motion_data_config, data_format=data_format, robot_type=robot)
 
-    if task_type == "robot_only":
-        files = find_files(data_dir, data_format)
-    else:
-        files = find_files(data_dir, data_format, cfg.task_config.object_name)
+    requested_objects = resolve_batch_object_names(
+        task_type,
+        data_format,
+        cfg.task_config.object_name,
+        cfg.object_names,
+    )
+    preflight_report = None
+    if task_type == "object_interaction" and data_format == "omomo" and cfg.preflight:
+        print("Running OMOMO dataset and object-asset preflight")
+        preflight_report = preflight_omomo_dataset(
+            data_dir,
+            asset_root=default_models_root(),
+            validate_tensors=cfg.validate_input_tensors,
+        )
+        if not preflight_report.ok:
+            issue_summary = "; ".join(
+                f"{issue.code}: {issue.path} ({issue.message})"
+                for issue in preflight_report.issues[:10]
+            )
+            remaining = len(preflight_report.issues) - 10
+            if remaining > 0:
+                issue_summary += f"; and {remaining} more issue(s)"
+            raise ValueError(f"OMOMO preflight failed: {issue_summary}")
+
+    files = find_files(data_dir, data_format, requested_objects)
     print(f"Found {len(files)} files for task type: {task_type}")
     if not files:
         raise FileNotFoundError(f"No {data_format} motion files found in {data_dir}")
+
+    manifest: list[dict[str, str | None]] = []
+    for file_path in files:
+        source_path = Path(file_path)
+        task_name = source_path.parent.name if task_type == "climbing" else source_path.stem
+        if task_type == "object_interaction" and data_format == "omomo":
+            object_name = parse_omomo_sequence_name(task_name).object_name
+        else:
+            object_name = cfg.task_config.object_name
+        manifest.append(
+            {
+                "source_path": str(source_path),
+                "task_name": task_name,
+                "object_name": object_name,
+            }
+        )
+
+    object_counts = Counter(
+        entry["object_name"] for entry in manifest if entry["object_name"] is not None
+    )
+    report_path = cfg.report_path or save_dir / "batch_report.json"
+    report_base = {
+        "task_type": task_type,
+        "robot": robot,
+        "data_format": data_format,
+        "data_dir": str(data_dir),
+        "save_dir": str(save_dir),
+        "object_names": list(requested_objects) if requested_objects is not None else None,
+        "total_files": len(files),
+        "per_object": dict(sorted(object_counts.items())),
+        "manifest": manifest,
+        "preflight": preflight_report.to_dict() if preflight_report is not None else None,
+    }
+    if cfg.dry_run:
+        report = {
+            **report_base,
+            "status": "dry_run",
+            "completed_tasks": 0,
+            "skipped_tasks": 0,
+            "failed_tasks": 0,
+            "results": [],
+            "failures": [],
+        }
+        _write_json_report(Path(report_path), report)
+        print(f"Dry-run manifest written to: {report_path}")
+        return
 
     # Pass configs to worker processes
     process_args = [
@@ -323,17 +504,20 @@ def main(cfg: ParallelRetargetingConfig) -> None:
             cfg.task_config,
             cfg.retargeter,
             cfg.augmentation,
+            cfg.overwrite_existing,
         )
         for file_path in files
     ]
 
     # Set up parallel processing
-    max_workers = cfg.max_workers or mp.cpu_count()
+    max_workers = cfg.max_workers if cfg.max_workers is not None else min(4, mp.cpu_count())
+    if max_workers <= 0:
+        raise ValueError("max_workers must be greater than zero")
     print(f"Using {max_workers} parallel workers")
 
-    start_time = time.time()
-    successful = 0
-    failed = 0
+    start_time = time.monotonic()
+    results: list[dict] = []
+    failures: list[dict[str, str | None]] = []
 
     # Process files in parallel
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
@@ -344,25 +528,62 @@ def main(cfg: ParallelRetargetingConfig) -> None:
         for future in as_completed(future_to_file):
             file_path = future_to_file[future]
             try:
-                future.result()
-                print(f"Completed: {file_path}")
-                successful += 1
+                task_result = future.result()
+                result = asdict(task_result)
+                result["status"] = task_result.status
+                results.append(result)
+                print(f"{task_result.status.capitalize()}: {file_path}")
             except Exception as e:
                 print(f"Failed {file_path}: {e}")
                 traceback.print_exc()
-                failed += 1
+                source_path = Path(file_path)
+                task_name = source_path.parent.name if task_type == "climbing" else source_path.stem
+                if task_type == "object_interaction" and data_format == "omomo":
+                    object_name = parse_omomo_sequence_name(task_name).object_name
+                else:
+                    object_name = cfg.task_config.object_name
+                failures.append(
+                    {
+                        "source_path": str(source_path),
+                        "task_name": task_name,
+                        "object_name": object_name,
+                        "error": f"{type(e).__name__}: {e}",
+                    }
+                )
 
-    end_time = time.time()
+    elapsed_seconds = time.monotonic() - start_time
+    results.sort(key=lambda result: result["task_name"])
+    failures.sort(key=lambda failure: str(failure["task_name"]))
+    completed_tasks = sum(result["status"] == "completed" for result in results)
+    skipped_tasks = sum(result["status"] == "skipped" for result in results)
+    report = {
+        **report_base,
+        "status": "completed_with_failures" if failures else "completed",
+        "completed_tasks": completed_tasks,
+        "skipped_tasks": skipped_tasks,
+        "failed_tasks": len(failures),
+        "elapsed_seconds": elapsed_seconds,
+        "results": results,
+        "failures": failures,
+    }
+    _write_json_report(Path(report_path), report)
 
     print("\n=== Processing Summary ===")
     print(f"Task type: {task_type}")
     print(f"Total files: {len(files)}")
-    print(f"Successful: {successful}")
-    print(f"Failed: {failed}")
-    print(f"Total time: {end_time - start_time:.2f} seconds")
+    print(f"Completed: {completed_tasks}")
+    print(f"Skipped: {skipped_tasks}")
+    print(f"Failed: {len(failures)}")
+    print(f"Total time: {elapsed_seconds:.2f} seconds")
     if len(files) > 0:
-        print(f"Average time per file: {(end_time - start_time) / len(files):.2f} seconds")
+        print(f"Average time per file: {elapsed_seconds / len(files):.2f} seconds")
     print(f"Results saved to: {save_dir}")
+    print(f"Report written to: {report_path}")
+    if failures:
+        raise RuntimeError(
+            f"{len(failures)} of {len(files)} retargeting tasks failed; "
+            f"see {report_path} for details"
+        )
 
 
 if __name__ == "__main__":

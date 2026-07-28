@@ -83,6 +83,13 @@ def load_object_data(
             points = weighted_surface_sampling(obj_mesh, sample_count, surface_weights, seed)
     else:
         points, _ = trimesh.sample.sample_surface_even(obj_mesh, sample_count, seed=seed)
+        if len(points) < sample_count:
+            supplemental_points, _ = trimesh.sample.sample_surface(
+                obj_mesh,
+                sample_count - len(points),
+                seed=seed + 1,
+            )
+            points = np.concatenate([points, supplemental_points], axis=0)
 
     points = np.array(points)
     points_scaled = points * smpl_scale
@@ -332,7 +339,9 @@ def augment_object_poses(
         rotation_list[object_moving_frame_idx:] = rotation_initial * np.exp(
             (object_moving_frame_idx - np.arange(object_moving_frame_idx, N)) / rotation_tau
         )
-        rotation = R.from_euler("z", rotation_list)
+        # SciPy 1.17 requires one explicit angle column for batched
+        # single-axis Euler rotations; older versions accept this shape too.
+        rotation = R.from_euler("z", rotation_list[:, None])
         object_quat = R.from_quat(object_poses[:, :4], scalar_first=True)
         object_quat_rotated = (rotation * object_quat).as_quat(scalar_first=True)
         object_poses_augmented[:, :4] = object_quat_rotated

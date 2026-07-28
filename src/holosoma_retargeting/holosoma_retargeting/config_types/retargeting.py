@@ -79,4 +79,22 @@ class ParallelRetargetingConfig(RetargetingConfig):
     This overrides data_path from RetargetingConfig when processing multiple files."""
 
     max_workers: int | None = None
-    """Maximum number of parallel workers. Auto-determined if None."""
+    """Maximum number of parallel workers. Defaults to a safe bound of four."""
+
+    object_names: tuple[str, ...] | None = None
+    """Optional OMOMO object categories to process. None processes every category."""
+
+    preflight: bool = True
+    """Validate OMOMO motion data and all object assets before launching workers."""
+
+    validate_input_tensors: bool = True
+    """Load and validate every selected OMOMO tensor during preflight."""
+
+    dry_run: bool = False
+    """Write the batch manifest and report without running retargeting."""
+
+    overwrite_existing: bool = False
+    """Regenerate outputs that already exist instead of resuming around them."""
+
+    report_path: Path | None = None
+    """Optional JSON report path. Defaults to <save_dir>/batch_report.json."""

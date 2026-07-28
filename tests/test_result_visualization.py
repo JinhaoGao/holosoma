@@ -1,4 +1,4 @@
-# ruff: noqa: PT009
+# ruff: noqa: PT009, PT027
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ if str(PACKAGE_ROOT) not in sys.path:
 from holosoma_retargeting.config_types.viser import ViserConfig  # noqa: E402
 from holosoma_retargeting.data_conversion.convert_data_format_mj import MotionLoader  # noqa: E402
 from holosoma_retargeting.viser_player import (  # noqa: E402
+    ObjectKeypointOverlay,
     _mesh_color_override,
     _resolve_data_format,
     _resolve_runtime_config,
@@ -43,6 +44,10 @@ class ResultVisualizationTests(unittest.TestCase):
                 object_name=np.asarray("ground"),
                 object_urdf=np.asarray(""),
                 contains_object_in_qpos=np.asarray(False),
+                object_points_demo_local=np.zeros((4, 3), dtype=np.float32),
+                object_points_target_local=np.ones((4, 3), dtype=np.float32),
+                object_points_demo_world=np.zeros((2, 4, 3), dtype=np.float32),
+                object_points_target_world=np.ones((2, 4, 3), dtype=np.float32),
                 interaction_source_vertices_w=np.zeros((2, 3, 3), dtype=np.float32),
                 interaction_target_vertices_w=np.ones((2, 3, 3), dtype=np.float32),
                 interaction_tetrahedra=np.zeros((2, 1, 4), dtype=np.int32),
@@ -58,7 +63,48 @@ class ResultVisualizationTests(unittest.TestCase):
         self.assertEqual(metadata["source_data_format"], "gvhmr")
         self.assertEqual(metadata["robot_type"], "g1")
         self.assertFalse(metadata["contains_object_in_qpos"])
+        self.assertEqual(metadata["object_keypoints"]["demo_local"].shape, (4, 3))
+        self.assertEqual(metadata["object_keypoints"]["target_local"].shape, (4, 3))
+        self.assertEqual(metadata["object_keypoints"]["demo_world"].shape, (2, 4, 3))
+        self.assertEqual(metadata["object_keypoints"]["target_world"].shape, (2, 4, 3))
         self.assertEqual(interaction_mesh["source_vertices"].shape, (2, 3, 3))
+
+    def test_object_keypoint_overlay_rejects_mismatched_saved_sequences(self):
+        with self.assertRaisesRegex(ValueError, r"matching \(frames, points, 3\)"):
+            ObjectKeypointOverlay(
+                server=None,
+                keypoint_data={
+                    "demo_world": np.zeros((2, 4, 3), dtype=np.float32),
+                    "target_world": np.zeros((2, 5, 3), dtype=np.float32),
+                },
+                point_radius=0.02,
+            )
+
+    def test_legacy_interaction_mesh_supplies_object_keypoint_overlay(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result_path = Path(tmpdir) / "legacy_result.npz"
+            source_vertices = np.arange(2 * 5 * 3, dtype=np.float32).reshape(2, 5, 3)
+            target_vertices = source_vertices + 1.0
+            np.savez(
+                result_path,
+                qpos=np.zeros((2, 43), dtype=np.float32),
+                interaction_source_vertices_w=source_vertices,
+                interaction_target_vertices_w=target_vertices,
+                interaction_tetrahedra=np.zeros((2, 1, 4), dtype=np.int32),
+                interaction_tetrahedra_counts=np.ones(2, dtype=np.int32),
+                interaction_num_human_vertices=np.int32(2),
+            )
+
+            _, _, _, metadata, _ = load_npz(str(result_path))
+
+        np.testing.assert_array_equal(
+            metadata["object_keypoints"]["demo_world"],
+            source_vertices[:, 2:],
+        )
+        np.testing.assert_array_equal(
+            metadata["object_keypoints"]["target_world"],
+            target_vertices[:, 2:],
+        )
 
     def test_runtime_config_uses_saved_robot_object_and_format_metadata(self):
         metadata = {
@@ -78,6 +124,30 @@ class ResultVisualizationTests(unittest.TestCase):
             ),
             "gvhmr",
         )
+
+    def test_runtime_config_resolves_catalog_object_from_result_metadata(self):
+        metadata = {
+            "robot_type": "e1",
+            "object_name": "tripod",
+            "object_urdf": "",
+            "contains_object_in_qpos": True,
+        }
+        config = _resolve_runtime_config(
+            ViserConfig(qpos_npz="sub2_tripod_019_original.npz"),
+            metadata,
+        )
+        self.assertEqual(config.robot_urdf, "models/e1/e1_23dof.urdf")
+        self.assertTrue(config.object_urdf.endswith("models/tripod/tripod.urdf"))
+
+    def test_runtime_config_infers_legacy_result_object_from_filename(self):
+        config = _resolve_runtime_config(
+            ViserConfig(
+                qpos_npz="sub2_whitechair_019_original.npz",
+                robot_type="g1",
+            ),
+            {},
+        )
+        self.assertTrue(config.object_urdf.endswith("models/whitechair/whitechair.urdf"))
 
     def test_mesh_opacity_preserves_opaque_materials_and_clamps_translucency(self):
         self.assertIsNone(_mesh_color_override(1.0))

@@ -62,8 +62,9 @@ python examples/robot_retarget.py \
 python examples/robot_retarget.py \
   --data-path demo_data/OMOMO_new \
   --task-type object_interaction \
-  --task-name sub3_largebox_003 \
+  --task-name sub10_tripod_000 \
   --data-format omomo \
+  --robot e1 \
   --retargeter.debug \
   --retargeter.visualize
 
@@ -119,6 +120,9 @@ python examples/robot_retarget.py \
 
 Add `--augmentation` to run an augmented object-interaction or climbing
 sequence. The corresponding original sequence must be generated first.
+For OMOMO object interaction, the object category is inferred from the
+canonical `subN_object_NNN` task name. An explicit
+`--task-config.object-name` is optional and is treated as a consistency check.
 
 ## Batch Processing for Motion Retargeting
 
@@ -133,13 +137,14 @@ python examples/parallel_robot_retarget.py \
   --save-dir demo_results_parallel/g1/robot_only/omomo \
   --task-config.object-name ground
 
-# Object interaction (OMOMO)
+# All OMOMO object-interaction sequences on G1
 python examples/parallel_robot_retarget.py \
   --data-dir demo_data/OMOMO_new \
   --task-type object_interaction \
   --data-format omomo \
+  --robot g1 \
   --save-dir demo_results_parallel/g1/object_interaction/omomo \
-  --task-config.object-name largebox
+  --max-workers 4
 
 # Climbing
 python examples/parallel_robot_retarget.py \
@@ -165,7 +170,66 @@ python examples/parallel_robot_retarget.py \
 ```
 
 Add `--augmentation` to process both original and augmented
-object-interaction/climbing sequences. Existing output files are skipped.
+object-interaction/climbing sequences. For every OMOMO object-interaction
+motion, the batch produces `original`, `trans_0`, `trans_1`, `trans_2`,
+`rot_0`, and `rot_1`. The translations are `[0.2, 0, 0]`, `[0, 0.2, 0]`,
+and `[0, -0.2, 0]` meters in the initial human-to-object local frame, then
+converted to world coordinates. The rotations are `+45` and `-45` degrees
+around Z, paired with `[0, 0.2, 0]` and `[0, -0.2, 0]` meter local
+translations. The full perturbation is applied before the object begins
+moving, then exponentially decays after that frame. Each variant is solved
+again from the original robot initial/nominal trajectory; it is not a
+post-transform of an output qpos.
+
+There is no motion-semantic allowlist. Every selected object-interaction
+sequence that passes the data/asset preflight attempts all five augmentations.
+To overwrite and regenerate the complete largebox set while saving both
+pre/post-scale object points and Interaction Mesh data:
+
+```bash
+python examples/parallel_robot_retarget.py \
+  --data-dir demo_data/OMOMO_new \
+  --task-type object_interaction \
+  --data-format omomo \
+  --robot g1 \
+  --object-names largebox \
+  --save-dir demo_results_parallel/g1/object_interaction/omomo \
+  --max-workers 4 \
+  --augmentation \
+  --overwrite-existing \
+  --retargeter.save-interaction-mesh
+```
+
+Existing output files are skipped unless `--overwrite-existing` is set. OMOMO
+batches run a dataset/height/asset preflight by default and write
+`batch_report.json` under the save directory.
+
+The supported OMOMO catalog is `clothesstand`, `floorlamp`, `largebox`,
+`largetable`, `monitor`, `plasticbox`, `smallbox`, `smalltable`, `suitcase`,
+`trashcan`, `tripod`, `whitechair`, and `woodchair`. Omit `--object-names` to
+process all categories, or select an exact subset. Use `--dry-run` first to
+validate all inputs and write the manifest without starting optimization:
+
+```bash
+# Preflight and manifest for all thirteen categories
+python examples/parallel_robot_retarget.py \
+  --data-dir demo_data/OMOMO_new \
+  --task-type object_interaction \
+  --data-format omomo \
+  --robot g1 \
+  --save-dir demo_results_parallel/g1/object_interaction/omomo \
+  --dry-run
+
+# Resume a selected subset on E1
+python examples/parallel_robot_retarget.py \
+  --data-dir demo_data/OMOMO_new \
+  --task-type object_interaction \
+  --data-format omomo \
+  --robot e1 \
+  --object-names tripod suitcase whitechair \
+  --save-dir demo_results_parallel/e1/object_interaction/omomo \
+  --max-workers 4
+```
 
 ## Data Preparation
 
@@ -184,6 +248,25 @@ format differs from the original OMOMO release.
    pass `--motion-data-config.human-height HEIGHT`.
 
 The motion files should be `.pt` tensors.
+
+Validate the complete directory, the subject-height table, and all thirteen
+package assets before a long run:
+
+```bash
+python data_utils/preflight_omomo.py demo_data/OMOMO_new \
+  --asset-root models \
+  --output demo_results_parallel/omomo_preflight.json
+```
+
+For a release-level smoke test, run two real optimizer frames for every
+G1/E1-object pair. This creates and validates 26 result NPZ files:
+
+```bash
+python data_utils/validate_omomo_retargeting.py demo_data/OMOMO_new \
+  --robots g1 e1 \
+  --frames 2 \
+  --output-dir demo_results_validation/omomo_g1_e1
+```
 
 ### LAFAN
 
@@ -306,6 +389,55 @@ The converter runs batched SMPL-X forward kinematics, converts GVHMR's
 right-handed Y-up world frame to right-handed Z-up, computes shape-specific
 height, and writes root quaternions in `wxyz` order.
 
+## Inspect Raw Human Motion Before Retargeting
+
+Use the unified raw-motion viewer to determine whether a contact or pose issue
+already exists in the source data or is introduced later by normalization and
+retargeting:
+
+```bash
+# OMOMO object interaction: complete 52-joint skeleton and moving source mesh
+python examples/raw_human_motion_viewer.py \
+  --motion-path demo_data/OMOMO_new/sub3_largebox_003.pt
+
+# Climbing: complete 53-joint skeleton and static source multi_boxes.obj
+python examples/raw_human_motion_viewer.py \
+  --motion-path demo_data/climb/mocap_climb_seq_0
+
+# Robot-only source without a scene mesh
+python examples/raw_human_motion_viewer.py \
+  --motion-path demo_data/lafan/dance1_subject1.npy
+```
+
+The viewer supports `omomo`, `mocap`, `lafan`, `amass`, `gvhmr`, and
+`noetix_mocap`. It infers the data format from the selected file and infers the
+task context from its contents and neighboring assets. A dataset directory can
+also be passed together with `--sequence`, for example
+`--motion-path demo_data/OMOMO_new --sequence sub3_largebox_003`. Use an
+explicit `--task-type robot_only` when inspecting an OMOMO file without its
+object, and use `--mesh-path PATH` to override automatic mesh lookup.
+
+This tool intentionally bypasses `preprocess_motion_data`: it does not apply
+the foot-height shift, robot-height scale, augmentation, or retargeting. OMOMO
+meshes use the raw per-frame object pose, climbing meshes use the static source
+coordinates, and data without a corresponding mesh is shown as a skeleton
+only. “Raw” here means the registered adapter output; format-required decoding
+still applies, including the LAFAN coordinate conversion and the declared
+mocap temporal sampling. Add `--dry-run` to validate and summarize the scene
+without starting Viser.
+
+The keyboard controls follow the other Viser players:
+
+| Key | Action |
+| --- | --- |
+| `Space` | Play or pause |
+| `[` / `]` | Previous or next frame |
+| `Home` / `End` | First or last frame |
+| `K` | Toggle all human keypoints |
+| `.` | Toggle the complete skeleton |
+| `L` | Toggle joint-name labels |
+| `O` | Toggle the source object or terrain mesh |
+
 ## Check Visualizations of Saved Retargeting Results
 
 New results store robot, data-format, object, FPS, skeleton, and qpos-layout
@@ -375,6 +507,7 @@ python examples/robot_retarget.py \
   --task-name sub3_largebox_003 \
   --data-format omomo \
   --retargeter.visualize \
+  --retargeter.debug \
   --retargeter.mesh-opacity 0.4 \
   --retargeter.show-interaction-mesh \
   --retargeter.save-interaction-mesh \
@@ -388,6 +521,7 @@ Replay all overlays with:
 python viser_player.py \
   --qpos-npz demo_results/g1/object_interaction/omomo/sub3_largebox_003_original.npz \
   --show-mapped-skeletons \
+  --show-object-keypoints \
   --show-interaction-mesh \
   --interaction-mesh-mode both \
   --interaction-mesh-edges cross \
@@ -395,18 +529,61 @@ python viser_player.py \
   --object-mesh-opacity 0.25
 ```
 
+To compare an original result and all five augmentations in one synchronized
+scene, pass any one of the six matching files to:
+
+```bash
+python augmentation_viser_player.py \
+  --qpos-npz demo_results_parallel/g1/object_interaction/omomo/sub3_largebox_003_original.npz
+```
+
+This viewer discovers the six siblings and color-codes each robot mesh, mapped
+human skeleton, mapped robot skeleton, and object mesh, with a visibility
+toggle per series. The result files still contain Interaction Mesh data, but
+the grouped viewer intentionally does not load or draw it to avoid six
+tetrahedral edge sets obscuring the scene. Use the single-result
+`viser_player.py --show-interaction-mesh` command above to inspect the
+Interaction Mesh for one variant.
+
+For OMOMO, `--show-mapped-skeletons` augments the original 15 blue mapped
+joints with smaller blue points and lines for both complete SMPL-H finger
+chains. The finger joints are diagnostic only; they are not added to the
+Interaction Mesh and do not change optimization. `--show-object-keypoints`
+draws the exact per-frame object points saved during retargeting: red is the
+demo object normalized with the human height, and cyan is the object at the
+target asset scale. Because the result stores the world-space points actually
+used by that run, replay does not resample the object surface.
+
 `--mesh-opacity` provides a shared opacity. `--robot-mesh-opacity` and
-`--object-mesh-opacity` override it independently. Skeleton point/line size and
-Interaction Mesh line width are controlled by `--skeleton-point-radius`,
-`--skeleton-line-width`, and `--interaction-mesh-line-width`.
+`--object-mesh-opacity` override it independently. Skeleton point/line size,
+object point size, and Interaction Mesh line width are controlled by
+`--skeleton-point-radius`, `--skeleton-line-width`,
+`--object-keypoint-radius`, and `--interaction-mesh-line-width`.
 
 ## Result NPZ Contract
 
 New retargeting results contain `qpos`, `fps`, `cost`, the full and mapped human
 skeletons, mapped robot skeleton positions, and
-`source_data_format`/`robot_type`/object metadata. If
+`source_data_format`/`robot_type`/object metadata. Object-interaction results
+also always contain `object_points_demo_local`, `object_points_target_local`,
+`object_points_demo_world`, and `object_points_target_world`, which preserve
+the demo/target-scale local samples and their per-frame world coordinates. If
 `--retargeter.save-interaction-mesh` is enabled, per-frame source/target
-vertices and tetrahedra are included as well.
+vertices and tetrahedra are included as well. If the normal 1 mm foot-sticking
+constraints make one frame infeasible, that frame is first retried with
+`foot_sticking_fallback_tolerance`, then with only its foot-sticking constraints
+released. The affected frame indices are saved in
+`foot_sticking_fallback_frames` and `foot_sticking_release_frames`. If the
+trajectory has already entered a state that remains infeasible after this
+local release, the complete sequence is restarted without foot sticking while
+all other constraints remain enabled. The saved result records this in
+`foot_sticking_enabled_for_saved_trajectory` and
+`foot_sticking_full_sequence_retry_frame`. Robot-object non-penetration is not
+released by default. The opt-in
+`--retargeter.release-object-non-penetration-on-infeasible` fallback releases
+only the failing frame's robot-object constraint while preserving ground
+non-penetration. Such a result is degraded rather than collision-valid; the
+affected frames are recorded in `object_non_penetration_release_frames`.
 
 Robot-only qpos uses `[root_xyz, root_wxyz, robot_dof]`. Dynamic-object qpos
 appends `[object_xyz, object_wxyz]`.
@@ -439,6 +616,9 @@ python evaluation/eval_retargeting.py \
 Robot-only evaluation uses the preprocessed human skeleton saved in each new
 result. Therefore, the same command also supports LAFAN, AMASS, Noetix-mocap,
 and GVHMR when `--data-format` and the paths are changed.
+For OMOMO robot-object results, evaluation resolves the object independently
+for every NPZ from saved metadata and the canonical filename. Do not pass
+`--object-name` for a directory containing multiple object categories.
 
 ## Prepare Data for Training RL Whole-Body Tracking Policy
 
@@ -466,7 +646,6 @@ mjpython data_conversion/convert_data_format_mj.py \
   --output-fps 50 \
   --output-name converted_res/object_interaction/sub3_largebox_003_mj_w_obj.npz \
   --data-format omomo \
-  --object-name largebox \
   --has-dynamic-object \
   --once
 ```
@@ -495,14 +674,17 @@ python data_conversion/convert_data_format_mj.py \
 
 ```bash
 python data_conversion/convert_data_format_mj.py \
-  --input-file ./demo_results/g1/object_interaction/omomo/sub3_largebox_003_original.npz \
+  --input-file ./demo_results/e1/object_interaction/omomo/sub10_tripod_000_original.npz \
+  --robot e1 \
   --output-fps 50 \
-  --output-name converted_res/object_interaction/sub3_largebox_003_mj_w_obj.npz \
+  --output-name converted_res/object_interaction/sub10_tripod_000_mj_w_obj.npz \
   --data-format omomo \
-  --object-name largebox \
   --has-dynamic-object \
   --once
 ```
+
+Dynamic OMOMO conversion infers the category from result metadata or the
+canonical filename and rejects conflicting explicit overrides.
 
 ### OmniRetarget Data
 

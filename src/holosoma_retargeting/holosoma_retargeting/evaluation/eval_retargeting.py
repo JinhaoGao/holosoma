@@ -26,6 +26,14 @@ if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 from holosoma_retargeting.config_types.data_type import MotionDataConfig, normalize_data_format  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
+from holosoma_retargeting.data_utils.object_assets import (  # noqa: E402
+    create_omomo_object_scene,
+    get_omomo_object_asset,
+)
+from holosoma_retargeting.data_utils.omomo import (  # noqa: E402
+    OMOMO_OBJECT_NAMES,
+    resolve_omomo_result_object_name,
+)
 from holosoma_retargeting.src.mujoco_utils import _world_mesh_from_geom  # type: ignore[import-not-found]  # noqa: E402
 from holosoma_retargeting.src.utils import (  # type: ignore[import-not-found]  # noqa: E402
     create_new_scene_xml_file,
@@ -61,8 +69,24 @@ def create_task_constants(
     if object_name is not None:
         namespace.OBJECT_NAME = object_name
 
-    # Provide default object asset paths for non-ground objects
-    if namespace.OBJECT_NAME != "ground":
+    # Provide catalog-backed OMOMO assets and generated robot-object scenes.
+    if namespace.OBJECT_NAME in OMOMO_OBJECT_NAMES:
+        object_asset = get_omomo_object_asset(namespace.OBJECT_NAME)
+        robot_xml_path = Path(namespace.ROBOT_URDF_FILE).with_suffix(".xml")
+        if not robot_xml_path.is_absolute():
+            robot_xml_path = Path(__file__).resolve().parents[1] / robot_xml_path
+        namespace.OBJECT_URDF_FILE = str(object_asset.urdf_path)
+        namespace.OBJECT_MESH_FILE = str(object_asset.mesh_path)
+        namespace.OBJECT_URDF_TEMPLATE = str(
+            object_asset.mesh_path.parent.parent / "templates" / "omomo_object.urdf.jinja"
+        )
+        namespace.SCENE_XML_FILE = str(
+            create_omomo_object_scene(
+                robot_xml_path,
+                namespace.OBJECT_NAME,
+            )
+        )
+    elif namespace.OBJECT_NAME != "ground":
         namespace.OBJECT_URDF_FILE = f"models/{namespace.OBJECT_NAME}/{namespace.OBJECT_NAME}.urdf"
         namespace.OBJECT_MESH_FILE = f"models/{namespace.OBJECT_NAME}/{namespace.OBJECT_NAME}.obj"
         namespace.OBJECT_URDF_TEMPLATE = f"models/templates/{namespace.OBJECT_NAME}.urdf.jinja"
@@ -117,7 +141,7 @@ class RetargetingEvaluator:
         # Load Mujoco model
         if self.object_name == "ground":
             robot_xml_path = robot_model_path.replace(".urdf", ".xml")
-        elif self.object_name == "multi_boxes":
+        elif getattr(constants, "SCENE_XML_FILE", ""):
             robot_xml_path = constants.SCENE_XML_FILE  # type: ignore[attr-defined]
         else:
             robot_xml_path = robot_model_path.replace(".urdf", "_w_" + self.object_name + ".xml")
@@ -158,16 +182,25 @@ class RetargetingEvaluator:
         self.constants = constants
 
     def _bake_object_mesh_from_xml(self):
-        """Bake world-frame triangle soup for geoms whose name contains self.object_name (mesh geoms only)."""
+        """Bake the visual object mesh in world coordinates."""
         m, d = self.robot_model, self.robot_data
         mujoco.mj_forward(m, d)
 
         obj_Vs, obj_Fs, v_acc = [], [], 0
+        visual_name = f"{self.object_name}_visual"
+        geom_names = [
+            mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, gid) or ""
+            for gid in range(m.ngeom)
+        ]
+        has_separate_visual = visual_name in geom_names
         for gid in range(m.ngeom):
             if m.geom_type[gid] != mujoco.mjtGeom.mjGEOM_MESH:
                 continue  # mesh-only
-            name = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, gid) or ""
-            if self.object_name not in name:
+            name = geom_names[gid]
+            if has_separate_visual:
+                if name != visual_name:
+                    continue
+            elif self.object_name not in name:
                 continue
             Vw, F = _world_mesh_from_geom(m, d, gid, name)  # your helper
             if Vw is None or F is None or Vw.size == 0 or F.size == 0:
@@ -487,10 +520,19 @@ class RetargetingEvaluator:
 
         preserved = []
 
-        obj_gids = [
+        collision_prefix = f"{self.object_name}_collision_"
+        collision_gids = [
             g
             for g in range(self.robot_model.ngeom)
-            if self.object_name in (mujoco.mj_id2name(self.robot_model, mujoco.mjtObj.mjOBJ_GEOM, g) or "")
+            if (
+                mujoco.mj_id2name(self.robot_model, mujoco.mjtObj.mjOBJ_GEOM, g) or ""
+            ).startswith(collision_prefix)
+        ]
+        obj_gids = collision_gids or [
+            g
+            for g in range(self.robot_model.ngeom)
+            if self.object_name
+            in (mujoco.mj_id2name(self.robot_model, mujoco.mjtObj.mjOBJ_GEOM, g) or "")
         ]
 
         for _q, demo_joints in zip(q_trajectory, human_joints_motion):
@@ -629,10 +671,22 @@ def _evaluate_single_task(
     robot_config = RobotConfig(**robot_config_kwargs)
     motion_data_config = MotionDataConfig(**motion_data_config_kwargs)
 
+    resolved_object_name = object_name
+    if data_type == "robot_object":
+        if motion_data_config.data_format == "omomo":
+            resolved_object_name = resolve_omomo_result_object_name(
+                data_path,
+                explicit_object_name=object_name,
+            )
+        elif object_name is None:
+            raise ValueError(
+                "Non-OMOMO robot-object evaluation requires an explicit object name"
+            )
+
     constants = create_task_constants(
         robot_config,
         motion_data_config,
-        object_name=object_name,
+        object_name=resolved_object_name,
     )
 
     if data_type == "robot_terrain":
@@ -735,11 +789,11 @@ def main(cfg: Args) -> None:
             robot_type=cfg.robot,
         )
 
-    # Determine default object name when none provided
+    # OMOMO robot-object workers infer their object independently from each result.
     if cfg.object_name is not None:
         object_name = cfg.object_name
     elif cfg.data_type == "robot_object":
-        object_name = "largebox"
+        object_name = None
     elif cfg.data_type == "robot_terrain":
         object_name = "multi_boxes"
     else:
