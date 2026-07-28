@@ -96,6 +96,7 @@ class OrientationAblationTests(unittest.TestCase):
         shoulders_feet = orientation_weights_for_variant("shoulders_feet", 10.0)
         full = orientation_weights_for_variant("full", 1.0)
         full_equal = orientation_weights_for_variant("full_equal", 100.0)
+        balanced_optimal = orientation_weights_for_variant("balanced_optimal", 1.0)
 
         self.assertEqual(tuple(baseline), ORIENTATION_JOINTS)
         self.assertTrue(all(weight == 0.0 for weight in baseline.values()))
@@ -121,6 +122,7 @@ class OrientationAblationTests(unittest.TestCase):
         )
         self.assertTrue(all(full[name] > 0.0 for name in ORIENTATION_JOINTS))
         self.assertTrue(all(weight == 100.0 for weight in full_equal.values()))
+        self.assertTrue(all(weight == 0.085 for weight in balanced_optimal.values()))
 
     def test_baseline_is_not_duplicated_across_weight_scales(self):
         specs = ablation_run_specs(

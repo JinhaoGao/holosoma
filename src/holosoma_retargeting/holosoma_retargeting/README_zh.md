@@ -320,6 +320,8 @@ python data_utils/convert_noetix_bvh.py \
 
 `full_equal` 配置会用完全相同的指定权重跟踪全部 15 个 link。它与已有的 `full` 不同，后者为腿、脚、前臂和手保留了不相同的相对系数。
 
+`balanced_optimal` 配置将全部 15 个朝向权重固定为 `0.085`。该值来自对 2660 帧 `breaking+hippop.bvh_Skeleton1` 的并行粗搜索、分组搜索、完整序列复核和局部精确搜索，在位置与朝向等权的归一化判据下取得最低综合分。完整数学目标、Pareto 分析和测量结果见 [orientation_weight_search_report_zh.md](examples/orientation_weight_search_report_zh.md)。
+
 可复现实验入口固定使用 `breaking+hippop.bvh_Skeleton1`，并生成 baseline、root、feet、gmr_legs、shoulders、upper 和 full 七组结果、每次运行的 manifest 以及统一 `summary.json`。其中 `gmr_legs` 对应 GMR E1 主任务实际启用旋转代价的髋、膝和足链，`shoulders` 只对 `LeftArm/RightArm → l/r_arm_shoulder_yaw_link` 加入朝向代价，其他十一个诊断 link 的权重严格为零。本项目沿用 GMR 的逐 link 偏置设计，但从 Noetix T-pose 和本项目实际 E1 MJCF 自动推导偏置，不照搬另一套模型的四元数或数值权重：
 
 ```bash

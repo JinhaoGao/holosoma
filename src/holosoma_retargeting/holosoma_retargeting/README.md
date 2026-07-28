@@ -409,6 +409,13 @@ The `full_equal` profile tracks all 15 configured links with exactly the same
 requested weight. This differs from `full`, which retains nonuniform relative
 coefficients for the legs, feet, forearms, and hands.
 
+The `balanced_optimal` profile fixes every configured orientation weight at
+`0.085`. It is the equal position-orientation balance selected by a parallel
+coarse, grouped, full-sequence, and local search on the 2660-frame
+`breaking+hippop.bvh_Skeleton1` sequence. See
+[orientation_weight_search_report_zh.md](examples/orientation_weight_search_report_zh.md)
+for the objective, Pareto analysis, and complete measurements.
+
 Run the reproducible `breaking+hippop` baseline, grouped-link, and full-link
 ablations with the `gmr_legs` profile mirroring the hip, knee, and foot chains
 whose rotation costs are enabled by GMR's primary E1 task. The `shoulders`
