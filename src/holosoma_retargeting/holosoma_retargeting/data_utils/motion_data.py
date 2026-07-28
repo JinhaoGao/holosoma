@@ -42,6 +42,7 @@ class HumanMotion:
     source_path: Path
     object_poses_wxyz_xyz: np.ndarray | None = None
     root_quaternions_wxyz: np.ndarray | None = None
+    global_joint_quaternions_wxyz: np.ndarray | None = None
 
 
 MOTION_FORMATS: dict[str, MotionFormatSpec] = {
@@ -182,6 +183,7 @@ def _validate_motion(
     fps: float,
     object_poses: np.ndarray | None = None,
     root_quaternions: np.ndarray | None = None,
+    global_joint_quaternions: np.ndarray | None = None,
 ) -> HumanMotion:
     expected_joints = len(DEMO_JOINTS_REGISTRY[spec.name])
     joints = np.asarray(joints, dtype=np.float32)
@@ -217,6 +219,30 @@ def _validate_motion(
             raise ValueError(f"{spec.name} root quaternions must be finite and non-zero")
         validated_root_quaternions = validated_root_quaternions / norms[:, None]
 
+    validated_global_joint_quaternions = None
+    if global_joint_quaternions is not None:
+        validated_global_joint_quaternions = np.asarray(
+            global_joint_quaternions,
+            dtype=np.float64,
+        )
+        expected_shape = (joints.shape[0], expected_joints, 4)
+        if validated_global_joint_quaternions.shape != expected_shape:
+            raise ValueError(
+                f"{spec.name} global joint quaternions must have shape "
+                f"{expected_shape}, got {validated_global_joint_quaternions.shape}"
+            )
+        norms = np.linalg.norm(validated_global_joint_quaternions, axis=-1)
+        if (
+            not np.isfinite(validated_global_joint_quaternions).all()
+            or np.any(norms <= 1e-8)
+        ):
+            raise ValueError(
+                f"{spec.name} global joint quaternions must be finite and non-zero"
+            )
+        validated_global_joint_quaternions = (
+            validated_global_joint_quaternions / norms[..., None]
+        )
+
     return HumanMotion(
         joints=joints,
         fps=float(fps),
@@ -224,6 +250,7 @@ def _validate_motion(
         source_path=source_path,
         object_poses_wxyz_xyz=validated_object_poses,
         root_quaternions_wxyz=validated_root_quaternions,
+        global_joint_quaternions_wxyz=validated_global_joint_quaternions,
     )
 
 
@@ -307,6 +334,9 @@ def _load_noetix(path: Path, spec: MotionFormatSpec, human_height: float | None)
             source_path=path,
             human_height=height,
             fps=_read_scalar(data, "fps"),
+            global_joint_quaternions=data.get(
+                "global_joint_quaternions_wxyz"
+            ),
         )
 
 

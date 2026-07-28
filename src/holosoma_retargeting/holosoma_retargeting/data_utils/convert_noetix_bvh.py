@@ -11,6 +11,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 src_root = Path(__file__).resolve().parents[2]
 data_utils_root = Path(__file__).resolve().parent
@@ -118,6 +119,15 @@ NOETIX_RUN23_MAPPING = {
     "LeftHand": "RightWrist",
 }
 
+Y_UP_TO_Z_UP_BASIS = np.array(
+    [
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [0.0, 1.0, 0.0],
+    ],
+    dtype=np.float64,
+)
+
 
 def classify_bvh(joint_names: list[str]) -> tuple[str, dict[str, str]]:
     names = set(joint_names)
@@ -140,7 +150,7 @@ def classify_bvh(joint_names: list[str]) -> tuple[str, dict[str, str]]:
 
 
 def select_canonical_joints(
-    positions_y_up: np.ndarray,
+    values: np.ndarray,
     source_joint_names: list[str],
     mapping: dict[str, str],
 ) -> np.ndarray:
@@ -155,7 +165,7 @@ def select_canonical_joints(
         raise ValueError(f"Missing source joints for canonical conversion: {missing}")
 
     indices = [source_idx[mapping[name]] for name in NOETIX_MOCAP_DEMO_JOINTS]
-    return positions_y_up[:, indices, :]
+    return values[:, indices, :]
 
 
 def synthesize_reduced_spine2(canonical_positions_y_up: np.ndarray) -> np.ndarray:
@@ -168,8 +178,65 @@ def synthesize_reduced_spine2(canonical_positions_y_up: np.ndarray) -> np.ndarra
     return canonical_positions_y_up
 
 
+def synthesize_reduced_spine2_orientation(
+    canonical_quaternions_wxyz: np.ndarray,
+) -> np.ndarray:
+    """Interpolate the missing global Spine2 frame between Spine1 and Neck."""
+    result = canonical_quaternions_wxyz.copy()
+    joint_idx = {name: idx for idx, name in enumerate(NOETIX_MOCAP_DEMO_JOINTS)}
+    spine1 = result[:, joint_idx["Spine1"]]
+    neck = result[:, joint_idx["Neck"]].copy()
+    neck[np.sum(spine1 * neck, axis=1) < 0.0] *= -1.0
+    midpoint = spine1 + neck
+    norms = np.linalg.norm(midpoint, axis=1)
+    if np.any(norms <= 1e-8):
+        raise ValueError("Cannot interpolate reduced-spine orientation from antipodal quaternions")
+    result[:, joint_idx["Spine2"]] = midpoint / norms[:, None]
+    return result
+
+
 def transform_y_up_to_z_up(points: np.ndarray) -> np.ndarray:
     return points[..., [0, 2, 1]]
+
+
+def transform_orientations_y_up_to_z_up(
+    quaternions_wxyz: np.ndarray,
+) -> np.ndarray:
+    """Change quaternion coordinates using the same reflected basis as positions."""
+    quaternions_wxyz = np.asarray(quaternions_wxyz, dtype=np.float64)
+    if quaternions_wxyz.ndim != 3 or quaternions_wxyz.shape[-1] != 4:
+        raise ValueError(
+            "global joint quaternions must have shape (T, J, 4), "
+            f"got {quaternions_wxyz.shape}"
+        )
+    flat_wxyz = quaternions_wxyz.reshape(-1, 4)
+    norms = np.linalg.norm(flat_wxyz, axis=1)
+    if not np.isfinite(flat_wxyz).all() or np.any(norms <= 1e-8):
+        raise ValueError("global joint quaternions must be finite and non-zero")
+    flat_wxyz = flat_wxyz / norms[:, None]
+    matrices_y_up = Rotation.from_quat(flat_wxyz[:, [1, 2, 3, 0]]).as_matrix()
+    matrices_z_up = np.einsum(
+        "ab,nbc,cd->nad",
+        Y_UP_TO_Z_UP_BASIS,
+        matrices_y_up,
+        Y_UP_TO_Z_UP_BASIS.T,
+    )
+    flat_xyzw = Rotation.from_matrix(matrices_z_up).as_quat()
+    transformed = flat_xyzw[:, [3, 0, 1, 2]].reshape(quaternions_wxyz.shape)
+    return enforce_quaternion_continuity_wxyz(transformed)
+
+
+def enforce_quaternion_continuity_wxyz(quaternions_wxyz: np.ndarray) -> np.ndarray:
+    """Normalize quaternions and choose temporally continuous signs per joint."""
+    result = np.asarray(quaternions_wxyz, dtype=np.float64).copy()
+    norms = np.linalg.norm(result, axis=-1)
+    if not np.isfinite(result).all() or np.any(norms <= 1e-8):
+        raise ValueError("global joint quaternions must be finite and non-zero")
+    result /= norms[..., None]
+    for frame_idx in range(1, result.shape[0]):
+        flip = np.sum(result[frame_idx - 1] * result[frame_idx], axis=-1) < 0.0
+        result[frame_idx, flip] *= -1.0
+    return result
 
 
 def normalize_xy(vector: np.ndarray) -> np.ndarray | None:
@@ -312,19 +379,41 @@ def convert_file(
     overwrite: bool = False,
 ) -> None:
     anim = read_bvh_with_normalized_motion_rows(bvh_path)
-    _, global_positions_cm = utils.quat_fk(anim.quats, anim.pos, anim.parents)
+    global_quaternions_wxyz, global_positions_cm = utils.quat_fk(
+        anim.quats,
+        anim.pos,
+        anim.parents,
+    )
     source_type, mapping = classify_bvh(anim.bones)
 
     canonical_y_up_m = select_canonical_joints(global_positions_cm / 100.0, anim.bones, mapping)
+    canonical_y_up_quaternions_wxyz = select_canonical_joints(
+        global_quaternions_wxyz,
+        anim.bones,
+        mapping,
+    )
     if source_type == "fullbody_reduced_spine_zyx":
         canonical_y_up_m = synthesize_reduced_spine2(canonical_y_up_m)
+        canonical_y_up_quaternions_wxyz = synthesize_reduced_spine2_orientation(
+            canonical_y_up_quaternions_wxyz
+        )
     canonical_z_up_m = transform_y_up_to_z_up(canonical_y_up_m)
+    canonical_z_up_quaternions_wxyz = transform_orientations_y_up_to_z_up(
+        canonical_y_up_quaternions_wxyz
+    )
     canonical_z_up_m, dropped_initial_frame = drop_initial_jump(canonical_z_up_m, drop_jump_threshold_m)
+    if dropped_initial_frame:
+        canonical_z_up_quaternions_wxyz = canonical_z_up_quaternions_wxyz[1:]
     canonical_z_up_m = recenter_xy(canonical_z_up_m)
     canonical_z_up_m = apply_noetix_root_orientation_hint(canonical_z_up_m)
 
     source_fps = read_source_fps(bvh_path)
     canonical_z_up_m, stride, output_fps = downsample(canonical_z_up_m, source_fps, target_fps)
+    canonical_z_up_quaternions_wxyz = canonical_z_up_quaternions_wxyz[::stride]
+    if canonical_z_up_quaternions_wxyz.shape[:2] != canonical_z_up_m.shape[:2]:
+        raise RuntimeError(
+            "Position and orientation frame/joint counts diverged during Noetix conversion"
+        )
 
     height = source_height_from_filename(bvh_path) or estimate_height(canonical_z_up_m)
     output_path = output_dir / f"{bvh_path.stem}.npz"
@@ -334,6 +423,9 @@ def convert_file(
     np.savez_compressed(
         output_path,
         global_joint_positions=canonical_z_up_m.astype(np.float32),
+        global_joint_quaternions_wxyz=canonical_z_up_quaternions_wxyz.astype(
+            np.float32
+        ),
         height=np.float32(height),
         joint_names=np.asarray(NOETIX_MOCAP_DEMO_JOINTS, dtype=str),
         raw_joint_names=np.asarray(anim.bones, dtype=str),
@@ -341,6 +433,11 @@ def convert_file(
         source_format=np.asarray("noetix_mocap"),
         source_type=source_type,
         coordinate_system=np.asarray("z_up"),
+        quaternion_convention=np.asarray("wxyz"),
+        orientation_coordinate_transform=np.asarray(
+            "basis_conjugation_xzy_reflection"
+        ),
+        position_root_orientation_hint_applied=np.bool_(True),
         source_fps=np.float32(source_fps),
         fps=np.float32(output_fps),
         downsample_stride=np.int32(stride),

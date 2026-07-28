@@ -103,6 +103,12 @@ class Config:
     show_joint_labels: bool = False
     """Show every source joint name beside its keypoint."""
 
+    show_joint_orientations: bool = False
+    """Show source global joint coordinate frames when orientations are available."""
+
+    orientation_axis_length: float = 0.09
+    """Length of source joint orientation axes in scene units."""
+
     dry_run: bool = False
     """Validate and summarize the raw scene without starting Viser."""
 
@@ -490,6 +496,13 @@ def print_summary(scene: RawScene) -> None:
         "  spatial processing: NONE "
         "(no foot-height shift, robot-height scale, augmentation, or retargeting)"
     )
+    if scene.motion.global_joint_quaternions_wxyz is None:
+        print("  source joint orientations: unavailable")
+    else:
+        print(
+            "  source joint orientations: "
+            f"{scene.motion.global_joint_quaternions_wxyz.shape}, global Z-up wxyz"
+        )
     if scene.mesh is None:
         print("  mesh: none; displaying the complete source skeleton only")
     else:
@@ -546,6 +559,23 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
         )
         for index, name in enumerate(scene.joint_names)
     ]
+    source_orientations = scene.motion.global_joint_quaternions_wxyz
+    orientation_frames = (
+        [
+            server.scene.add_frame(
+                f"/raw/human/orientations/{index:02d}_{name}",
+                wxyz=source_orientations[start_frame, index],
+                position=joints[start_frame, index],
+                show_axes=True,
+                axes_length=cfg.orientation_axis_length,
+                axes_radius=max(cfg.orientation_axis_length * 0.025, 0.001),
+                visible=cfg.show_joint_orientations,
+            )
+            for index, name in enumerate(scene.joint_names)
+        ]
+        if source_orientations is not None
+        else []
+    )
 
     object_root = server.scene.add_frame("/raw/object", show_axes=False)
     mesh_handle = None
@@ -585,6 +615,14 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
             "Show joint names",
             initial_value=cfg.show_joint_labels,
         )
+        show_orientations_handle = (
+            server.gui.add_checkbox(
+                "Show source joint orientations",
+                initial_value=cfg.show_joint_orientations,
+            )
+            if orientation_frames
+            else None
+        )
         show_mesh_handle = (
             server.gui.add_checkbox("Show source mesh", initial_value=True)
             if mesh_handle is not None
@@ -603,6 +641,13 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
             skeleton_handle.points = _edge_segments(frame_points, scene.skeleton_edges)
             for index, label in enumerate(labels):
                 label.position = frame_points[index]
+            if source_orientations is not None:
+                for index, orientation_frame in enumerate(orientation_frames):
+                    orientation_frame.position = frame_points[index]
+                    orientation_frame.wxyz = source_orientations[
+                        frame_index,
+                        index,
+                    ]
             if scene.object_poses_wxyz_xyz is not None:
                 pose = scene.object_poses_wxyz_xyz[frame_index]
                 object_root.wxyz = pose[:4]
@@ -632,6 +677,7 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
         "points": False,
         "skeleton": False,
         "labels": False,
+        "orientations": False,
         "mesh": False,
     }
 
@@ -663,6 +709,22 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
         for label in labels:
             label.visible = bool(visible)
 
+    def set_orientation_visibility(
+        visible: bool,
+        *,
+        sync_checkbox: bool = True,
+    ) -> None:
+        if show_orientations_handle is None:
+            return
+        if sync_checkbox:
+            updating_display["orientations"] = True
+            try:
+                show_orientations_handle.value = bool(visible)
+            finally:
+                updating_display["orientations"] = False
+        for orientation_frame in orientation_frames:
+            orientation_frame.visible = bool(visible)
+
     @show_points_handle.on_update
     def _(_) -> None:
         if not updating_display["points"]:
@@ -677,6 +739,16 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
     def _(_) -> None:
         if not updating_display["labels"]:
             set_label_visibility(bool(show_labels_handle.value), sync_checkbox=False)
+
+    if show_orientations_handle is not None:
+
+        @show_orientations_handle.on_update
+        def _(_) -> None:
+            if not updating_display["orientations"]:
+                set_orientation_visibility(
+                    bool(show_orientations_handle.value),
+                    sync_checkbox=False,
+                )
 
     if show_mesh_handle is not None and mesh_handle is not None:
 
@@ -744,6 +816,15 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
         hotkey="l",
         callback=lambda: set_label_visibility(not bool(show_labels_handle.value)),
     )
+    if show_orientations_handle is not None:
+        register_keyboard_shortcut(
+            server,
+            "Display: Toggle Joint Orientations",
+            hotkey="r",
+            callback=lambda: set_orientation_visibility(
+                not bool(show_orientations_handle.value)
+            ),
+        )
     if show_mesh_handle is not None and mesh_handle is not None:
         register_keyboard_shortcut(
             server,

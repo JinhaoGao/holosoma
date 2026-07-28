@@ -42,6 +42,7 @@ def _save_standard_npz(
     height: float = 1.75,
     fps: float = 30.0,
     root_quaternions: np.ndarray | None = None,
+    global_joint_quaternions: np.ndarray | None = None,
 ) -> None:
     joints = _joints(data_format) if joints is None else joints
     payload = {
@@ -52,6 +53,8 @@ def _save_standard_npz(
     }
     if root_quaternions is not None:
         payload["root_quaternions_wxyz"] = root_quaternions
+    if global_joint_quaternions is not None:
+        payload["global_joint_quaternions_wxyz"] = global_joint_quaternions
     np.savez(path, **payload)
 
 
@@ -164,6 +167,71 @@ class MotionAdapterTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "joint_names"):
                 load_human_motion("noetix_mocap", directory, "bad_names")
+
+    def test_noetix_loads_and_normalizes_global_joint_orientations(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            joint_count = len(DEMO_JOINTS_REGISTRY["noetix_mocap"])
+            quaternions = np.zeros((3, joint_count, 4), dtype=np.float64)
+            quaternions[..., 0] = 2.0
+            _save_standard_npz(
+                directory / "dance.npz",
+                "noetix_mocap",
+                global_joint_quaternions=quaternions,
+            )
+
+            motion = load_human_motion(
+                "noetix_mocap",
+                directory,
+                "dance",
+            )
+
+            self.assertIsNone(motion.root_quaternions_wxyz)
+            self.assertEqual(
+                motion.global_joint_quaternions_wxyz.shape,
+                (3, joint_count, 4),
+            )
+            np.testing.assert_allclose(
+                np.linalg.norm(
+                    motion.global_joint_quaternions_wxyz,
+                    axis=-1,
+                ),
+                1.0,
+            )
+
+    def test_noetix_rejects_invalid_global_joint_orientations(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            joint_count = len(DEMO_JOINTS_REGISTRY["noetix_mocap"])
+            for name, quaternions, message in (
+                (
+                    "bad_shape",
+                    np.ones((3, joint_count - 1, 4)),
+                    "must have shape",
+                ),
+                (
+                    "zero",
+                    np.zeros((3, joint_count, 4)),
+                    "finite and non-zero",
+                ),
+                (
+                    "nan",
+                    np.full((3, joint_count, 4), np.nan),
+                    "finite and non-zero",
+                ),
+            ):
+                with self.subTest(name=name):
+                    _save_standard_npz(
+                        directory / f"{name}.npz",
+                        "noetix_mocap",
+                        global_joint_quaternions=quaternions,
+                    )
+                    with self.assertRaisesRegex(ValueError, message):
+                        load_human_motion(
+                            "noetix_mocap",
+                            directory,
+                            name,
+                        )
 
     def test_omomo_extracts_joints_and_wxyz_xyz_object_pose(self):
         with tempfile.TemporaryDirectory() as tmpdir:
