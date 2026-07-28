@@ -1,0 +1,39 @@
+{
+  "baseline": {},
+  "uniform_0p05": {"all": 0.05},
+  "uniform_0p075": {"all": 0.075},
+  "uniform_0p1": {"all": 0.1},
+  "uniform_0p125": {"all": 0.125},
+  "uniform_0p15": {"all": 0.15},
+  "root_hips_low": {
+    "all": 0.1,
+    "root": 0.03,
+    "hips": 0.05
+  },
+  "proximal_low": {
+    "all": 0.1,
+    "root": 0.03,
+    "hips": 0.05,
+    "knees": 0.075
+  },
+  "distal_boost": {
+    "all": 0.1,
+    "root": 0.03,
+    "hips": 0.05,
+    "knees": 0.075,
+    "ankles": 0.12,
+    "toes": 0.12,
+    "shoulders": 0.12,
+    "forearms": 0.12
+  },
+  "position_guard": {
+    "root": 0.03,
+    "hips": 0.05,
+    "knees": 0.08,
+    "ankles": 0.1,
+    "toes": 0.1,
+    "shoulders": 0.1,
+    "forearms": 0.08,
+    "hands": 0.08
+  }
+}
