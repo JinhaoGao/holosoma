@@ -1,0 +1,10 @@
+{
+  "baseline": {},
+  "uniform_0p075": {"all": 0.075},
+  "uniform_0p08": {"all": 0.08},
+  "uniform_0p0825": {"all": 0.0825},
+  "uniform_0p085": {"all": 0.085},
+  "uniform_0p0875": {"all": 0.0875},
+  "uniform_0p09": {"all": 0.09},
+  "uniform_0p1": {"all": 0.1}
+}
