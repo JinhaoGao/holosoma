@@ -10,8 +10,11 @@ unified result and visualization interface.
 
 **Data requirements:** the retargeting pipeline consumes world-space human joint
 positions with shape `(T, J, 3)`, where `T` is the number of frames and `J` is
-the number of joints. Each format declares its joint order, robot mapping, file
-layout, coordinate conversion, height, FPS, and supported task types. See
+the number of joints. Formats that support orientation tracking may additionally
+provide world-space `wxyz` quaternions with shape `(T, J, 4)`. The default
+position-only solver remains unchanged when orientations are absent. Each format
+declares its joint order, robot mapping, file layout, coordinate conversion,
+height, FPS, and supported task types. See
 [ADD_MOTION_FORMAT_README.md](ADD_MOTION_FORMAT_README.md) when adding another
 format.
 
@@ -368,9 +371,51 @@ python data_utils/convert_noetix_bvh.py \
 ```
 
 This is a Noetix-specific converter and is unrelated to the official LAFAN BVH
-conversion above. The output `.npz` files include Z-up global joints, joint
-names, source/output FPS, human height, the detected Noetix skeleton type, and
-conversion metadata. Use `--overwrite` to replace existing outputs.
+conversion above. The output `.npz` files include Z-up global positions in
+`global_joint_positions`, global `wxyz` orientations in
+`global_joint_quaternions_wxyz`, joint names, source/output FPS, human height,
+the detected Noetix skeleton type, and conversion metadata. Positions use the
+`[x, z, y]` basis change, while rotations use the corresponding matrix
+conjugation `R_z = S R_y S^T`; quaternion components must not be swapped
+directly. Use `--overwrite` to replace existing outputs.
+
+### Noetix E1 Orientation Tracking and Ablation
+
+Orientation tracking is an optional soft objective independent of the
+position-based Interaction Mesh. Following GMR's global rigid-frame task
+design, it keeps a fixed human-joint-to-robot-link frame alignment and minimizes
+the SO(3) geodesic residual `Log(R_target R_robot^T)` through MuJoCo world
+angular Jacobians. The default empty `orientation_weights` keeps the legacy
+position-only path unchanged.
+
+Run the reproducible `breaking+hippop` baseline, grouped-link, and full-link
+ablations with the `gmr_legs` profile mirroring the hip, knee, and foot chains
+whose rotation costs are enabled by GMR's primary E1 task. GMR's numerical
+weights and fixed quaternions are not copied because the MJCF frames,
+coordinate conversion, and objective scales differ:
+
+```bash
+python examples/run_orientation_ablation.py \
+  --data-path demo_data/noetix_mocap/0724_BEITI \
+  --task-name 'breaking+hippop.bvh_Skeleton1' \
+  --output-root demo_results_orientation/e1/robot_only/0724_BEITI/breaking+hippop \
+  --variants baseline root feet gmr_legs upper full \
+  --weight-scales 0.25 0.5 1.0 \
+  --overwrite
+```
+
+Each run records a manifest and saves target/robot link quaternions, per-link
+geodesic errors, mapped-position errors, and SQP diagnostics. The baseline
+stores the same 13-link diagnostics with zero weights while adding no
+orientation term to the optimization. Use `--frame-start` and `--frame-count`
+for fast windowed tuning before confirming selected settings on the complete
+sequence. The converted source frames can be inspected with:
+
+```bash
+python examples/raw_human_motion_viewer.py \
+  --motion-path demo_data/noetix_mocap/0724_BEITI/breaking+hippop.bvh_Skeleton1.npz \
+  --show-joint-orientations
+```
 
 ### GVHMR
 

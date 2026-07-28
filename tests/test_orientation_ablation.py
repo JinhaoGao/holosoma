@@ -1,0 +1,117 @@
+# ruff: noqa: PT009
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+import numpy as np
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_ROOT = REPO_ROOT / "src" / "holosoma_retargeting"
+if str(PACKAGE_ROOT) not in sys.path:
+    sys.path.insert(0, str(PACKAGE_ROOT))
+
+from holosoma_retargeting.examples.run_orientation_ablation import (  # noqa: E402
+    ORIENTATION_JOINTS,
+    Config,
+    ablation_run_specs,
+    main,
+    orientation_weights_for_variant,
+)
+
+
+class OrientationAblationTests(unittest.TestCase):
+    def test_profiles_share_diagnostic_links_and_only_enable_selected_groups(self):
+        baseline = orientation_weights_for_variant("baseline", 1.0)
+        feet = orientation_weights_for_variant("feet", 0.5)
+        gmr_legs = orientation_weights_for_variant("gmr_legs", 1.0)
+        full = orientation_weights_for_variant("full", 1.0)
+
+        self.assertEqual(tuple(baseline), ORIENTATION_JOINTS)
+        self.assertTrue(all(weight == 0.0 for weight in baseline.values()))
+        self.assertEqual(feet["LeftFoot"], 1.0)
+        self.assertEqual(feet["RightFoot"], 1.0)
+        self.assertEqual(feet["LeftArm"], 0.0)
+        self.assertEqual(gmr_legs["LeftUpLeg"], 1.0)
+        self.assertEqual(gmr_legs["RightLeg"], 1.0)
+        self.assertEqual(gmr_legs["LeftFoot"], 1.0)
+        self.assertEqual(gmr_legs["Hips"], 0.0)
+        self.assertEqual(gmr_legs["LeftArm"], 0.0)
+        self.assertTrue(all(full[name] > 0.0 for name in ORIENTATION_JOINTS))
+
+    def test_baseline_is_not_duplicated_across_weight_scales(self):
+        specs = ablation_run_specs(
+            ("baseline", "feet"),
+            (0.25, 0.5, 1.0),
+        )
+        self.assertEqual(
+            specs,
+            (
+                ("baseline", "baseline", 1.0),
+                ("feet_x0.25", "feet", 0.25),
+                ("feet_x0.5", "feet", 0.5),
+                ("feet", "feet", 1.0),
+            ),
+        )
+
+    def test_dry_run_creates_isolated_manifests_and_sliced_input(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            data_dir = root / "data"
+            output_root = root / "outputs"
+            data_dir.mkdir()
+            task_name = "breaking+hippop.bvh_Skeleton1"
+            positions = np.zeros((10, 22, 3), dtype=np.float32)
+            quaternions = np.zeros((10, 22, 4), dtype=np.float32)
+            quaternions[..., 0] = 1.0
+            np.savez_compressed(
+                data_dir / f"{task_name}.npz",
+                global_joint_positions=positions,
+                global_joint_quaternions_wxyz=quaternions,
+                joint_names=np.asarray([f"joint_{idx}" for idx in range(22)]),
+                height=np.float32(1.7),
+                fps=np.float32(30.0),
+            )
+
+            main(
+                Config(
+                    data_path=data_dir,
+                    task_name=task_name,
+                    output_root=output_root,
+                    variants=("baseline", "full"),
+                    frame_start=2,
+                    frame_count=3,
+                    dry_run=True,
+                )
+            )
+
+            with np.load(
+                output_root / "_input" / f"{task_name}.npz",
+                allow_pickle=False,
+            ) as subset:
+                self.assertEqual(
+                    subset["global_joint_positions"].shape,
+                    (3, 22, 3),
+                )
+                self.assertEqual(
+                    subset["global_joint_quaternions_wxyz"].shape,
+                    (3, 22, 4),
+                )
+
+            for variant in ("baseline", "full"):
+                manifest_path = output_root / variant / "manifest.json"
+                self.assertTrue(manifest_path.is_file())
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                self.assertEqual(manifest["status"], "planned")
+                self.assertEqual(manifest["variant"], variant)
+                self.assertEqual(len(manifest["orientation_weights"]), 13)
+            summary = json.loads(
+                (output_root / "summary.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(set(summary["runs"]), {"baseline", "full"})
+            self.assertEqual(summary["comparisons_to_baseline"], {})
+            self.assertEqual(summary["failures"], [])

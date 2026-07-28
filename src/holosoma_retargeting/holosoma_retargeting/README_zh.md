@@ -4,7 +4,7 @@
 
 本仓库提供将人体动作重定向到人形机器人的工具。官方项目原本支持 OMOMO、LAFAN、AMASS SMPL-X、通用 mocap，以及纯机器人动作、物体交互和攀爬任务。本分支在完整保留这些工作流的基础上，增加了 Noetix-mocap 与 GVHMR 的显式适配，并统一了结果保存和可视化接口。
 
-**数据要求：**重定向流水线接收形状为 `(T, J, 3)` 的世界坐标系人体关节位置，其中 `T` 为帧数，`J` 为关节数。每种格式分别声明关节顺序、机器人映射、文件布局、坐标变换、人体身高、FPS 和支持的任务类型。如需添加其他格式，请参阅 [ADD_MOTION_FORMAT_README_zh.md](ADD_MOTION_FORMAT_README_zh.md)。
+**数据要求：**重定向流水线接收形状为 `(T, J, 3)` 的世界坐标系人体关节位置，其中 `T` 为帧数，`J` 为关节数。支持朝向跟踪的格式还可提供 `(T, J, 4)` 的世界坐标系 `wxyz` 四元数；朝向数据缺失时，默认位置求解路径不受影响。每种格式分别声明关节顺序、机器人映射、文件布局、坐标变换、人体身高、FPS 和支持的任务类型。如需添加其他格式，请参阅 [ADD_MOTION_FORMAT_README_zh.md](ADD_MOTION_FORMAT_README_zh.md)。
 
 请在以下目录中执行本文命令：
 
@@ -300,7 +300,54 @@ python data_utils/convert_noetix_bvh.py \
   --target-fps 30
 ```
 
-这是 Noetix 专用转换器，与上面的官方 LAFAN BVH 转换流程无关。输出 `.npz` 包含 Z-up 全局关节、关节名称、源/输出 FPS、人体身高、识别出的 Noetix 骨架类型和转换元数据。使用 `--overwrite` 可覆盖已有结果。
+这是 Noetix 专用转换器，与上面的官方 LAFAN BVH 转换流程无关。输出 `.npz` 同时包含 Z-up 全局关节位置 `global_joint_positions` 和全局关节朝向 `global_joint_quaternions_wxyz`，并保存关节名称、源/输出 FPS、人体身高、识别出的 Noetix 骨架类型和转换元数据。位置使用 `[x, z, y]` 基变换；朝向使用同一基变换的矩阵共轭 `R_z = S R_y S^T`，不能直接交换四元数分量。使用 `--overwrite` 可覆盖已有结果。
+
+当前 `breaking+hippop` 实验的转换命令为：
+
+```bash
+python data_utils/convert_noetix_bvh.py \
+  --input-dir demo_data/noetix_ori/0724_BEITI \
+  --output-dir demo_data/noetix_mocap/0724_BEITI \
+  --target-fps 30 \
+  --overwrite
+```
+
+### Noetix E1 朝向跟踪与消融
+
+朝向跟踪是独立于位置 Interaction Mesh 的软目标。它参考 GMR 的全局刚体 FrameTask 思路，为人体关节和机器人 link 建立固定帧对齐，但仍保留本项目原有的 SQP、碰撞和接触约束。每一帧使用 SO(3) 测地误差 `Log(R_target R_robot^T)`，并通过 MuJoCo 世界角速度雅可比线性化。默认 `orientation_weights={}`，因此旧配置和位置-only 求解路径保持不变；`first_frame` 对齐会在序列第一帧计算固定的人体关节到机器人 link 局部帧偏置。
+
+可复现实验入口固定使用 `breaking+hippop.bvh_Skeleton1`，并生成 baseline、root、feet、gmr_legs、upper 和 full 六组结果、每次运行的 manifest 以及统一 `summary.json`。其中 `gmr_legs` 对应 GMR E1 主任务实际启用旋转代价的髋、膝和足链；本项目不会直接照搬 GMR 的数值权重和固定四元数，因为两套 E1 MJCF、坐标变换和目标函数标度不同：
+
+```bash
+python examples/run_orientation_ablation.py \
+  --data-path demo_data/noetix_mocap/0724_BEITI \
+  --task-name 'breaking+hippop.bvh_Skeleton1' \
+  --output-root demo_results_orientation/e1/robot_only/0724_BEITI/breaking+hippop \
+  --variants baseline root feet gmr_legs upper full \
+  --weight-scales 0.25 0.5 1.0 \
+  --overwrite
+```
+
+baseline 会为相同的 13 个 link 保存朝向诊断，但所有朝向权重均为零，不向优化问题加入旋转项。结果文件保存目标/机器人 link 四元数、逐 link 测地误差、朝向代价、映射位置误差以及 SQP 诊断，可直接比较朝向改善是否以位置、收敛或约束退化为代价。可用 `--frame-start` 和 `--frame-count` 对相同输入切片做快速权重搜索，再对完整序列复核选中的配置。
+
+转换后可直接检查源 BVH 的全局关节坐标轴：
+
+```bash
+python examples/raw_human_motion_viewer.py \
+  --motion-path demo_data/noetix_mocap/0724_BEITI/breaking+hippop.bvh_Skeleton1.npz \
+  --show-joint-orientations
+```
+
+也可同步对照两个重定向结果：
+
+```bash
+python examples/ablation_viser_player.py \
+  --qpos-npzs \
+    demo_results_orientation/e1/robot_only/0724_BEITI/breaking+hippop/baseline/breaking+hippop.bvh_Skeleton1.npz \
+    demo_results_orientation/e1/robot_only/0724_BEITI/breaking+hippop/full/breaking+hippop.bvh_Skeleton1.npz \
+  --labels baseline full \
+  --x-offset 0
+```
 
 ### GVHMR
 

@@ -26,6 +26,7 @@ src/holosoma_retargeting/holosoma_retargeting/demo_data/
 
 # Generated retargeting ablation outputs
 src/holosoma_retargeting/holosoma_retargeting/demo_results_ablation/
+src/holosoma_retargeting/holosoma_retargeting/demo_results_orientation/
 
 # Licensed SMPL-X body model files (keep local; do not commit)
 src/holosoma_retargeting/holosoma_retargeting/models/smplx/*.npz
