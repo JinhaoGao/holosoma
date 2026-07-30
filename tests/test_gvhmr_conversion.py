@@ -31,6 +31,11 @@ from holosoma_retargeting.data_utils.convert_gvhmr import (  # noqa: E402
     transform_gvhmr_root_orientations,
 )
 
+SMPLX_22_PARENTS = torch.tensor(
+    [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19],
+    dtype=torch.long,
+)
+
 
 def _valid_prediction(num_frames: int = 3, num_betas: int = 10):
     return {
@@ -50,6 +55,8 @@ class _FakeOutput:
 
 
 class _FakeBodyModel:
+    parents = SMPLX_22_PARENTS
+
     def __call__(self, *, betas, body_pose, transl, **_kwargs):
         batch_size = body_pose.shape[0]
         joints = torch.zeros(batch_size, len(GVHMR_DEMO_JOINTS), 3)
@@ -127,14 +134,93 @@ class GVHMRConversionTests(unittest.TestCase):
 
         self.assertEqual(motion.global_joint_positions.shape, (5, 22, 3))
         self.assertEqual(motion.root_quaternions_wxyz.shape, (5, 4))
+        self.assertEqual(motion.orientation_joint_names, tuple(GVHMR_DEMO_JOINTS))
+        self.assertEqual(motion.orientation_quaternions_wxyz.shape, (5, 22, 4))
         self.assertAlmostEqual(motion.height, 2.0)
         self.assertAlmostEqual(motion.fps, 25.0)
         np.testing.assert_allclose(motion.global_joint_positions[..., 2], 1.0)
+        np.testing.assert_allclose(
+            np.linalg.norm(motion.orientation_quaternions_wxyz, axis=-1),
+            1.0,
+            atol=1e-6,
+        )
+        np.testing.assert_array_equal(
+            motion.root_quaternions_wxyz,
+            motion.orientation_quaternions_wxyz[:, 0],
+        )
+        matrices = (
+            Rotation.from_quat(
+                motion.orientation_quaternions_wxyz.reshape(-1, 4),
+                scalar_first=True,
+            )
+            .as_matrix()
+            .reshape(5, 22, 3, 3)
+        )
+        np.testing.assert_allclose(
+            matrices,
+            np.broadcast_to(GVHMR_TO_Z_UP, matrices.shape),
+            atol=1e-6,
+        )
+
+    def test_orientation_fk_composes_parent_chain_before_world_transform(self):
+        prediction = _valid_prediction(num_frames=2)
+        prediction["smpl_params_global"]["global_orient"][:, 2] = np.pi / 2
+        prediction["smpl_params_global"]["body_pose"][:, 0] = np.pi / 2
+        prediction["smpl_params_global"]["body_pose"][:, 10] = np.pi / 2
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "hmr4d_results.pt"
+            torch.save(prediction, input_path)
+            parameters = load_gvhmr_parameters(input_path)
+
+        with mock.patch(
+            "holosoma_retargeting.data_utils.convert_gvhmr._make_body_model",
+            return_value=_FakeBodyModel(),
+        ):
+            motion = convert_gvhmr_parameters(parameters, model_path="unused")
+
+        matrices = (
+            Rotation.from_quat(
+                motion.orientation_quaternions_wxyz.reshape(-1, 4),
+                scalar_first=True,
+            )
+            .as_matrix()
+            .reshape(2, 22, 3, 3)
+        )
+        root = Rotation.from_rotvec([0.0, 0.0, np.pi / 2]).as_matrix()
+        left_hip_local = Rotation.from_rotvec([np.pi / 2, 0.0, 0.0]).as_matrix()
+        left_knee_local = Rotation.from_rotvec([0.0, np.pi / 2, 0.0]).as_matrix()
+        np.testing.assert_allclose(
+            matrices[:, 0],
+            np.broadcast_to(GVHMR_TO_Z_UP @ root, matrices[:, 0].shape),
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            matrices[:, 1],
+            np.broadcast_to(
+                GVHMR_TO_Z_UP @ root @ left_hip_local,
+                matrices[:, 1].shape,
+            ),
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            matrices[:, 4],
+            np.broadcast_to(
+                GVHMR_TO_Z_UP @ root @ left_hip_local @ left_knee_local,
+                matrices[:, 4].shape,
+            ),
+            atol=1e-6,
+        )
 
     def test_standard_npz_contains_required_metadata(self):
         motion = ConvertedGVHMRMotion(
             global_joint_positions=np.zeros((2, 22, 3), dtype=np.float32),
             root_quaternions_wxyz=np.tile(np.array([[1.0, 0.0, 0.0, 0.0]], dtype=np.float32), (2, 1)),
+            orientation_joint_names=tuple(GVHMR_DEMO_JOINTS),
+            orientation_quaternions_wxyz=np.tile(
+                np.array([[[1.0, 0.0, 0.0, 0.0]]], dtype=np.float32),
+                (2, 22, 1),
+            ),
+            orientation_source="direct_local_rotation_fk",
             height=1.8,
             fps=30.0,
         )
@@ -146,6 +232,14 @@ class GVHMRConversionTests(unittest.TestCase):
                 self.assertEqual(data["joint_names"].tolist(), GVHMR_DEMO_JOINTS)
                 self.assertEqual(str(data["source_format"]), "gvhmr")
                 self.assertAlmostEqual(float(data["height"]), 1.8, places=5)
+                self.assertEqual(data["orientation_joint_names"].tolist(), GVHMR_DEMO_JOINTS)
+                self.assertEqual(data["orientation_quaternions_wxyz"].shape, (2, 22, 4))
+                self.assertEqual(str(data["orientation_source"]), "direct_local_rotation_fk")
+                self.assertEqual(str(data["quaternion_convention"]), "wxyz")
+                self.assertEqual(
+                    str(data["orientation_coordinate_system"]),
+                    "right_handed_z_up",
+                )
 
 
 class GVHMRFormatRegistrationTests(unittest.TestCase):

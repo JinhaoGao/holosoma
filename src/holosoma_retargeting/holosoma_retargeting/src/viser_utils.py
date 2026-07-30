@@ -88,6 +88,27 @@ def register_keyboard_shortcut(
     return command
 
 
+def format_foot_sticking_status(
+    frame_idx: int,
+    states: Sequence[bool] | np.ndarray,
+    *,
+    constraint_status: str,
+) -> str:
+    """Format a compact red/green Viser status panel for left/right sticking."""
+    state_array = np.asarray(states, dtype=bool).reshape(-1)
+    if state_array.shape != (2,):
+        raise ValueError(f"Foot sticking states must have shape (2,), got {state_array.shape}")
+
+    left_light = "🟢" if bool(state_array[0]) else "🔴"
+    right_light = "🟢" if bool(state_array[1]) else "🔴"
+    return (
+        f"**Frame:** `{int(frame_idx)}`  \n"
+        f"{left_light} **Left:** `sticking={bool(state_array[0])}`  \n"
+        f"{right_light} **Right:** `sticking={bool(state_array[1])}`  \n"
+        f"**Hard constraint:** `{constraint_status}`"
+    )
+
+
 def create_motion_control_sliders(
     server: viser.ViserServer,
     viser_robot: ViserUrdf,
@@ -238,30 +259,35 @@ def create_motion_control_sliders(
     prev: dict[str, np.ndarray | None] = {"robot_q": None, "obj_q": None}  # for continuity
     nonlocal_f = {"f": float(frame_slider.value)}  # fractional frame cursor
     updating_programmatically = {"flag": False}  # flag to prevent callback from pausing during programmatic updates
+    render_lock = threading.RLock()
 
     # ---------------- draw ----------------
     def _apply_frame_from_q(q: np.ndarray, frame_float: float) -> None:
-        viser_robot.update_cfg(_robot_joints_for_viser(q))
+        # ViserUrdf updates every link separately. Without one serialized atomic
+        # block, continuous playback can expose a mixture of two frames to the
+        # browser, especially when keyboard-repeat and the player thread overlap.
+        with render_lock, server.atomic():
+            viser_robot.update_cfg(_robot_joints_for_viser(q))
 
-        # robot base (MuJoCo order: pos first, then quat)
-        robot_base_frame.position = q[0:3]  # pos (xyz)
-        r_q = _quat_continuous(prev["robot_q"], q[3:7])
-        prev["robot_q"] = r_q
-        robot_base_frame.wxyz = r_q
+            # robot base (MuJoCo order: pos first, then quat)
+            robot_base_frame.position = q[0:3]  # pos (xyz)
+            r_q = _quat_continuous(prev["robot_q"], q[3:7])
+            prev["robot_q"] = r_q
+            robot_base_frame.wxyz = r_q
 
-        # object (optional) (MuJoCo order: pos first, then quat)
-        if has_object_input and object_base_frame is not None:
-            object_base_frame.position = q[-7:-4]  # obj pos (xyz)
-            o_q = _quat_continuous(prev["obj_q"], q[-4:])
-            prev["obj_q"] = o_q
-            object_base_frame.wxyz = o_q
-        elif object_base_frame is not None and viser_object is not None:
-            # fallback static pose
-            object_base_frame.position = np.zeros(3)
-            object_base_frame.wxyz = np.array([1.0, 0.0, 0.0, 0.0])
+            # object (optional) (MuJoCo order: pos first, then quat)
+            if has_object_input and object_base_frame is not None:
+                object_base_frame.position = q[-7:-4]  # obj pos (xyz)
+                o_q = _quat_continuous(prev["obj_q"], q[-4:])
+                prev["obj_q"] = o_q
+                object_base_frame.wxyz = o_q
+            elif object_base_frame is not None and viser_object is not None:
+                # fallback static pose
+                object_base_frame.position = np.zeros(3)
+                object_base_frame.wxyz = np.array([1.0, 0.0, 0.0, 0.0])
 
-        if on_frame is not None:
-            on_frame(q, frame_float)
+            if on_frame is not None:
+                on_frame(q, frame_float)
 
     def _apply_discrete_frame(i: int) -> None:
         i = int(np.clip(i, 0, n_frames - 1))
@@ -378,9 +404,12 @@ def create_motion_control_sliders(
 
                     # Update slider to show current frame number in real-time
                     # Use flag to prevent callback from pausing playback
-                    updating_programmatically["flag"] = True
-                    frame_slider.value = k0
-                    updating_programmatically["flag"] = False
+                    if int(frame_slider.value) != k0:
+                        updating_programmatically["flag"] = True
+                        try:
+                            frame_slider.value = k0
+                        finally:
+                            updating_programmatically["flag"] = False
 
                     tick["next"] = now + dt
                 else:

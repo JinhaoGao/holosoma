@@ -1,3 +1,5 @@
+# ruff: noqa: CPY001
+
 """Configuration types for holosoma_retargeting."""
 
 from holosoma_retargeting.config_types.data_conversion import DataConversionConfig
@@ -13,7 +15,6 @@ from holosoma_retargeting.config_types.viser import ViserConfig
 
 __all__ = [
     "DataConversionConfig",
-    "EvaluationConfig",
     "MotionDataConfig",
     "ParallelRetargetingConfig",
     "RetargeterConfig",

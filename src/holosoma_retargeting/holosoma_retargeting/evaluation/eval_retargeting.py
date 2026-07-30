@@ -1,3 +1,5 @@
+# ruff: noqa: CPY001, PLR0917
+
 """
 Evaluation script for retargeting trajectories.
 Evaluates:
@@ -8,9 +10,11 @@ Evaluates:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Literal, Sequence
@@ -18,7 +22,6 @@ from typing import Any, Dict, List, Literal, Sequence
 import igl  # type: ignore[import-not-found]
 import mujoco  # type: ignore[import-not-found]
 import numpy as np
-import trimesh
 import tyro
 
 src_root = Path(__file__).resolve().parents[2]
@@ -28,19 +31,19 @@ from holosoma_retargeting.config_types.data_type import MotionDataConfig, normal
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 from holosoma_retargeting.data_utils.object_assets import (  # noqa: E402
     create_omomo_object_scene,
+    default_generated_assets_root,
     get_omomo_object_asset,
 )
-from holosoma_retargeting.data_utils.omomo import (  # noqa: E402
-    OMOMO_OBJECT_NAMES,
-    resolve_omomo_result_object_name,
-)
+from holosoma_retargeting.data_utils.omomo import OMOMO_OBJECT_NAMES  # noqa: E402
 from holosoma_retargeting.src.mujoco_utils import _world_mesh_from_geom  # type: ignore[import-not-found]  # noqa: E402
 from holosoma_retargeting.src.utils import (  # type: ignore[import-not-found]  # noqa: E402
     create_new_scene_xml_file,
     create_scaled_multi_boxes_xml,
-    extract_foot_sticking_sequence_velocity,
-    load_intermimic_data,
     transform_points_world_to_local,
+)
+from holosoma_retargeting.visualization.result_loader import (  # noqa: E402
+    VariantResult,
+    load_variant_result,
 )
 
 
@@ -50,6 +53,10 @@ def create_task_constants(
     *,
     object_name: str | None = None,
     object_dir: str | None = None,
+    object_scale: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    saved_object_urdf: str | None = None,
+    saved_scene_xml: str | None = None,
+    generated_assets_dir: str | Path | None = None,
 ) -> SimpleNamespace:
     """Create a mutable namespace that mimics the old constants modules."""
     namespace = SimpleNamespace()
@@ -71,19 +78,25 @@ def create_task_constants(
 
     # Provide catalog-backed OMOMO assets and generated robot-object scenes.
     if namespace.OBJECT_NAME in OMOMO_OBJECT_NAMES:
+        if generated_assets_dir is None:
+            generated_assets_dir = (
+                default_generated_assets_root() / "downstream" / robot_config.robot_type / namespace.OBJECT_NAME
+            )
         object_asset = get_omomo_object_asset(namespace.OBJECT_NAME)
         robot_xml_path = Path(namespace.ROBOT_URDF_FILE).with_suffix(".xml")
         if not robot_xml_path.is_absolute():
             robot_xml_path = Path(__file__).resolve().parents[1] / robot_xml_path
-        namespace.OBJECT_URDF_FILE = str(object_asset.urdf_path)
+        namespace.OBJECT_URDF_FILE = saved_object_urdf or str(object_asset.urdf_path)
         namespace.OBJECT_MESH_FILE = str(object_asset.mesh_path)
         namespace.OBJECT_URDF_TEMPLATE = str(
             object_asset.mesh_path.parent.parent / "templates" / "omomo_object.urdf.jinja"
         )
-        namespace.SCENE_XML_FILE = str(
+        namespace.SCENE_XML_FILE = saved_scene_xml or str(
             create_omomo_object_scene(
                 robot_xml_path,
                 namespace.OBJECT_NAME,
+                scale=object_scale,
+                output_dir=generated_assets_dir,
             )
         )
     elif namespace.OBJECT_NAME != "ground":
@@ -99,8 +112,10 @@ def create_task_constants(
 
     if object_dir is not None:
         namespace.OBJECT_DIR = object_dir
-        namespace.OBJECT_URDF_FILE = f"{object_dir}/{namespace.OBJECT_NAME}.urdf"
+        namespace.OBJECT_URDF_FILE = saved_object_urdf or f"{object_dir}/{namespace.OBJECT_NAME}.urdf"
         namespace.OBJECT_MESH_FILE = f"{object_dir}/{namespace.OBJECT_NAME}.obj"
+    if saved_scene_xml is not None:
+        namespace.SCENE_XML_FILE = saved_scene_xml
 
     return namespace
 
@@ -111,11 +126,9 @@ class RetargetingEvaluator:
     def __init__(
         self,
         robot_model_path: str,
-        object_model_path: str | None,
         object_name: str,
         demo_joints: List[str],
         joints_mapping: Dict[str, str],
-        visualize: bool = True,
         constants: SimpleNamespace | None = None,
     ):
         """Initialize evaluator with robot and object models."""
@@ -156,28 +169,19 @@ class RetargetingEvaluator:
         else:
             self.has_dynamic_object = False
 
-        # For climbing task, we need to load the terrain
-        # ===== libigl object mesh in WORLD frame (static) =====
+        # For climbing, bake the static terrain from the exact MuJoCo scene
+        # selected from the artifact's saved configuration.
+        self._obj_VW = np.zeros((0, 3), dtype=np.float64)
+        self._obj_FW = np.zeros((0, 3), dtype=np.int32)
         self._have_terrain_mesh = False
         self._ground_z = 0.0  # ground z is always 0.0
 
-        if hasattr(constants, "OBJECT_MESH_FILE") and constants.OBJECT_MESH_FILE and (not self.has_dynamic_object):
-            mesh = trimesh.load(constants.OBJECT_MESH_FILE, force="mesh")
-            if not isinstance(mesh, trimesh.Trimesh):
-                mesh = trimesh.util.concatenate(tuple(g for g in mesh.geometry.values()))  # type: ignore[attr-defined]
-            V = np.asarray(mesh.vertices, dtype=np.float64)  # type: ignore[attr-defined]
-            F = np.asarray(mesh.faces, dtype=np.int32)  # type: ignore[attr-defined]
-            if V.size == 0 or F.size == 0:
-                raise ValueError("Empty object mesh")
-
-            self._obj_VW = V  # WORLD-frame vertices
-            self._obj_FW = F
+        if self.object_name != "ground" and not self.has_dynamic_object and getattr(constants, "SCENE_XML_FILE", ""):
             self._have_terrain_mesh = True
-        else:
-            self._have_terrain_mesh = False
 
         if self._have_terrain_mesh:
             self._bake_object_mesh_from_xml()
+            self._have_terrain_mesh = bool(self._obj_VW.size and self._obj_FW.size)
 
         self.constants = constants
 
@@ -188,10 +192,7 @@ class RetargetingEvaluator:
 
         obj_Vs, obj_Fs, v_acc = [], [], 0
         visual_name = f"{self.object_name}_visual"
-        geom_names = [
-            mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, gid) or ""
-            for gid in range(m.ngeom)
-        ]
+        geom_names = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, gid) or "" for gid in range(m.ngeom)]
         has_separate_visual = visual_name in geom_names
         for gid in range(m.ngeom):
             if m.geom_type[gid] != mujoco.mjtGeom.mjGEOM_MESH:
@@ -385,7 +386,11 @@ class RetargetingEvaluator:
         for q, human_joints, object_pose in zip(q_trajectory, human_joints_motion, object_poses):
             demo_points = np.array([human_joints[self.demo_joints.index(joint_name)] for joint_name in joint_names])
             demo_local_points_list.append(
-                transform_points_world_to_local(object_pose[:4], object_pose[4:], demo_points)
+                transform_points_world_to_local(
+                    object_pose[3:7],
+                    object_pose[:3],
+                    demo_points,
+                )
             )
             robot_joint_pos = self._get_robot_link_positions(q, robot_joint_names)
             # Object pose in MuJoCo order: [-7:-4] pos, [-4:] quat
@@ -399,100 +404,110 @@ class RetargetingEvaluator:
         miss_contact = demo_contact & (demo_contact != robot_contact)
         worst_miss_contact = np.logical_or.reduce(miss_contact, axis=1)
 
-        return 1 - np.sum(worst_miss_contact) / len(q_trajectory)
+        return 1 - np.sum(worst_miss_contact) / max(len(q_trajectory), 1)
 
-    def detect_foot_sliding(self, q_trajectory, contact_sequences, toe_names):
+    def detect_foot_sliding(
+        self,
+        q_trajectory: np.ndarray,
+        contact_states: np.ndarray,
+        toe_names: Sequence[str],
+        *,
+        fps: float,
+    ) -> tuple[float, np.ndarray]:
         """
         Detect foot sliding during contact phases.
 
         Args:
             q_trajectory: Robot joint configurations (N, DOF)
-            contact_sequences: Contact information per frame
+            contact_states: Saved left/right sticking state with shape (N, 2)
+            toe_names: Source toe names in canonical left/right order
+            fps: Saved trajectory rate used to convert displacement to m/s
 
         Returns:
-            dict: Foot sliding metrics
+            Sliding-frame fraction and maximum sliding velocity per sliding frame
         """
+
+        q_trajectory = np.asarray(q_trajectory)
+        contact_states = np.asarray(contact_states, dtype=bool)
+        if q_trajectory.ndim != 2 or q_trajectory.shape[0] == 0:
+            raise ValueError("q_trajectory must be a non-empty 2-D array")
+        if contact_states.shape != (q_trajectory.shape[0], 2):
+            raise ValueError(
+                f"contact_states shape {contact_states.shape} != ({q_trajectory.shape[0]}, 2)",
+            )
+        if len(toe_names) != 2:
+            raise ValueError("toe_names must contain canonical left/right names")
+        if not np.isfinite(fps) or fps <= 0.0:
+            raise ValueError(f"fps must be positive and finite, got {fps}")
 
         robot_toe_links = [self.joints_mapping[toe_name] for toe_name in toe_names]
-        left_toe_positions = []
-        right_toe_positions = []
-        for q in q_trajectory:
-            toe_positions = self._get_robot_link_positions(q, robot_toe_links)
-            left_toe_positions.append(toe_positions[0])
-            right_toe_positions.append(toe_positions[1])
+        toe_positions_by_frame = [self._get_robot_link_positions(q, robot_toe_links) for q in q_trajectory]
+        toe_positions = np.asarray(toe_positions_by_frame, dtype=np.float64)
+        toe_xy_velocities = np.zeros((q_trajectory.shape[0], 2), dtype=np.float64)
+        toe_xy_velocities[1:] = np.linalg.norm(
+            np.diff(toe_positions[:, :, :2], axis=0),
+            axis=2,
+        ) * float(fps)
+        sticking_frames = np.any(contact_states, axis=1)
+        num_sticking_frames = int(np.count_nonzero(sticking_frames))
+        if num_sticking_frames == 0:
+            return 0.0, np.empty((0,), dtype=np.float64)
 
-        left_toe_positions = np.array(left_toe_positions)
-        right_toe_positions = np.array(right_toe_positions)
-
-        left_toe_xy_velocities = np.linalg.norm(np.diff(left_toe_positions[:, :2], axis=0), axis=1)
-        right_toe_xy_velocities = np.linalg.norm(np.diff(right_toe_positions[:, :2], axis=0), axis=1)
-        left_toe_xy_velocities = np.concatenate([[0], left_toe_xy_velocities])
-        right_toe_xy_velocities = np.concatenate([[0], right_toe_xy_velocities])
-
-        left_foot_sticking_sequence = np.array(
-            [contact_sequence[toe_names[0]] for contact_sequence in contact_sequences]
-        )
-        right_foot_sticking_sequence = np.array(
-            [contact_sequence[toe_names[1]] for contact_sequence in contact_sequences]
-        )
-
-        left_foot_sliding_sequence = left_foot_sticking_sequence & (left_toe_xy_velocities > self.sliding_threshold)
-        right_foot_sliding_sequence = right_foot_sticking_sequence & (right_toe_xy_velocities > self.sliding_threshold)
-
-        num_foot_sticking_frames = np.sum(left_foot_sticking_sequence | right_foot_sticking_sequence)
-        max_toe_sliding_velocities = np.max(
-            np.array(
-                [
-                    left_toe_xy_velocities * left_foot_sliding_sequence,
-                    right_toe_xy_velocities * right_foot_sliding_sequence,
-                ]
-            ),
-            axis=0,
-        )
-        max_toe_sliding_velocities = max_toe_sliding_velocities[max_toe_sliding_velocities > 0]
-
+        sliding_by_foot = contact_states & (toe_xy_velocities > self.sliding_threshold)
+        sliding_frames = np.any(sliding_by_foot, axis=1)
+        max_sliding_velocities = np.max(
+            np.where(sliding_by_foot, toe_xy_velocities, 0.0),
+            axis=1,
+        )[sliding_frames]
         return (
-            len(max_toe_sliding_velocities) / num_foot_sticking_frames,
-            max_toe_sliding_velocities,
+            float(np.count_nonzero(sliding_frames) / num_sticking_frames),
+            max_sliding_velocities,
         )
 
-    def evaluate_trajectory(self, task_name, data_dir, input_data_dir):
-        """
-        Evaluate a complete retargeting trajectory.
-
-        Args:
-            data_file: Path to pickle file containing retargeting data
-            dt: Time step duration
-
-        Returns:
-            dict: Complete evaluation results
-        """
-        try:
-            rt_res_data = np.load(f"{data_dir}", allow_pickle=True)
-            q_retarget = rt_res_data["qpos"]
-        except (OSError, KeyError, ValueError):
-            return None
-        penetration_duration, penetration_max_depths = self.evaluate_penetration(q_retarget)
-
-        human_joints, object_poses = load_intermimic_data(f"{input_data_dir}/{task_name}.pt")
-        contact_sequences = extract_foot_sticking_sequence_velocity(human_joints, self.demo_joints, ["L_Toe", "R_Toe"])
-        sliding_duration, max_toe_sliding_velocities = self.detect_foot_sliding(
-            q_retarget,
-            contact_sequences[: q_retarget.shape[0]],
-            ["L_Toe", "R_Toe"],
+    def _saved_foot_sliding(
+        self,
+        result: VariantResult,
+    ) -> tuple[float, np.ndarray]:
+        if result.foot_sticking is None:
+            raise ValueError(
+                f"{result.path} is missing saved foot-sticking metadata",
+            )
+        toe_names = MotionDataConfig(
+            data_format=result.source_data_format,
+            robot_type=result.robot_type,
+        ).toe_names
+        return self.detect_foot_sliding(
+            result.qpos,
+            np.asarray(result.foot_sticking["states"], dtype=bool),
+            toe_names,
+            fps=result.fps,
         )
 
-        contact_results = self.evaluate_contact_precision(human_joints, object_poses, q_retarget)
+    def evaluate_trajectory(self, result: VariantResult) -> dict[str, Any]:
+        """Evaluate one strict dynamic-object artifact without raw-data reloads."""
 
-        opt_cost = rt_res_data["cost"]
-
+        if result.human_joints is None or result.object_poses_demo is None:
+            raise ValueError(
+                f"{result.path} is missing saved human/object trajectories",
+            )
+        penetration_duration, penetration_max_depths = self.evaluate_penetration(
+            result.qpos,
+        )
+        sliding_duration, max_toe_sliding_velocities = self._saved_foot_sliding(
+            result,
+        )
+        contact_results = self.evaluate_contact_precision(
+            result.human_joints,
+            result.object_poses_demo,
+            result.qpos,
+        )
         return {
             "penetration_duration": penetration_duration,
             "penetration_max_depths": penetration_max_depths,
             "sliding_duration": sliding_duration,
             "max_toe_sliding_velocities": max_toe_sliding_velocities,
             "contact_preservation": contact_results,
-            "opt_cost": opt_cost,
+            "opt_cost": float(result.cost),
         }
 
     def evaluate_terrain_contact_precision(
@@ -524,18 +539,17 @@ class RetargetingEvaluator:
         collision_gids = [
             g
             for g in range(self.robot_model.ngeom)
-            if (
-                mujoco.mj_id2name(self.robot_model, mujoco.mjtObj.mjOBJ_GEOM, g) or ""
-            ).startswith(collision_prefix)
+            if (mujoco.mj_id2name(self.robot_model, mujoco.mjtObj.mjOBJ_GEOM, g) or "").startswith(collision_prefix)
         ]
         obj_gids = collision_gids or [
             g
             for g in range(self.robot_model.ngeom)
-            if self.object_name
-            in (mujoco.mj_id2name(self.robot_model, mujoco.mjtObj.mjOBJ_GEOM, g) or "")
+            if self.object_name in (mujoco.mj_id2name(self.robot_model, mujoco.mjtObj.mjOBJ_GEOM, g) or "")
         ]
 
-        for _q, demo_joints in zip(q_trajectory, human_joints_motion):
+        for q, demo_joints in zip(q_trajectory, human_joints_motion):
+            self.robot_data.qpos[:] = q
+            mujoco.mj_forward(self.robot_model, self.robot_data)
             # demo contacts (object only)
             dc = self.detect_demo_contact(demo_joints, joint_names)
             if not dc:
@@ -566,103 +580,159 @@ class RetargetingEvaluator:
             preserved.append(ok)
         return 1.0 if not preserved else float(np.mean(preserved))
 
-    def evaluate_robot_terrain_trajectory(self, task_name, data_dir, input_data_dir):
-        """
-        Evaluate a complete retargeting trajectory.
+    def evaluate_robot_terrain_trajectory(
+        self,
+        result: VariantResult,
+    ) -> dict[str, Any]:
+        """Evaluate one strict climbing artifact using its saved trajectories."""
 
-        Args:
-            data_file: Path to pickle file containing retargeting data
-            dt: Time step duration
-
-        Returns:
-            dict: Complete evaluation results
-        """
-        try:
-            rt_res_data = np.load(f"{data_dir}", allow_pickle=True)
-            q_retarget = rt_res_data["qpos"]
-        except (OSError, KeyError, ValueError):
-            return None
-        penetration_duration, penetration_max_depths = self.evaluate_penetration(q_retarget)
-
-        input_data_path = f"{input_data_dir}/{task_name}"
-        npy_file = next(iter(Path(input_data_path).glob("*.npy")))
-        smpl_scale = self.constants.ROBOT_HEIGHT / 1.78
-        human_joints = np.load(npy_file)[::4] * smpl_scale
-
-        contact_sequences = extract_foot_sticking_sequence_velocity(
-            human_joints, self.demo_joints, ["LeftToeBase", "RightToeBase"]
+        if result.human_joints is None:
+            raise ValueError(f"{result.path} is missing saved human joints")
+        penetration_duration, penetration_max_depths = self.evaluate_penetration(
+            result.qpos,
         )
-        sliding_duration, max_toe_sliding_velocities = self.detect_foot_sliding(
-            q_retarget,
-            contact_sequences[: q_retarget.shape[0]],
-            ["LeftToeBase", "RightToeBase"],
+        sliding_duration, max_toe_sliding_velocities = self._saved_foot_sliding(
+            result,
         )
-
-        contact_results = self.evaluate_terrain_contact_precision(human_joints, q_retarget)
-
-        opt_cost = rt_res_data["cost"]
-
+        contact_results = self.evaluate_terrain_contact_precision(
+            result.human_joints,
+            result.qpos,
+        )
         return {
             "penetration_duration": penetration_duration,
             "penetration_max_depths": penetration_max_depths,
             "sliding_duration": sliding_duration,
             "max_toe_sliding_velocities": max_toe_sliding_velocities,
             "contact_preservation": contact_results,
-            "opt_cost": opt_cost,
+            "opt_cost": float(result.cost),
         }
 
-    def evaluate_robot_only_trajectory(self, data_dir):
-        """
-        Evaluate a complete retargeting trajectory.
+    def evaluate_robot_only_trajectory(
+        self,
+        result: VariantResult,
+    ) -> dict[str, Any]:
+        """Evaluate one strict robot-only artifact using saved contact state."""
 
-        Args:
-            data_dir: Path to retargeting result file (.npz)
-        Returns:
-            dict: Complete evaluation results
-        """
-        with np.load(data_dir, allow_pickle=False) as rt_res_data:
-            q_retarget = np.asarray(rt_res_data["qpos"])
-            if "human_joints" not in rt_res_data or "human_joint_names" not in rt_res_data:
-                raise KeyError("Retargeting result is missing saved human skeleton data")
-            human_joints = np.asarray(rt_res_data["human_joints"], dtype=np.float32)
-            demo_joints_for_contact = [str(name) for name in rt_res_data["human_joint_names"].tolist()]
-            source_format = (
-                str(np.asarray(rt_res_data["source_data_format"]).item())
-                if "source_data_format" in rt_res_data
-                else self.constants.SOURCE_DATA_FORMAT
-            )
-            opt_cost = np.asarray(rt_res_data["cost"])
-        penetration_duration, penetration_max_depths = self.evaluate_penetration(q_retarget)
-
-        toe_names = MotionDataConfig(
-            data_format=source_format,
-            robot_type=self.constants.ROBOT_TYPE,
-        ).toe_names
-
-        contact_sequences = extract_foot_sticking_sequence_velocity(
-            human_joints,
-            demo_joints_for_contact,
-            toe_names,
+        penetration_duration, penetration_max_depths = self.evaluate_penetration(
+            result.qpos,
         )
-        sliding_duration, max_toe_sliding_velocities = self.detect_foot_sliding(
-            q_retarget,
-            contact_sequences[: q_retarget.shape[0]],
-            toe_names,
+        sliding_duration, max_toe_sliding_velocities = self._saved_foot_sliding(
+            result,
         )
-
         return {
             "penetration_duration": penetration_duration,
             "penetration_max_depths": penetration_max_depths,
             "sliding_duration": sliding_duration,
             "max_toe_sliding_velocities": max_toe_sliding_velocities,
-            "opt_cost": opt_cost,
+            "opt_cost": float(result.cost),
         }
+
+
+def _saved_job_payload(result: VariantResult) -> dict[str, Any]:
+    if result.config_json is None:
+        raise ValueError(f"{result.path} is missing saved config_json")
+    try:
+        payload = json.loads(result.config_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{result.path} has invalid config_json: {exc}") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("config"), dict):
+        raise ValueError(f"{result.path} config_json has no normalized config")
+    return payload
+
+
+def _load_evaluation_result(
+    path: str | Path,
+    *,
+    data_type: str,
+    robot_type: str | None = None,
+    data_format: str | None = None,
+) -> VariantResult:
+    """Load and bind one strict schema-v2 identity to evaluation settings."""
+
+    result = load_variant_result(
+        "identity",
+        path,
+        allow_legacy=False,
+    )
+    return _validate_evaluation_result(
+        result,
+        data_type=data_type,
+        robot_type=robot_type,
+        data_format=data_format,
+    )
+
+
+def _validate_evaluation_result(
+    result: VariantResult,
+    *,
+    data_type: str,
+    robot_type: str | None = None,
+    data_format: str | None = None,
+) -> VariantResult:
+    """Bind an already validated artifact to one evaluation contract."""
+
+    expected_task_type = _EVALUATION_TASK_TYPES[data_type]
+    mismatches: list[str] = []
+    if result.run_kind != "single":
+        mismatches.append(f"run_kind={result.run_kind!r}")
+    if result.variant != "identity":
+        mismatches.append(f"variant={result.variant!r}")
+    if result.task_type != expected_task_type:
+        mismatches.append(
+            f"task_type={result.task_type!r}, expected {expected_task_type!r}",
+        )
+    if robot_type is not None and result.robot_type != robot_type:
+        mismatches.append(
+            f"robot_type={result.robot_type!r}, expected {robot_type!r}",
+        )
+    if data_format is not None and result.source_data_format != data_format:
+        mismatches.append(
+            f"source_data_format={result.source_data_format!r}, expected {data_format!r}",
+        )
+    if result.cost is None or not np.isfinite(result.cost):
+        mismatches.append(f"cost={result.cost!r}")
+    if result.human_joints is None or not result.human_joint_names:
+        mismatches.append("saved human skeleton is absent")
+    if result.foot_sticking is None:
+        mismatches.append("saved foot-sticking state is absent")
+    if data_type == "robot_object":
+        if result.object_poses_demo is None:
+            mismatches.append("saved demonstration object poses are absent")
+        if result.object_urdf is None:
+            mismatches.append("saved object asset is absent")
+    if data_type == "robot_terrain":
+        if result.human_position_scale is None:
+            mismatches.append("saved human position scale is absent")
+        if result.object_urdf is None:
+            mismatches.append("saved terrain asset is absent")
+    if mismatches:
+        raise ValueError(
+            f"Evaluation result {result.path} does not satisfy the strict identity contract: {'; '.join(mismatches)}",
+        )
+    return result
+
+
+def _climbing_source_scene(
+    object_dir: Path,
+    *,
+    robot_type: str,
+    object_name: str,
+) -> Path:
+    candidates = tuple(
+        sorted(object_dir.glob(f"{robot_type}*_w_{object_name}.xml")),
+    )
+    if len(candidates) != 1:
+        raise FileNotFoundError(
+            f"Expected one saved-config climbing scene for "
+            f"{robot_type}/{object_name} in {object_dir}, found "
+            f"{[path.name for path in candidates]}",
+        )
+    return candidates[0]
 
 
 def _evaluate_single_task(
     task_name: str,
     data_path: str,
-    input_data_dir: str,
     robot_config_kwargs: Dict[str, Any],
     motion_data_config_kwargs: Dict[str, Any],
     object_name: str | None,
@@ -670,85 +740,203 @@ def _evaluate_single_task(
 ):
     robot_config = RobotConfig(**robot_config_kwargs)
     motion_data_config = MotionDataConfig(**motion_data_config_kwargs)
+    result = _load_evaluation_result(
+        data_path,
+        data_type=data_type,
+        robot_type=robot_config.robot_type,
+        data_format=motion_data_config.data_format,
+    )
+    if result.sequence_key != task_name:
+        raise ValueError(
+            f"Discovered task name {task_name!r} does not match artifact sequence_key={result.sequence_key!r}",
+        )
+    saved_job = _saved_job_payload(result)
+    saved_config = saved_job["config"]
 
-    resolved_object_name = object_name
-    if data_type == "robot_object":
-        if motion_data_config.data_format == "omomo":
-            resolved_object_name = resolve_omomo_result_object_name(
-                data_path,
-                explicit_object_name=object_name,
-            )
-        elif object_name is None:
-            raise ValueError(
-                "Non-OMOMO robot-object evaluation requires an explicit object name"
-            )
+    resolved_object_name = result.object_name
+    if object_name is not None and object_name != resolved_object_name:
+        raise ValueError(
+            f"Explicit object_name={object_name!r} does not match strict artifact object_name={resolved_object_name!r}",
+        )
 
+    asset_fingerprint = hashlib.sha256(
+        (f"{robot_config.robot_type}:{data_type}:{task_name}:{resolved_object_name or 'ground'}").encode()
+    ).hexdigest()
+    generated_assets_dir = Path(data_path).expanduser().resolve().parent / ".generated-assets" / asset_fingerprint
+    task_config = saved_config.get("task_config")
+    if not isinstance(task_config, dict):
+        raise ValueError(f"{result.path} saved config has no task_config")
+    saved_object_scale = tuple(float(value) for value in task_config.get("object_scale", (1.0, 1.0, 1.0)))
     constants = create_task_constants(
         robot_config,
         motion_data_config,
         object_name=resolved_object_name,
+        object_scale=saved_object_scale,
+        saved_object_urdf=result.object_urdf,
+        generated_assets_dir=generated_assets_dir,
     )
 
     if data_type == "robot_terrain":
-        # For robot_terrain task
-        constants.OBJECT_DIR = f"{input_data_dir}/{task_name}"
-        constants.OBJECT_URDF_FILE = f"{constants.OBJECT_DIR}/{constants.OBJECT_NAME}.urdf"
-        constants.OBJECT_MESH_FILE = f"{constants.OBJECT_DIR}/{constants.OBJECT_NAME}.obj"
-
-        box_asset_xml = f"{constants.OBJECT_DIR}/box_assets.xml"
-        scene_xml_name = constants.ROBOT_URDF_FILE.split("/")[-1].replace(".urdf", f"_w_{constants.OBJECT_NAME}.xml")
-        scene_xml_path = f"{constants.OBJECT_DIR}/{scene_xml_name}"
-
-        object_scale = np.array([1, 1, 1])
-        smpl_scale = constants.ROBOT_HEIGHT / 1.78
-
-        # Update object scale in .xml file
+        saved_object_dir = task_config.get("object_dir")
+        if not isinstance(saved_object_dir, str) or not saved_object_dir:
+            raise ValueError(
+                f"{result.path} saved climbing config has no object_dir",
+            )
+        object_dir = Path(saved_object_dir).expanduser().resolve()
+        source_scene = _climbing_source_scene(
+            object_dir,
+            robot_type=result.robot_type,
+            object_name=result.object_name,
+        )
+        if result.human_position_scale is None:
+            raise ValueError(
+                f"{result.path} is missing saved human_position_scale",
+            )
+        variant = saved_job.get("variant")
+        if not isinstance(variant, dict):
+            raise ValueError(f"{result.path} saved config has no variant")
+        variant_scale = np.asarray(
+            variant.get("object_scale"),
+            dtype=np.float64,
+        )
+        if variant_scale.shape != (3,):
+            raise ValueError(
+                f"{result.path} saved object_scale must have shape (3,)",
+            )
+        scene_scale = variant_scale * float(result.human_position_scale)
+        constants.OBJECT_DIR = str(object_dir)
+        constants.OBJECT_URDF_FILE = result.object_urdf
+        constants.OBJECT_MESH_FILE = str(
+            object_dir / f"{constants.OBJECT_NAME}.obj",
+        )
         object_asset_xml_path = create_scaled_multi_boxes_xml(
-            box_asset_xml,
-            object_scale * smpl_scale,
+            str(object_dir / "box_assets.xml"),
+            tuple(scene_scale),
+            output_dir=generated_assets_dir,
         )
-        new_scene_xml_path = create_new_scene_xml_file(
-            scene_xml_path,
-            object_scale * smpl_scale,
+        constants.SCENE_XML_FILE = create_new_scene_xml_file(
+            str(source_scene),
+            tuple(scene_scale),
             object_asset_xml_path,
+            output_dir=generated_assets_dir,
         )
-        constants.SCENE_XML_FILE = new_scene_xml_path
-
-    object_model_path: str | None = getattr(constants, "OBJECT_URDF_FILE", None)
 
     evaluator = RetargetingEvaluator(
         robot_model_path=constants.ROBOT_URDF_FILE,
-        object_model_path=object_model_path,
         object_name=constants.OBJECT_NAME,
-        demo_joints=constants.DEMO_JOINTS,
+        demo_joints=list(result.human_joint_names),
         joints_mapping=constants.JOINTS_MAPPING,
-        visualize=False,
         constants=constants,
     )
     if data_type == "robot_object":
-        return task_name, evaluator.evaluate_trajectory(task_name, data_path, input_data_dir)
+        return task_name, evaluator.evaluate_trajectory(result)
     if data_type == "robot_only":
-        return task_name, evaluator.evaluate_robot_only_trajectory(data_path)
+        return task_name, evaluator.evaluate_robot_only_trajectory(result)
     if data_type == "robot_terrain":
-        return task_name, evaluator.evaluate_robot_terrain_trajectory(task_name, data_path, input_data_dir)
+        return task_name, evaluator.evaluate_robot_terrain_trajectory(result)
     raise ValueError(f"Invalid data type: {data_type}")
 
 
-def get_task_names(data_dir, data_type):
-    data_path = Path(data_dir)
-    if data_type == "robot_object":
-        files = sorted(data_path.glob("*_original.npz"))
-        task_names = [p.name.replace("_original.npz", "") for p in files]
-    elif data_type == "robot_only":
-        files = sorted(data_path.glob("*.npz"))
-        task_names = [p.name.replace(".npz", "") for p in files]
-    elif data_type == "robot_terrain":
-        files = sorted(data_path.glob("*_original.npz"))
-        task_names = [p.name.replace("_original.npz", "").split("_joint_positions")[0] for p in files]
-    else:
+_EVALUATION_TASK_TYPES = {
+    "robot_object": "object_interaction",
+    "robot_only": "robot_only",
+    "robot_terrain": "climbing",
+}
+
+
+def _canonical_evaluation_results(
+    data_path: Path,
+    data_type: str,
+    *,
+    robot_type: str | None = None,
+    data_format: str | None = None,
+) -> list[tuple[str, Path]]:
+    """Discover strict identity artifacts and validate their complete closure."""
+
+    identity_paths = sorted(path for path in data_path.rglob("identity.npz") if path.is_file())
+    if not identity_paths:
+        return []
+
+    expected_task_type = _EVALUATION_TASK_TYPES[data_type]
+    results: list[tuple[str, str, Path]] = []
+    for path in identity_paths:
+        try:
+            result = load_variant_result(
+                "identity",
+                path,
+                allow_legacy=False,
+            )
+        except (KeyError, OSError, ValueError) as exc:
+            raise ValueError(
+                f"Cannot validate canonical evaluation result {path}: {exc}",
+            ) from exc
+        if result.run_kind != "single" or result.variant != "identity":
+            continue
+        if result.task_type != expected_task_type:
+            continue
+        result = _validate_evaluation_result(
+            result,
+            data_type=data_type,
+            robot_type=robot_type,
+            data_format=data_format,
+        )
+        if result.dataset_partition is None or result.sequence_key is None:
+            raise ValueError(
+                f"Canonical evaluation result {path} has no dataset identity",
+            )
+        results.append(
+            (result.dataset_partition, result.sequence_key, path),
+        )
+
+    task_names = [sequence_key for _, sequence_key, _ in results]
+    duplicates = sorted({task_name for task_name in task_names if task_names.count(task_name) > 1})
+    if duplicates:
+        conflicting = [
+            f"{dataset_partition}/{sequence_key}: {path}"
+            for dataset_partition, sequence_key, path in results
+            if sequence_key in duplicates
+        ]
+        raise ValueError(
+            "Canonical evaluation results contain duplicate sequence keys across dataset partitions. "
+            "Select a narrower --res-dir before evaluation:\n" + "\n".join(conflicting)
+        )
+    return [(sequence_key, path) for _, sequence_key, path in results]
+
+
+def get_task_names(
+    data_dir: str | Path,
+    data_type: str,
+    *,
+    robot_type: str | None = None,
+    data_format: str | None = None,
+) -> tuple[list[str], list[str]]:
+    """Return strict schema-v2 identity results selected for evaluation."""
+
+    if data_type not in {"robot_object", "robot_only", "robot_terrain"}:
         raise ValueError(f"Invalid data type: {data_type}")
 
-    return task_names, [str(p) for p in files]
+    data_path = Path(data_dir).expanduser()
+    canonical_results = _canonical_evaluation_results(
+        data_path,
+        data_type,
+        robot_type=robot_type,
+        data_format=data_format,
+    )
+    if canonical_results:
+        return (
+            [task_name for task_name, _ in canonical_results],
+            [str(path) for _, path in canonical_results],
+        )
+
+    files = sorted(path for path in data_path.glob("*_original.npz") if path.is_file())
+    if files:
+        raise ValueError(
+            "Evaluation no longer accepts legacy *_original.npz files because "
+            "they do not guarantee saved skeletons, contact state, FPS, cost, "
+            "or an externally validated asset closure. Rebuild them as strict "
+            "schema-v2 identity.npz artifacts first.",
+        )
+    return [], []
 
 
 @dataclass
@@ -756,7 +944,6 @@ class Args:
     """Evaluation configuration."""
 
     res_dir: Path
-    data_dir: Path
     data_type: Literal["robot_object", "robot_only", "robot_terrain"] = "robot_object"
     robot: str = "g1"  # Use str to allow dynamic robot types
     data_format: str | None = None  # Use str to allow dynamic data formats
@@ -771,6 +958,9 @@ class Args:
 
 
 def main(cfg: Args) -> None:
+    if cfg.max_workers <= 0:
+        raise ValueError("max_workers must be greater than zero")
+
     default_data_formats = {
         "robot_object": "omomo",
         "robot_only": "omomo",
@@ -779,13 +969,17 @@ def main(cfg: Args) -> None:
 
     data_format = normalize_data_format(cfg.data_format or default_data_formats[cfg.data_type])
 
-    # Ensure configs match top-level selections
+    # Preserve nested overrides while binding the top-level selector fields.
     if cfg.robot_config.robot_type != cfg.robot:
-        cfg.robot_config = RobotConfig(robot_type=cfg.robot)
+        cfg.robot_config = replace(
+            cfg.robot_config,
+            robot_type=cfg.robot,
+        )
 
     if cfg.motion_data_config.robot_type != cfg.robot or cfg.motion_data_config.data_format != data_format:
-        cfg.motion_data_config = MotionDataConfig(
-            data_format=data_format,  # data_format is now str, no cast needed
+        cfg.motion_data_config = replace(
+            cfg.motion_data_config,
+            data_format=data_format,
             robot_type=cfg.robot,
         )
 
@@ -800,21 +994,24 @@ def main(cfg: Args) -> None:
         # Default to "ground" for robot-only scenarios (matches robot defaults)
         object_name = "ground"
 
-    task_names, files = get_task_names(str(cfg.res_dir), cfg.data_type)
+    task_names, files = get_task_names(
+        cfg.res_dir,
+        cfg.data_type,
+        robot_type=cfg.robot,
+        data_format=data_format,
+    )
     print(f"Found {len(task_names)} tasks")
 
     robot_config_kwargs = asdict(cfg.robot_config)
     motion_data_config_kwargs = asdict(cfg.motion_data_config)
 
     results: Dict[str, Dict[str, Any]] = {}
-    max_workers = max(1, cfg.max_workers)
-    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+    with ProcessPoolExecutor(max_workers=cfg.max_workers) as executor:
         futures = {
             executor.submit(
                 _evaluate_single_task,
                 task_name,
                 file_path,
-                str(cfg.data_dir),
                 robot_config_kwargs,
                 motion_data_config_kwargs,
                 object_name,

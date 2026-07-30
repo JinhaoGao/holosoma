@@ -15,16 +15,20 @@
 
 ```python
 HumanMotion(
-    joints=world_joints,                 # 浮点数组 (T, J, 3)，右手系 Z-up
-    fps=fps,                             # 正数源帧率
-    human_height=height_m,               # 正数，单位为米
+    joints=world_joints,                       # 浮点数组 (T, J, 3)，右手系 Z-up
+    fps=fps,                                   # 正数源帧率
+    human_height=height_m,                     # 正数，单位为米
     source_path=input_path,
-    object_poses_wxyz_xyz=object_poses,  # 可选，形状 (T, 7)
-    root_quaternions_wxyz=root_quats,    # 可选，形状 (T, 4)
+    object_poses_wxyz_xyz=object_poses,        # 可选，形状 (T, 7)
+    orientation_joint_names=orientation_names, # 可选，源数据直接观测到的子集
+    orientation_quaternions_wxyz=orientations, # 可选，形状 (T, O, 4)
+    orientation_source=orientation_provenance, # 可选，已批准的来源声明
+    joint_parent_indices=parent_indices,
 )
 ```
 
 关节位置必须全部为有限值，关节顺序必须与注册的关节名称列表完全一致。物体位姿使用 `[qw, qx, qy, qz, x, y, z]` 顺序。
+不得根据位置伪造源人体 link 朝向；只能保存源数据直接观测到的关节子集，并明确声明其来源。
 
 对于转换后的 NPZ 格式，建议使用以下字段：
 
@@ -37,6 +41,19 @@ root_quaternions_wxyz   (T, 4)，可选
 source_format           标量字符串
 coordinate_system       标量字符串
 ```
+
+如果 NPZ 保存了源人体的直接朝向，则必须完整提供以下字段组：
+
+```text
+orientation_joint_names             (O,)，joint_names 的无重复子集
+orientation_quaternions_wxyz         (T, O, 4)，有限值单位四元数
+orientation_source                   标量，已批准的来源字符串
+quaternion_convention                标量 "wxyz"
+coordinate_system                    标量，已注册的标准坐标系
+orientation_coordinate_system       标量；格式声明需要时为必填
+```
+
+约定元数据缺失或含糊时必须报错，加载器不得猜测或静默转换。
 
 ## 2. 注册骨架语义
 
@@ -79,6 +96,11 @@ MOTION_FORMATS["myformat"] = MotionFormatSpec(
     root_joint="Pelvis",
     orientation_mode="smpl",
     default_fps=30.0,
+    direct_orientation_npz=DirectOrientationNPZSpec(
+        source_formats=frozenset({"myformat"}),
+        coordinate_systems=frozenset({"right_handed_z_up"}),
+        require_orientation_coordinate_system=True,
+    ),
 )
 ```
 
@@ -118,7 +140,17 @@ _LOADERS["myformat"] = _load_myformat
 
 数值动作文件应避免使用 `allow_pickle=True`。不要捕获字段缺失错误后再把文件按另一种格式解释。
 
-## 5. 测试适配器与完整流水线
+## 5. 保持统一结果约定
+
+单动作、增强实验和消融实验入口都必须通过共享重定向流水线创建任务，并写出同一种严格 schema-v2 artifact。一个结果不只是 qpos；它还应保留源数据身份与配置哈希、FPS 与 cost、完整人体骨架及父节点树、完整机器人 link 骨架及朝向、映射关键点、源数据直接观测到的朝向、目标/机器人朝向诊断、物体位姿与外部资产闭包、物体关键点、Interaction Mesh、脚部 sticking 状态，以及逐帧约束审计。
+
+这样设计是为了让可视化阶段在重定向完成后自由选择显示层。某个入口不能因为默认查看器没有展示某一层，就在重定向时丢弃该元数据。
+
+单动作使用 `examples/robot_retarget.py`，数据集批处理使用 `examples/parallel_robot_retarget.py`。批处理以 `--data-dir` 为标准参数；继承而来的 `--data-path` 只作为兼容别名，若同时传入两个不同值必须报错。批处理会从源文件发现 task name，因此继承而来的非默认 `--task-name` 必须报错。顶层 robot/format 选择器绑定到嵌套配置时，必须保留 robot、motion、task 与 retargeter 的其他覆盖项。
+
+标准增强结果族把 `identity.npz` 和所有已生成 variant 放在同一个序列目录。消融实验在实验命名空间下使用同一 artifact schema。评估只接受严格 single-run 的 `identity.npz`，直接使用其中保存的轨迹、FPS、接触状态、cost 和经过校验的外部资产；不会再把原始动作数据作为另一份事实来源重新加载。
+
+## 6. 测试适配器与完整流水线
 
 至少应添加以下测试：
 
@@ -144,9 +176,15 @@ python examples/robot_retarget.py \
   --retargeter.save-interaction-mesh
 
 python viser_player.py \
-  --qpos-npz /tmp/myformat-result/example.npz \
-  --show-mapped-skeletons \
+  --input-path /tmp/myformat-result/canonical/g1/robot_only/myformat/converted/example/identity.npz \
+  --show-human-skeleton \
+  --show-robot-skeleton \
   --show-interaction-mesh
+
+python multi_viser_player.py \
+  --family /tmp/myformat-result/canonical/g1/robot_only/myformat/converted/example
 ```
+
+对严格结果族省略 `--variants` 时，会自动发现所有实际存在的 variant，包括 climbing 的 `z_scale_*`。显式多结果比较默认采用 artifact 中保存的语义 variant 作为标签；标签必须唯一，并拒绝指向同一物理文件的重复路径，包括符号链接别名。旧单动作查看器的 `--qpos-npz` 以及旧 Python 查看器别名只保留为 deprecated 兼容边界；新代码应使用 `--input-path`、`MultiViserConfig` 和 `make_multi_result_player`。
 
 最后，在 `README_zh.md` 的支持表和数据准备章节中加入该格式，并同步更新英文 `README.md`。

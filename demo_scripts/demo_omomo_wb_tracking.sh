@@ -50,11 +50,12 @@ cd "$RETARGET_DIR"
 
 # Step 1: Run retargeting
 echo "Running retargeting..."
-python examples/robot_retarget.py --data_path demo_data/OMOMO_new --task-type robot_only --task-name sub3_largebox_003 --data_format smplh
+RETARGET_RESULTS_ROOT="demo_results/v1"
+python examples/robot_retarget.py --data-path demo_data/OMOMO_new --task-type robot_only --task-name sub3_largebox_003 --data-format omomo --robot g1 --save-dir "$RETARGET_RESULTS_ROOT"
 
 # Step 2: Run data conversion
 echo "Running data conversion..."
-python data_conversion/convert_data_format_mj.py --input_file ./demo_results/g1/robot_only/omomo/sub3_largebox_003.npz --output_fps 50 --output_name converted_res/robot_only/sub3_largebox_003_mj_fps50.npz --data_format smplh --object_name "ground" --once
+python data_conversion/convert_data_format_mj.py --input-file "$RETARGET_RESULTS_ROOT/canonical/g1/robot_only/omomo/OMOMO_new/sub3_largebox_003/identity.npz" --output-fps 50 --output-name converted_res/robot_only/sub3_largebox_003_mj_fps50.npz --data-format omomo --object-name "ground" --once
 
 # Step 3: Source IsaacSim setup script (for whole-body tracking training)
 echo "Sourcing IsaacSim setup..."

@@ -1,3 +1,5 @@
+# ruff: noqa: CPY001
+
 """Configuration types for retargeting (top-level config)."""
 
 from __future__ import annotations
@@ -44,6 +46,10 @@ class RetargetingConfig:
     augmentation: bool = False
     """Whether to use augmentation."""
 
+    overwrite_existing: bool = False
+    """Regenerate an existing canonical path. Without this explicit opt-in,
+    exact artifacts resume and mismatched or invalid artifacts are rejected."""
+
     # --- Nested configs ---
     robot_config: RobotConfig = field(default_factory=lambda: RobotConfig(robot_type="g1"))
     """Robot configuration (nested - can override robot_urdf_file, robot_dof, etc.
@@ -75,8 +81,9 @@ class ParallelRetargetingConfig(RetargetingConfig):
 
     # Parallel processing specific fields
     data_dir: Path = Path("demo_data/OMOMO_new")
-    """Directory containing input data files for parallel processing.
-    This overrides data_path from RetargetingConfig when processing multiple files."""
+    """Primary batch input directory. The inherited ``data_path`` is a
+    compatibility alias; explicitly setting both to different directories is
+    rejected instead of silently choosing one."""
 
     max_workers: int | None = None
     """Maximum number of parallel workers. Defaults to a safe bound of four."""
@@ -93,8 +100,9 @@ class ParallelRetargetingConfig(RetargetingConfig):
     dry_run: bool = False
     """Write the batch manifest and report without running retargeting."""
 
-    overwrite_existing: bool = False
-    """Regenerate outputs that already exist instead of resuming around them."""
-
     report_path: Path | None = None
-    """Optional JSON report path. Defaults to <save_dir>/batch_report.json."""
+    """Optional JSON report path. Defaults to
+    <save_dir>/runs/<run_id>/report.json."""
+
+    run_id: str | None = None
+    """Stable run identifier used under <results_root>/runs."""

@@ -21,7 +21,7 @@ setup(
         "smplx",
         "jinja2",
         "mujoco",
-        "viser",
+        "viser>=0.1.32",
         "robot_descriptions",
         "yourdfpy",
         "cvxpy",

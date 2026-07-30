@@ -10,6 +10,7 @@ from unittest import mock
 
 import numpy as np
 import torch
+from scipy.spatial.transform import Rotation
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_ROOT = REPO_ROOT / "src" / "holosoma_retargeting"
@@ -23,10 +24,19 @@ from holosoma_retargeting.data_utils.prep_amass_smplx_for_rt import (  # noqa: E
     save_converted_amass,
 )
 
+SMPLX_22_PARENTS = torch.tensor(
+    [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19],
+    dtype=torch.long,
+)
+
 
 class _FakeOutput:
     def __init__(self, joints: torch.Tensor):
         self.joints = joints
+
+
+class _FakeBodyModel:
+    parents = SMPLX_22_PARENTS
 
 
 class AMASSConversionTests(unittest.TestCase):
@@ -59,6 +69,8 @@ class AMASSConversionTests(unittest.TestCase):
             frames = 5
             poses = np.zeros((frames, 66), dtype=np.float32)
             poses[:, 2] = np.pi / 2
+            poses[:, 3] = np.pi / 2
+            poses[:, 13] = np.pi / 2
             np.savez(
                 input_path,
                 trans=np.zeros((frames, 3), dtype=np.float32),
@@ -77,7 +89,7 @@ class AMASSConversionTests(unittest.TestCase):
 
         with mock.patch(
             "holosoma_retargeting.data_utils.prep_amass_smplx_for_rt.create_smplx_model",
-            return_value=object(),
+            return_value=_FakeBodyModel(),
         ), mock.patch(
             "holosoma_retargeting.data_utils.prep_amass_smplx_for_rt.forward_smplx_model",
             side_effect=fake_forward,
@@ -92,6 +104,47 @@ class AMASSConversionTests(unittest.TestCase):
         self.assertAlmostEqual(motion.height, 1.83)
         expected = np.tile([np.sqrt(0.5), 0.0, 0.0, np.sqrt(0.5)], (5, 1))
         np.testing.assert_allclose(motion.root_quaternions_wxyz, expected, atol=1e-6)
+        self.assertEqual(motion.orientation_joint_names, tuple(AMASS_DEMO_JOINTS))
+        self.assertEqual(motion.orientation_quaternions_wxyz.shape, (5, 22, 4))
+        np.testing.assert_allclose(
+            np.linalg.norm(motion.orientation_quaternions_wxyz, axis=-1),
+            1.0,
+            atol=1e-6,
+        )
+        np.testing.assert_array_equal(
+            motion.root_quaternions_wxyz,
+            motion.orientation_quaternions_wxyz[:, 0],
+        )
+
+        matrices = (
+            Rotation.from_quat(
+                motion.orientation_quaternions_wxyz.reshape(-1, 4),
+                scalar_first=True,
+            )
+            .as_matrix()
+            .reshape(5, 22, 3, 3)
+        )
+        root = Rotation.from_rotvec([0.0, 0.0, np.pi / 2]).as_matrix()
+        left_hip_local = Rotation.from_rotvec([np.pi / 2, 0.0, 0.0]).as_matrix()
+        left_knee_local = Rotation.from_rotvec([0.0, np.pi / 2, 0.0]).as_matrix()
+        np.testing.assert_allclose(
+            matrices[:, 0],
+            np.broadcast_to(root, matrices[:, 0].shape),
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            matrices[:, 1],
+            np.broadcast_to(root @ left_hip_local, matrices[:, 1].shape),
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            matrices[:, 4],
+            np.broadcast_to(
+                root @ left_hip_local @ left_knee_local,
+                matrices[:, 4].shape,
+            ),
+            atol=1e-6,
+        )
 
     def test_saved_output_uses_unified_contract(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -104,6 +157,12 @@ class AMASSConversionTests(unittest.TestCase):
                 {
                     "global_joint_positions": np.zeros((2, 22, 3), dtype=np.float32),
                     "root_quaternions_wxyz": np.tile([1.0, 0.0, 0.0, 0.0], (2, 1)).astype(np.float32),
+                    "orientation_joint_names": tuple(AMASS_DEMO_JOINTS),
+                    "orientation_quaternions_wxyz": np.tile(
+                        np.array([[[1.0, 0.0, 0.0, 0.0]]], dtype=np.float32),
+                        (2, 22, 1),
+                    ),
+                    "orientation_source": "direct_local_rotation_fk",
                     "height": 1.8,
                     "source_fps": 60.0,
                     "fps": 30.0,
@@ -117,6 +176,14 @@ class AMASSConversionTests(unittest.TestCase):
                 self.assertEqual(str(data["source_format"]), "amass")
                 self.assertEqual(str(data["coordinate_system"]), "right_handed_z_up")
                 self.assertEqual(float(data["fps"]), 30.0)
+                self.assertEqual(data["orientation_joint_names"].tolist(), AMASS_DEMO_JOINTS)
+                self.assertEqual(data["orientation_quaternions_wxyz"].shape, (2, 22, 4))
+                self.assertEqual(str(data["orientation_source"]), "direct_local_rotation_fk")
+                self.assertEqual(str(data["quaternion_convention"]), "wxyz")
+                self.assertEqual(
+                    str(data["orientation_coordinate_system"]),
+                    "right_handed_z_up",
+                )
 
 
 if __name__ == "__main__":

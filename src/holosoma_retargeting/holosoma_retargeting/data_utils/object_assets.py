@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import tempfile
 import xml.etree.ElementTree as ET
@@ -93,6 +94,14 @@ def default_models_root() -> Path:
     return Path(__file__).resolve().parents[1] / "models"
 
 
+def default_generated_assets_root() -> Path:
+    """Return a checkout-isolated temporary cache for library-level callers."""
+
+    package_root = Path(__file__).resolve().parents[1]
+    checkout_identity = hashlib.sha256(str(package_root).encode("utf-8")).hexdigest()[:16]
+    return Path(tempfile.gettempdir()) / "holosoma-retargeting" / checkout_identity / "generated-assets"
+
+
 def get_omomo_object_asset(
     object_name: str,
     *,
@@ -105,9 +114,7 @@ def get_omomo_object_asset(
         raise ValueError(f"Unknown OMOMO object {object_name!r}; supported objects: {supported}")
     root = Path(models_root).expanduser() if models_root is not None else default_models_root()
     object_dir = root / object_name
-    collision_mesh_paths = tuple(
-        sorted((object_dir / "collision").glob(f"{object_name}_collision_*.obj"))
-    )
+    collision_mesh_paths = tuple(sorted((object_dir / "collision").glob(f"{object_name}_collision_*.obj")))
     return OmomoObjectAsset(
         name=object_name,
         mesh_path=object_dir / f"{object_name}.obj",
@@ -146,9 +153,7 @@ def validate_omomo_object_asset(
     if not asset.urdf_path.is_file():
         raise FileNotFoundError(f"OMOMO object URDF not found: {asset.urdf_path}")
     if not asset.collision_mesh_paths:
-        raise FileNotFoundError(
-            f"OMOMO convex collision meshes not found: {asset.mesh_path.parent / 'collision'}"
-        )
+        raise FileNotFoundError(f"OMOMO convex collision meshes not found: {asset.mesh_path.parent / 'collision'}")
 
     sha256_matches = _sha256(asset.mesh_path) == asset.mesh_sha256
     if verify_hash and not sha256_matches:
@@ -166,9 +171,7 @@ def validate_omomo_object_asset(
 
     extents_array = np.asarray(mesh.bounds[1] - mesh.bounds[0], dtype=float)
     if np.any(extents_array <= 1e-3) or np.any(extents_array >= 5.0):
-        raise ValueError(
-            f"OMOMO object mesh extents are not plausible meters: {asset.name}={extents_array.tolist()}"
-        )
+        raise ValueError(f"OMOMO object mesh extents are not plausible meters: {asset.name}={extents_array.tolist()}")
 
     for collision_path in asset.collision_mesh_paths:
         if not collision_path.is_file():
@@ -217,12 +220,32 @@ def _scale_text(scale: tuple[float, float, float]) -> str:
     values = np.asarray(scale, dtype=float)
     if values.shape != (3,) or not np.isfinite(values).all() or np.any(values <= 0):
         raise ValueError(f"Object scale must contain three positive finite values, got {scale}")
-    return " ".join(f"{value:g}" for value in values)
+    encoded_values = []
+    for value in values:
+        text = repr(float(value))
+        encoded_values.append(text[:-2] if text.endswith(".0") else text)
+    return " ".join(encoded_values)
+
+
+def _scale_filename_token(scale: tuple[float, float, float]) -> str:
+    """Return a round-trip-safe filename token for one scale triple."""
+
+    return "_".join(_scale_text(scale).split())
 
 
 def _atomic_write_xml(tree: ET.ElementTree, destination: Path) -> None:
-    """Publish generated XML without exposing a partial file to other workers."""
+    """Idempotently publish XML without exposing a partial file to workers."""
 
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    buffer = io.BytesIO()
+    tree.write(buffer, encoding="utf-8", xml_declaration=True)
+    payload = buffer.getvalue()
+    try:
+        if destination.read_bytes() == payload:
+            return
+    except FileNotFoundError:
+        pass
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -233,9 +256,14 @@ def _atomic_write_xml(tree: ET.ElementTree, destination: Path) -> None:
             delete=False,
         ) as temporary_file:
             temporary_path = Path(temporary_file.name)
-            tree.write(temporary_file, encoding="utf-8", xml_declaration=True)
+            temporary_file.write(payload)
             temporary_file.flush()
             os.fsync(temporary_file.fileno())
+        try:
+            if destination.read_bytes() == payload:
+                return
+        except FileNotFoundError:
+            pass
         temporary_path.replace(destination)
     finally:
         if temporary_path is not None:
@@ -248,7 +276,7 @@ def create_omomo_object_scene(
     *,
     scale: tuple[float, float, float] = (1.0, 1.0, 1.0),
     models_root: str | Path | None = None,
-    output_dir: str | Path | None = None,
+    output_dir: str | Path,
 ) -> Path:
     """Generate a robot-plus-free-object MuJoCo scene from a base robot XML."""
 
@@ -258,11 +286,7 @@ def create_omomo_object_scene(
     asset = get_omomo_object_asset(object_name, models_root=models_root)
     validate_omomo_object_asset(asset, verify_hash=False)
     scale_value = _scale_text(scale)
-    destination_dir = (
-        Path(output_dir).expanduser().resolve()
-        if output_dir is not None
-        else robot_xml.parent / "generated"
-    )
+    destination_dir = Path(output_dir).expanduser().resolve()
     destination_dir.mkdir(parents=True, exist_ok=True)
 
     tree = ET.parse(robot_xml)  # noqa: S314
@@ -289,9 +313,7 @@ def create_omomo_object_scene(
         },
     )
     for index, collision_mesh_path in enumerate(asset.collision_mesh_paths):
-        collision_reference = Path(
-            os.path.relpath(collision_mesh_path.resolve(), mesh_dir)
-        ).as_posix()
+        collision_reference = Path(os.path.relpath(collision_mesh_path.resolve(), mesh_dir)).as_posix()
         ET.SubElement(
             asset_element,
             "mesh",
@@ -348,7 +370,7 @@ def create_omomo_object_scene(
 
     scale_suffix = ""
     if scale_value != "1 1 1":
-        scale_suffix = f"_scaled_{scale[0]:g}_{scale[1]:g}_{scale[2]:g}"
+        scale_suffix = f"_scaled_{_scale_filename_token(scale)}"
     destination = destination_dir / f"{robot_xml.stem}_w_{object_name}{scale_suffix}.xml"
     _atomic_write_xml(tree, destination)
     return destination
@@ -359,7 +381,7 @@ def create_scaled_omomo_object_urdf(
     scale: tuple[float, float, float],
     *,
     models_root: str | Path | None = None,
-    output_dir: str | Path | None = None,
+    output_dir: str | Path,
 ) -> Path:
     """Create a cached URDF whose visual and collision meshes use ``scale``."""
 
@@ -369,15 +391,9 @@ def create_scaled_omomo_object_urdf(
     if scale_value == "1 1 1":
         return asset.urdf_path
 
-    destination_dir = (
-        Path(output_dir).expanduser().resolve()
-        if output_dir is not None
-        else asset.mesh_path.parent / "generated"
-    )
+    destination_dir = Path(output_dir).expanduser().resolve()
     destination_dir.mkdir(parents=True, exist_ok=True)
-    destination = destination_dir / (
-        f"{object_name}_scaled_{scale[0]:g}_{scale[1]:g}_{scale[2]:g}.urdf"
-    )
+    destination = destination_dir / (f"{object_name}_scaled_{_scale_filename_token(scale)}.urdf")
 
     tree = ET.parse(asset.urdf_path)  # noqa: S314
     mesh_elements = tree.getroot().findall(".//mesh")

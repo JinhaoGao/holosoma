@@ -1,3 +1,5 @@
+# ruff: noqa: CPY001
+
 """Run a short real-optimizer acceptance matrix for OMOMO objects and robots."""
 
 from __future__ import annotations
@@ -21,6 +23,11 @@ from holosoma_retargeting.data_utils.omomo import (
     select_omomo_files,
 )
 from holosoma_retargeting.examples.robot_retarget import main as run_retargeting
+from holosoma_retargeting.result_artifact import (
+    validate_result_artifact,
+    validate_result_external_assets,
+)
+from holosoma_retargeting.retargeting_pipeline import build_retarget_job
 
 
 def _parse_args() -> argparse.Namespace:
@@ -67,9 +74,7 @@ def _representative_sources(
         selected.setdefault(object_name, path)
     missing = set(object_names).difference(selected)
     if missing:
-        raise FileNotFoundError(
-            f"No representative OMOMO sequence for: {', '.join(sorted(missing))}"
-        )
+        raise FileNotFoundError(f"No representative OMOMO sequence for: {', '.join(sorted(missing))}")
     return selected
 
 
@@ -94,8 +99,7 @@ def _prepare_validation_inputs(
         tensor = torch.load(source_path, map_location="cpu", weights_only=True)
         if tensor.shape[0] < frame_count:
             raise ValueError(
-                f"{source_path} has {tensor.shape[0]} frames, fewer than requested "
-                f"acceptance length {frame_count}"
+                f"{source_path} has {tensor.shape[0]} frames, fewer than requested acceptance length {frame_count}"
             )
         torch.save(tensor[:frame_count], input_dir / source_path.name)
         task_names[object_name] = source_path.stem
@@ -111,12 +115,11 @@ def _validate_result(
     frame_count: int,
 ) -> tuple[int, int]:
     with np.load(result_path, allow_pickle=False) as result:
+        validate_result_artifact(result)
+        validate_result_external_assets(result)
         qpos = np.asarray(result["qpos"])
         if qpos.shape != (frame_count, 7 + robot_dof + 7):
-            raise ValueError(
-                f"Unexpected qpos shape {qpos.shape}; expected "
-                f"{(frame_count, 7 + robot_dof + 7)}"
-            )
+            raise ValueError(f"Unexpected qpos shape {qpos.shape}; expected {(frame_count, 7 + robot_dof + 7)}")
         if not np.isfinite(qpos).all():
             raise ValueError("qpos contains NaN or Inf")
         if str(np.asarray(result["robot_type"]).item()) != robot_name:
@@ -132,9 +135,7 @@ def _validate_result(
         for key, expected_shape in expected_object_shapes.items():
             points = np.asarray(result[key])
             if points.shape != expected_shape:
-                raise ValueError(
-                    f"Unexpected {key} shape {points.shape}; expected {expected_shape}"
-                )
+                raise ValueError(f"Unexpected {key} shape {points.shape}; expected {expected_shape}")
             if not np.isfinite(points).all():
                 raise ValueError(f"{key} contains NaN or Inf")
     return qpos.shape
@@ -164,9 +165,7 @@ def run_acceptance(
             validate_tensors=True,
         )
         if not preflight.ok:
-            raise ValueError(
-                f"OMOMO preflight reported {len(preflight.issues)} issue(s)"
-            )
+            raise ValueError(f"OMOMO preflight reported {len(preflight.issues)} issue(s)")
 
     task_names = _prepare_validation_inputs(
         data_dir,
@@ -186,25 +185,19 @@ def run_acceptance(
         )
         for object_name in object_names:
             task_name = task_names[object_name]
-            result_path = (
-                validation_root
-                / "results"
-                / robot_name
-                / f"{task_name}_original.npz"
+            config = RetargetingConfig(
+                task_type="object_interaction",
+                robot=robot_name,
+                data_format="omomo",
+                task_name=task_name,
+                data_path=input_dir,
+                save_dir=validation_root / "results",
+                robot_config=robot_config,
+                motion_data_config=motion_config,
             )
+            result_path = build_retarget_job(config).output_path
             try:
-                run_retargeting(
-                    RetargetingConfig(
-                        task_type="object_interaction",
-                        robot=robot_name,
-                        data_format="omomo",
-                        task_name=task_name,
-                        data_path=input_dir,
-                        save_dir=result_path.parent,
-                        robot_config=robot_config,
-                        motion_data_config=motion_config,
-                    )
-                )
+                run_retargeting(config)
                 qpos_shape = _validate_result(
                     result_path,
                     robot_name=robot_name,

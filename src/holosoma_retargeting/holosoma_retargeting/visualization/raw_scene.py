@@ -1,27 +1,17 @@
-#!/usr/bin/env python3
-"""Inspect source human motion before retargeting or spatial preprocessing.
+# ruff: noqa: CPY001
+"""Load and render source human motion without retargeting preprocessing.
 
 This viewer goes through the repository's registered motion adapters so that
 all supported source formats share one command, but deliberately does not call
 ``preprocess_motion_data``.  Consequently it applies no robot-height scale,
 foot-height translation, object augmentation, or retargeting.
 
-Examples:
-
-    python raw_human_motion_viewer.py \
-        --motion-path ../demo_data/OMOMO_new/sub3_largebox_003.pt
-
-    python raw_human_motion_viewer.py \
-        --motion-path ../demo_data/climb/mocap_climb_seq_0
-
-    python raw_human_motion_viewer.py \
-        --motion-path ../demo_data/lafan/dance1_subject1.npy \
-        --task-type robot_only
+This internal adapter is selected by ``viser_player.py --input-kind raw`` or
+by automatic input inspection.
 """
 
 from __future__ import annotations
 
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -30,26 +20,26 @@ from typing import Literal
 
 import numpy as np
 import trimesh
-import tyro
 import viser
 
-src_root = Path(__file__).resolve().parents[2]
-if str(src_root) not in sys.path:
-    sys.path.insert(0, str(src_root))
-
-from holosoma_retargeting.config_types.data_type import (  # noqa: E402
+from holosoma_retargeting.config_types.data_type import (
     DEMO_JOINTS_REGISTRY,
     normalize_data_format,
 )
-from holosoma_retargeting.data_utils.motion_data import (  # noqa: E402
+from holosoma_retargeting.data_utils.motion_data import (
     HumanMotion,
     get_motion_format_spec,
     load_human_motion,
     validate_motion_task,
 )
-from holosoma_retargeting.data_utils.object_assets import get_omomo_object_asset  # noqa: E402
-from holosoma_retargeting.data_utils.omomo import parse_omomo_sequence_name  # noqa: E402
-from holosoma_retargeting.src.viser_utils import register_keyboard_shortcut  # noqa: E402
+from holosoma_retargeting.data_utils.object_assets import get_omomo_object_asset
+from holosoma_retargeting.data_utils.omomo import parse_omomo_sequence_name
+from holosoma_retargeting.src.viser_utils import register_keyboard_shortcut
+from holosoma_retargeting.visualization.layers import (
+    LayerController,
+    LayerId,
+    add_visualization_tabs,
+)
 
 TaskType = Literal["auto", "robot_only", "object_interaction", "climbing"]
 
@@ -129,10 +119,7 @@ class RawScene:
 
 def _candidate_motion_files(directory: Path) -> list[Path]:
     direct = [
-        path
-        for suffix in ("*.pt", "*.npy", "*.npz")
-        for path in sorted(directory.glob(suffix))
-        if path.is_file()
+        path for suffix in ("*.pt", "*.npy", "*.npz") for path in sorted(directory.glob(suffix)) if path.is_file()
     ]
     nested = [
         path
@@ -156,11 +143,7 @@ def resolve_motion_file(motion_path: Path, sequence: str | None) -> Path:
 
     candidates = _candidate_motion_files(path)
     if sequence is not None:
-        candidates = [
-            candidate
-            for candidate in candidates
-            if sequence in {candidate.stem, candidate.parent.name}
-        ]
+        candidates = [candidate for candidate in candidates if sequence in {candidate.stem, candidate.parent.name}]
     if len(candidates) == 1:
         return candidates[0]
     if not candidates:
@@ -171,9 +154,7 @@ def resolve_motion_file(motion_path: Path, sequence: str | None) -> Path:
     remainder = len(candidates) - 12
     if remainder > 0:
         preview += f"\n  ... and {remainder} more"
-    raise ValueError(
-        f"Motion path is ambiguous; pass an exact file or --sequence. Candidates:\n{preview}"
-    )
+    raise ValueError(f"Motion path is ambiguous; pass an exact file or --sequence. Candidates:\n{preview}")
 
 
 def infer_data_format(source_path: Path) -> str:
@@ -232,9 +213,7 @@ def _load_exact_source(
         human_height=human_height,
     )
     if motion.source_path.resolve() != source_path.resolve():
-        raise RuntimeError(
-            f"Motion adapter resolved a different source: {motion.source_path} != {source_path}"
-        )
+        raise RuntimeError(f"Motion adapter resolved a different source: {motion.source_path} != {source_path}")
     return motion
 
 
@@ -358,9 +337,7 @@ def resolve_mesh_path(
         ).object_name
         resolved_object = object_name or sequence_object
         if object_name is not None and object_name != sequence_object:
-            raise ValueError(
-                f"Sequence contains object {sequence_object!r}, but --object-name is {object_name!r}"
-            )
+            raise ValueError(f"Sequence contains object {sequence_object!r}, but --object-name is {object_name!r}")
         return get_omomo_object_asset(resolved_object).mesh_path.resolve()
 
     task_dir = source_path.parent
@@ -405,9 +382,7 @@ def load_raw_scene(cfg: Config) -> RawScene:
 
     source_path = resolve_motion_file(cfg.motion_path, cfg.sequence)
     data_format = (
-        infer_data_format(source_path)
-        if cfg.data_format == "auto"
-        else normalize_data_format(cfg.data_format)
+        infer_data_format(source_path) if cfg.data_format == "auto" else normalize_data_format(cfg.data_format)
     )
     motion = _load_exact_source(source_path, data_format, cfg.human_height)
     task_type = infer_task_type(cfg.task_type, data_format, source_path, motion)
@@ -421,11 +396,7 @@ def load_raw_scene(cfg: Config) -> RawScene:
         source_path,
     )
     mesh = load_mesh(mesh_path)
-    object_poses = (
-        motion.object_poses_wxyz_xyz
-        if task_type == "object_interaction"
-        else None
-    )
+    object_poses = motion.object_poses_wxyz_xyz if task_type == "object_interaction" else None
     return RawScene(
         motion=motion,
         data_format=data_format,
@@ -483,32 +454,27 @@ def print_summary(scene: RawScene) -> None:
     joints = scene.motion.joints
     lower = joints.min(axis=(0, 1))
     upper = joints.max(axis=(0, 1))
-    print("[raw_human_motion_viewer] Loaded source scene")
+    print("[viser_player:raw] Loaded source scene")
     print(f"  source: {scene.motion.source_path}")
     print(f"  data format: {scene.data_format}")
     print(f"  task type: {scene.task_type}")
-    print(
-        f"  frames/joints/fps: {joints.shape[0]}/{joints.shape[1]}/{scene.motion.fps:.3f}"
-    )
+    print(f"  frames/joints/fps: {joints.shape[0]}/{joints.shape[1]}/{scene.motion.fps:.3f}")
     print(f"  registered human height: {scene.motion.human_height:.4f} m")
     print(f"  raw joint bounds xyz: {lower.round(4).tolist()} -> {upper.round(4).tolist()}")
-    print(
-        "  spatial processing: NONE "
-        "(no foot-height shift, robot-height scale, augmentation, or retargeting)"
-    )
-    if scene.motion.global_joint_quaternions_wxyz is None:
+    print("  spatial processing: NONE (no foot-height shift, robot-height scale, augmentation, or retargeting)")
+    if scene.motion.orientation_quaternions_wxyz is None:
         print("  source joint orientations: unavailable")
     else:
         print(
             "  source joint orientations: "
-            f"{scene.motion.global_joint_quaternions_wxyz.shape}, global Z-up wxyz"
+            f"{scene.motion.orientation_quaternions_wxyz.shape}, "
+            f"direct subset={scene.motion.orientation_joint_names}, global Z-up wxyz"
         )
     if scene.mesh is None:
         print("  mesh: none; displaying the complete source skeleton only")
     else:
         print(
-            f"  mesh: {scene.mesh_path} "
-            f"({len(scene.mesh.vertices)} vertices, {len(scene.mesh.faces)} faces, unscaled)"
+            f"  mesh: {scene.mesh_path} ({len(scene.mesh.vertices)} vertices, {len(scene.mesh.faces)} faces, unscaled)"
         )
         print(
             "  mesh motion: "
@@ -527,6 +493,7 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
     edge_colors = _edge_colors(line_colors, scene.skeleton_edges)
 
     server = viser.ViserServer(port=cfg.port)
+    tabs = add_visualization_tabs(server.gui, include_motions=False)
     server.scene.add_grid(
         "/raw/grid",
         width=4.0,
@@ -559,19 +526,31 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
         )
         for index, name in enumerate(scene.joint_names)
     ]
-    source_orientations = scene.motion.global_joint_quaternions_wxyz
+    source_orientation_names = scene.motion.orientation_joint_names or ()
+    source_orientations = scene.motion.orientation_quaternions_wxyz
+    full_joint_index = {
+        name: index
+        for index, name in enumerate(scene.joint_names)
+    }
+    source_orientation_point_indices = np.asarray(
+        [full_joint_index[name] for name in source_orientation_names],
+        dtype=np.int32,
+    )
     orientation_frames = (
         [
             server.scene.add_frame(
                 f"/raw/human/orientations/{index:02d}_{name}",
                 wxyz=source_orientations[start_frame, index],
-                position=joints[start_frame, index],
+                position=joints[
+                    start_frame,
+                    source_orientation_point_indices[index],
+                ],
                 show_axes=True,
                 axes_length=cfg.orientation_axis_length,
                 axes_radius=max(cfg.orientation_axis_length * 0.025, 0.001),
                 visible=cfg.show_joint_orientations,
             )
-            for index, name in enumerate(scene.joint_names)
+            for index, name in enumerate(source_orientation_names)
         ]
         if source_orientations is not None
         else []
@@ -590,7 +569,7 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
             side="double",
         )
 
-    with server.gui.add_folder("Raw playback"):
+    with tabs.playback, server.gui.add_folder("Playback"):
         playing_handle = server.gui.add_checkbox("Playing", initial_value=cfg.playing)
         frame_handle = server.gui.add_slider(
             "Frame",
@@ -608,27 +587,6 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
         )
         loop_handle = server.gui.add_checkbox("Loop", initial_value=cfg.loop)
 
-    with server.gui.add_folder("Display"):
-        show_points_handle = server.gui.add_checkbox("Show all keypoints", initial_value=True)
-        show_skeleton_handle = server.gui.add_checkbox("Show complete skeleton", initial_value=True)
-        show_labels_handle = server.gui.add_checkbox(
-            "Show joint names",
-            initial_value=cfg.show_joint_labels,
-        )
-        show_orientations_handle = (
-            server.gui.add_checkbox(
-                "Show source joint orientations",
-                initial_value=cfg.show_joint_orientations,
-            )
-            if orientation_frames
-            else None
-        )
-        show_mesh_handle = (
-            server.gui.add_checkbox("Show source mesh", initial_value=True)
-            if mesh_handle is not None
-            else None
-        )
-
     render_lock = threading.Lock()
     updating_frame_slider = {"flag": False}
     playback_clock = {"next": time.monotonic()}
@@ -643,7 +601,9 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
                 label.position = frame_points[index]
             if source_orientations is not None:
                 for index, orientation_frame in enumerate(orientation_frames):
-                    orientation_frame.position = frame_points[index]
+                    orientation_frame.position = frame_points[
+                        source_orientation_point_indices[index]
+                    ]
                     orientation_frame.wxyz = source_orientations[
                         frame_index,
                         index,
@@ -673,98 +633,122 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
         if not updating_frame_slider["flag"]:
             set_discrete_frame(int(frame_handle.value))
 
-    updating_display = {
-        "points": False,
-        "skeleton": False,
-        "labels": False,
-        "orientations": False,
-        "mesh": False,
-    }
-
-    def set_points_visibility(visible: bool, *, sync_checkbox: bool = True) -> None:
-        if sync_checkbox:
-            updating_display["points"] = True
-            try:
-                show_points_handle.value = bool(visible)
-            finally:
-                updating_display["points"] = False
+    def set_human_skeleton_visibility(visible: bool) -> None:
         points_handle.visible = bool(visible)
-
-    def set_skeleton_visibility(visible: bool, *, sync_checkbox: bool = True) -> None:
-        if sync_checkbox:
-            updating_display["skeleton"] = True
-            try:
-                show_skeleton_handle.value = bool(visible)
-            finally:
-                updating_display["skeleton"] = False
         skeleton_handle.visible = bool(visible)
 
-    def set_label_visibility(visible: bool, *, sync_checkbox: bool = True) -> None:
-        if sync_checkbox:
-            updating_display["labels"] = True
-            try:
-                show_labels_handle.value = bool(visible)
-            finally:
-                updating_display["labels"] = False
+    def set_label_visibility(visible: bool) -> None:
         for label in labels:
             label.visible = bool(visible)
 
-    def set_orientation_visibility(
-        visible: bool,
-        *,
-        sync_checkbox: bool = True,
-    ) -> None:
-        if show_orientations_handle is None:
-            return
-        if sync_checkbox:
-            updating_display["orientations"] = True
-            try:
-                show_orientations_handle.value = bool(visible)
-            finally:
-                updating_display["orientations"] = False
+    def set_orientation_visibility(visible: bool) -> None:
         for orientation_frame in orientation_frames:
             orientation_frame.visible = bool(visible)
 
-    @show_points_handle.on_update
-    def _(_) -> None:
-        if not updating_display["points"]:
-            set_points_visibility(bool(show_points_handle.value), sync_checkbox=False)
-
-    @show_skeleton_handle.on_update
-    def _(_) -> None:
-        if not updating_display["skeleton"]:
-            set_skeleton_visibility(bool(show_skeleton_handle.value), sync_checkbox=False)
-
-    @show_labels_handle.on_update
-    def _(_) -> None:
-        if not updating_display["labels"]:
-            set_label_visibility(bool(show_labels_handle.value), sync_checkbox=False)
-
-    if show_orientations_handle is not None:
-
-        @show_orientations_handle.on_update
-        def _(_) -> None:
-            if not updating_display["orientations"]:
-                set_orientation_visibility(
-                    bool(show_orientations_handle.value),
-                    sync_checkbox=False,
-                )
-
-    if show_mesh_handle is not None and mesh_handle is not None:
-
-        def set_mesh_visibility(visible: bool, *, sync_checkbox: bool = True) -> None:
-            if sync_checkbox:
-                updating_display["mesh"] = True
-                try:
-                    show_mesh_handle.value = bool(visible)
-                finally:
-                    updating_display["mesh"] = False
+    def set_mesh_visibility(visible: bool) -> None:
+        if mesh_handle is not None:
             mesh_handle.visible = bool(visible)
 
-        @show_mesh_handle.on_update
-        def _(_) -> None:
-            if not updating_display["mesh"]:
-                set_mesh_visibility(bool(show_mesh_handle.value), sync_checkbox=False)
+    layer_controller = LayerController()
+    layer_controller.register(
+        LayerId.ROBOT_MESH,
+        available=False,
+        visible=False,
+        callback=lambda _visible: None,
+        unavailable_reason="Raw source inputs do not contain a robot.",
+    )
+    layer_controller.register(
+        LayerId.OBJECT_MESH,
+        available=mesh_handle is not None,
+        visible=True,
+        callback=set_mesh_visibility,
+        unavailable_reason="No source object or terrain mesh was resolved.",
+    )
+    layer_controller.register(
+        LayerId.HUMAN_SKELETON,
+        available=True,
+        visible=True,
+        callback=set_human_skeleton_visibility,
+    )
+    for layer_id, reason in (
+        (LayerId.ROBOT_SKELETON, "Raw source inputs do not contain mapped robot links."),
+        (LayerId.HUMAN_HANDS, "Hand joints are included in the complete source skeleton."),
+        (LayerId.OBJECT_KEYPOINTS, "Raw inputs do not contain retargeting object samples."),
+        (LayerId.INTERACTION_MESH, "Raw inputs do not contain saved interaction meshes."),
+        (LayerId.FOOT_STICKING, "Raw inputs do not contain saved retargeting foot states."),
+    ):
+        layer_controller.register(
+            layer_id,
+            available=False,
+            visible=False,
+            callback=lambda _visible: None,
+            unavailable_reason=reason,
+        )
+    layer_controller.register(
+        LayerId.SOURCE_ORIENTATION,
+        available=bool(orientation_frames),
+        visible=cfg.show_joint_orientations,
+        callback=set_orientation_visibility,
+        unavailable_reason="The selected source adapter did not provide global joint frames.",
+    )
+    for layer_id, reason in (
+        (LayerId.TARGET_ORIENTATION, "Target frames exist only in retargeting results."),
+        (LayerId.ROBOT_ORIENTATION, "Robot frames exist only in retargeting results."),
+    ):
+        layer_controller.register(
+            layer_id,
+            available=False,
+            visible=False,
+            callback=lambda _visible: None,
+            unavailable_reason=reason,
+        )
+    layer_controller.register(
+        LayerId.JOINT_LABELS,
+        available=True,
+        visible=cfg.show_joint_labels,
+        callback=set_label_visibility,
+    )
+    for layer_id, reason in (
+        (LayerId.BODY_COM, "Body centers exist only in converted robot motions."),
+        (LayerId.BODY_VELOCITY, "Body velocities exist only in converted robot motions."),
+    ):
+        layer_controller.register(
+            layer_id,
+            available=False,
+            visible=False,
+            callback=lambda _visible: None,
+            unavailable_reason=reason,
+        )
+
+    with tabs.layers:
+        layer_controller.add_gui(server.gui)
+    with tabs.style:
+        server.gui.add_number(
+            "Human point size",
+            initial_value=float(cfg.point_size),
+            min=0.001,
+            max=0.2,
+            step=0.005,
+            disabled=True,
+        )
+        server.gui.add_number(
+            "Skeleton line width",
+            initial_value=float(cfg.line_width),
+            min=0.1,
+            max=20.0,
+            step=0.5,
+            disabled=True,
+        )
+        server.gui.add_number(
+            "Object mesh opacity",
+            initial_value=float(cfg.mesh_opacity),
+            min=0.0,
+            max=1.0,
+            step=0.05,
+            disabled=True,
+        )
+    layer_controller.register_shortcuts(server)
+    server._holosoma_layer_controller = layer_controller
 
     render_frame(start_frame)
 
@@ -798,43 +782,8 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
         hotkey="end",
         callback=lambda: set_discrete_frame(num_frames - 1),
     )
-    register_keyboard_shortcut(
-        server,
-        "Display: Toggle Keypoints",
-        hotkey="k",
-        callback=lambda: set_points_visibility(not bool(show_points_handle.value)),
-    )
-    register_keyboard_shortcut(
-        server,
-        "Display: Toggle Skeleton",
-        hotkey=".",
-        callback=lambda: set_skeleton_visibility(not bool(show_skeleton_handle.value)),
-    )
-    register_keyboard_shortcut(
-        server,
-        "Display: Toggle Joint Names",
-        hotkey="l",
-        callback=lambda: set_label_visibility(not bool(show_labels_handle.value)),
-    )
-    if show_orientations_handle is not None:
-        register_keyboard_shortcut(
-            server,
-            "Display: Toggle Joint Orientations",
-            hotkey="r",
-            callback=lambda: set_orientation_visibility(
-                not bool(show_orientations_handle.value)
-            ),
-        )
-    if show_mesh_handle is not None and mesh_handle is not None:
-        register_keyboard_shortcut(
-            server,
-            "Display: Toggle Source Mesh",
-            hotkey="o",
-            callback=lambda: set_mesh_visibility(not bool(show_mesh_handle.value)),
-        )
-
-    print("[raw_human_motion_viewer] Open the Viser URL printed above")
-    print("[raw_human_motion_viewer] Ctrl+C stops the viewer")
+    print("[viser_player:raw] Open the Viser URL printed above")
+    print("[viser_player:raw] Ctrl+C stops the viewer")
 
     def playback_loop() -> None:
         while True:
@@ -878,8 +827,4 @@ def main(cfg: Config) -> None:
         while True:
             time.sleep(1.0)
     except KeyboardInterrupt:
-        print("\n[raw_human_motion_viewer] Stopped")
-
-
-if __name__ == "__main__":
-    main(tyro.cli(Config))
+        print("\n[viser_player:raw] Stopped")

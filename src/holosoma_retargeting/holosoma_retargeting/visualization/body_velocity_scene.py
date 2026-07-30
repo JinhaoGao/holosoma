@@ -1,14 +1,20 @@
-#!/usr/bin/env python3
+"""Load and render converted robot body-position and velocity trajectories."""
+
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
 
 import numpy as np
-import tyro
 import viser  # type: ignore[import-not-found]  # pip install viser
 import yourdfpy  # type: ignore[import-untyped]  # pip install yourdfpy
 from viser.extras import ViserUrdf  # type: ignore[import-not-found]
+
+from holosoma_retargeting.visualization.layers import (
+    LayerController,
+    LayerId,
+    add_visualization_tabs,
+)
 
 
 # ---------------------------------------------------------------------
@@ -26,6 +32,9 @@ class Config:
     grid_width: float = 2.0
     grid_height: float = 2.0
     show_meshes: bool = True
+    show_body_com: bool = True
+    show_body_velocity: bool = True
+    playing: bool = True
     loop: bool = True
 
     # Playback / visualization
@@ -105,7 +114,7 @@ def main(cfg: Config) -> None:
     joint_angles_seq = joint_pos[:, 7:]  # (T, ndof)
     ndof = joint_angles_seq.shape[1]
 
-    print(f"[viser_body_vel_player] Loaded npz: {cfg.npz_path}")
+    print(f"[viser_player:converted] Loaded npz: {cfg.npz_path}")
     print(f"  frames: {T}, total joint_pos dim: {nq_total} (root 7 + ndof {ndof})")
     print(f"  bodies: {nbody}, fps (npz): {fps_npz}")
     # print(f"  joint names (npz): {joint_names}")
@@ -116,6 +125,7 @@ def main(cfg: Config) -> None:
 
     # -------------------- Setup viser -------------------------
     server = viser.ViserServer()
+    tabs = add_visualization_tabs(server.gui, include_motions=False)
     server.scene.add_grid(
         "/grid",
         width=cfg.grid_width,
@@ -172,8 +182,8 @@ def main(cfg: Config) -> None:
     vr.update_cfg(initial_cfg)
 
     # -------------------- GUI controls ------------------------
-    with server.gui.add_folder("Playback"):
-        playing_cb = server.gui.add_checkbox("Playing", initial_value=True)
+    with tabs.playback, server.gui.add_folder("Playback"):
+        playing_cb = server.gui.add_checkbox("Playing", initial_value=cfg.playing)
         t_slider = server.gui.add_slider(
             "Frame",
             min=0,
@@ -182,8 +192,7 @@ def main(cfg: Config) -> None:
             initial_value=0,
         )
 
-    with server.gui.add_folder("Display"):
-        show_meshes_cb = server.gui.add_checkbox("Show meshes", initial_value=cfg.show_meshes)
+    with tabs.style:
         vel_scale_slider = server.gui.add_slider(
             "Velocity scale",
             min=0.0,
@@ -191,10 +200,6 @@ def main(cfg: Config) -> None:
             step=0.01,
             initial_value=cfg.vel_scale,
         )
-
-    @show_meshes_cb.on_update
-    def _on_meshes_update(_event) -> None:
-        vr.show_visual = bool(show_meshes_cb.value)
 
     # -------------------- Body COM positions ------------------
     # Visualize body COM positions as a small point cloud
@@ -222,6 +227,50 @@ def main(cfg: Config) -> None:
         colors=vel_colors,
         line_width=3.0,
     )
+
+    layer_controller = LayerController()
+    layer_controller.register(
+        LayerId.ROBOT_MESH,
+        available=True,
+        visible=cfg.show_meshes,
+        callback=lambda visible: setattr(vr, "show_visual", bool(visible)),
+    )
+    for layer_id, reason in (
+        (LayerId.OBJECT_MESH, "This converted input does not include an object visual."),
+        (LayerId.HUMAN_SKELETON, "Converted inputs do not contain a source-human skeleton."),
+        (LayerId.ROBOT_SKELETON, "Converted inputs do not contain mapped robot keypoints."),
+        (LayerId.HUMAN_HANDS, "Converted inputs do not contain source-human hands."),
+        (LayerId.OBJECT_KEYPOINTS, "Converted inputs do not contain retargeting object samples."),
+        (LayerId.INTERACTION_MESH, "Converted inputs do not contain saved interaction meshes."),
+        (LayerId.FOOT_STICKING, "Converted inputs do not contain saved retargeting foot states."),
+        (LayerId.SOURCE_ORIENTATION, "Converted inputs do not contain source-human frames."),
+        (LayerId.TARGET_ORIENTATION, "Converted inputs do not contain target frames."),
+        (LayerId.ROBOT_ORIENTATION, "Converted inputs do not contain saved orientation diagnostics."),
+        (LayerId.JOINT_LABELS, "Converted inputs do not contain source joint labels."),
+    ):
+        layer_controller.register(
+            layer_id,
+            available=False,
+            visible=False,
+            callback=lambda _visible: None,
+            unavailable_reason=reason,
+        )
+    layer_controller.register(
+        LayerId.BODY_COM,
+        available=True,
+        visible=cfg.show_body_com,
+        callback=lambda visible: setattr(body_points_handle, "visible", bool(visible)),
+    )
+    layer_controller.register(
+        LayerId.BODY_VELOCITY,
+        available=True,
+        visible=cfg.show_body_velocity,
+        callback=lambda visible: setattr(vel_lines, "visible", bool(visible)),
+    )
+    with tabs.layers:
+        layer_controller.add_gui(server.gui)
+    layer_controller.register_shortcuts(server)
+    server._holosoma_layer_controller = layer_controller
 
     # -------------------- Frame update ------------------------
     def update_frame(frame_idx: int) -> None:
@@ -275,7 +324,7 @@ def main(cfg: Config) -> None:
     last_time = time.time()
 
     print(
-        f"[viser_body_vel_player] Ready. Open the URL above to view. "
+        f"[viser_player:converted] Ready. Open the URL above to view. "
         f"{'Looping' if cfg.loop else 'One-shot'} playback at {fps:.2f} FPS."
     )
 
@@ -293,14 +342,3 @@ def main(cfg: Config) -> None:
             t_slider.value = next_idx  # triggers update_frame via callback
 
         time.sleep(0.002)
-
-
-if __name__ == "__main__":
-    cfg = tyro.cli(Config)
-    main(cfg)
-
-"""
-python viser_body_vel_player.py \
---npz_path ../converted_res/robot_only/sub3_largebox_003_mj.npz \
---robot_urdf ../models/g1/g1_29dof.urdf
-"""

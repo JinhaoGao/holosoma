@@ -1,3 +1,5 @@
+# ruff: noqa: CPY001
+
 """Parallel search for balanced Noetix E1 position/orientation weights."""
 
 from __future__ import annotations
@@ -19,13 +21,21 @@ from typing import Any
 import numpy as np
 import tyro
 
-from holosoma_retargeting.examples.robot_retarget import main as run_retargeting
 from holosoma_retargeting.examples.run_orientation_ablation import (
+    _FRAME_ALIGNED_NPZ_FIELDS,
+    _KNOWN_VECTOR_METADATA_FIELDS,
     DEFAULT_TASK_NAME,
     ORIENTATION_JOINTS,
     PACKAGE_ROOT,
+    _atomic_write_json,
+    _atomic_write_npz,
     _result_summary,
     _retargeting_config,
+)
+from holosoma_retargeting.retargeting_pipeline import (
+    RetargetVariant,
+    build_retarget_job,
+    run_retargeting_job,
 )
 
 ORIENTATION_GROUPS: dict[str, tuple[str, ...]] = {
@@ -40,6 +50,17 @@ ORIENTATION_GROUPS: dict[str, tuple[str, ...]] = {
 }
 
 _RUN_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+EXPERIMENT_NAME = "orientation_weight_search"
+WINDOW_INPUT_SCHEMA_VERSION = 2
+_WINDOW_METADATA_KEYS = frozenset(
+    {
+        "_window_source_sha256",
+        "_window_frame_start",
+        "_window_frame_count",
+        "_window_schema_version",
+        "_window_implementation_sha256",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -49,7 +70,7 @@ class Config:
 
     data_path: Path = PACKAGE_ROOT / "demo_data" / "noetix_mocap" / "0724_BEITI"
     task_name: str = DEFAULT_TASK_NAME
-    output_root: Path = PACKAGE_ROOT / "demo_results_orientation" / "orientation_weight_search"
+    output_root: Path = PACKAGE_ROOT / "demo_results" / "v1"
     frame_starts: tuple[int, ...] = (0, 900, 1800, 2450)
     frame_count: int = 120
     max_workers: int = 8
@@ -123,6 +144,61 @@ def _git_commit() -> str:
     return result.stdout.strip() if result.returncode == 0 else "unknown"
 
 
+def _window_payload(
+    payload: dict[str, np.ndarray],
+    *,
+    source_frames: int,
+    frame_start: int,
+    frame_end: int,
+) -> dict[str, np.ndarray]:
+    """Slice only explicitly classified frame-aligned fields."""
+
+    window: dict[str, np.ndarray] = {}
+    for key, value in payload.items():
+        if key in _FRAME_ALIGNED_NPZ_FIELDS:
+            if value.ndim == 0 or value.shape[0] != source_frames:
+                raise ValueError(
+                    f"Frame-aligned field {key!r} has shape {value.shape}; expected first dimension {source_frames}",
+                )
+            window[key] = value[frame_start:frame_end]
+        elif value.ndim > 0 and value.shape[0] == source_frames and key not in _KNOWN_VECTOR_METADATA_FIELDS:
+            raise ValueError(
+                f"Cannot safely create an orientation-search window: unknown "
+                f"frame-aligned field {key!r} must be classified explicitly",
+            )
+        else:
+            window[key] = value
+    return window
+
+
+def _cached_window_matches(
+    cached: np.lib.npyio.NpzFile,
+    *,
+    expected_payload: dict[str, np.ndarray],
+    source_hash: str,
+    frame_start: int,
+    frame_count: int,
+    implementation_hash: str,
+) -> bool:
+    """Verify cache identity and every preserved source/orientation byte."""
+
+    if set(cached.files) != set(expected_payload) | _WINDOW_METADATA_KEYS:
+        return False
+    try:
+        metadata_matches = (
+            str(np.asarray(cached["_window_source_sha256"]).item()) == source_hash
+            and int(np.asarray(cached["_window_frame_start"]).item()) == frame_start
+            and int(np.asarray(cached["_window_frame_count"]).item()) == frame_count
+            and int(np.asarray(cached["_window_schema_version"]).item()) == WINDOW_INPUT_SCHEMA_VERSION
+            and str(np.asarray(cached["_window_implementation_sha256"]).item()) == implementation_hash
+        )
+    except (KeyError, TypeError, ValueError):
+        return False
+    return metadata_matches and all(
+        np.array_equal(np.asarray(cached[key]), expected) for key, expected in expected_payload.items()
+    )
+
+
 def _prepare_window_inputs(
     *,
     source_path: Path,
@@ -136,24 +212,84 @@ def _prepare_window_inputs(
     if len(set(frame_starts)) != len(frame_starts):
         raise ValueError("frame_starts must be unique")
 
+    source_path = source_path.resolve(strict=True)
+    source_hash = _source_sha256(source_path)
+    implementation_hash = _source_sha256(Path(__file__).resolve())
     with np.load(source_path, allow_pickle=False) as data:
         source_frames = int(np.asarray(data["global_joint_positions"]).shape[0])
         payload = {key: np.asarray(data[key]) for key in data.files}
+    orientation_pair = {
+        "orientation_joint_names",
+        "orientation_quaternions_wxyz",
+    }
+    if orientation_pair.intersection(payload) and not orientation_pair.issubset(payload):
+        missing = sorted(orientation_pair.difference(payload))
+        raise ValueError(
+            f"Source input has incomplete direct orientation fields: {missing}",
+        )
+    if _source_sha256(source_path) != source_hash:
+        raise RuntimeError(f"Source input changed while preparing search windows: {source_path}")
 
     inputs: dict[int, Path] = {}
     for frame_start in frame_starts:
         frame_end = frame_start + frame_count
         if frame_start < 0 or frame_end > source_frames:
             raise ValueError(f"Invalid window [{frame_start}, {frame_end}) for source with {source_frames} frames")
-        window_dir = destination_root / f"window_{frame_start:06d}"
+        window_dir = (
+            destination_root
+            / f"source_{source_hash}"
+            / f"implementation_{implementation_hash}"
+            / f"frames_{frame_start:06d}_{frame_count:06d}"
+        )
         window_dir.mkdir(parents=True, exist_ok=True)
         window_path = window_dir / source_path.name
-        if overwrite or not window_path.is_file():
-            window_payload = {
-                key: (value[frame_start:frame_end] if value.ndim > 0 and value.shape[0] == source_frames else value)
-                for key, value in payload.items()
-            }
-            np.savez_compressed(window_path, **window_payload)
+        expected_payload = _window_payload(
+            payload,
+            source_frames=source_frames,
+            frame_start=frame_start,
+            frame_end=frame_end,
+        )
+        cache_matches = False
+        if window_path.is_file() and not overwrite:
+            try:
+                with np.load(window_path, allow_pickle=False) as cached:
+                    cache_matches = _cached_window_matches(
+                        cached,
+                        expected_payload=expected_payload,
+                        source_hash=source_hash,
+                        frame_start=frame_start,
+                        frame_count=frame_count,
+                        implementation_hash=implementation_hash,
+                    )
+            except (KeyError, OSError, TypeError, ValueError):
+                cache_matches = False
+        if not cache_matches:
+            window_payload = dict(expected_payload)
+            window_payload.update(
+                {
+                    "_window_source_sha256": np.asarray(source_hash),
+                    "_window_frame_start": np.asarray(frame_start, dtype=np.int64),
+                    "_window_frame_count": np.asarray(frame_count, dtype=np.int64),
+                    "_window_schema_version": np.asarray(
+                        WINDOW_INPUT_SCHEMA_VERSION,
+                        dtype=np.int64,
+                    ),
+                    "_window_implementation_sha256": np.asarray(implementation_hash),
+                }
+            )
+            _atomic_write_npz(window_path, window_payload)
+            with np.load(window_path, allow_pickle=False) as cached:
+                if not _cached_window_matches(
+                    cached,
+                    expected_payload=expected_payload,
+                    source_hash=source_hash,
+                    frame_start=frame_start,
+                    frame_count=frame_count,
+                    implementation_hash=implementation_hash,
+                ):
+                    raise ValueError(
+                        f"Failed to prepare an exact orientation-search window: {window_path}",
+                    )
         inputs[frame_start] = window_path
     return inputs
 
@@ -163,6 +299,7 @@ def _run_candidate_window(
     run_name: str,
     orientation_weights: dict[str, float],
     frame_start: int,
+    frame_count: int,
     input_path: Path,
     output_root: Path,
     task_name: str,
@@ -170,46 +307,45 @@ def _run_candidate_window(
     git_commit: str,
     overwrite: bool,
 ) -> dict[str, Any]:
-    output_dir = output_root / "runs" / run_name / f"window_{frame_start:06d}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    result_path = output_dir / f"{task_name}.npz"
-    manifest_path = output_dir / "manifest.json"
-    log_path = output_dir / "run.log"
-    manifest: dict[str, Any] = {
-        "run_name": run_name,
-        "frame_start": frame_start,
-        "orientation_weights": orientation_weights,
-        "input_path": str(input_path),
-        "source_sha256": source_hash,
-        "git_commit": git_commit,
-        "result_path": str(result_path),
-        "status": "running",
-    }
-    manifest_path.write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    if result_path.is_file() and not overwrite:
-        manifest["status"] = "reused"
-        manifest["elapsed_seconds"] = 0.0
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        return {
-            "run_name": run_name,
-            "frame_start": frame_start,
-            "result_path": str(result_path),
-            "summary": _result_summary(result_path, elapsed_seconds=0.0),
-        }
-
     retargeting_config = _retargeting_config(
         input_dir=input_path.parent,
-        output_dir=output_dir,
+        output_dir=output_root,
         task_name=task_name,
         orientation_weights=orientation_weights,
     )
+    job = build_retarget_job(
+        retargeting_config,
+        variant=RetargetVariant(name=run_name),
+        run_kind="ablation",
+        experiment_name=EXPERIMENT_NAME,
+        results_root=output_root,
+        dataset_partition="windowed",
+        sequence_key=(f"{task_name}/frames_{frame_start:06d}_{frame_count:06d}/source_{source_hash}"),
+        source_path=input_path,
+        overwrite_existing=overwrite,
+    )
+    result_path = job.output_path
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path = result_path.parent / "manifest.json"
+    log_path = result_path.parent / "run.log"
+    manifest: dict[str, Any] = {
+        "run_name": run_name,
+        "frame_start": frame_start,
+        "frame_count": frame_count,
+        "orientation_weights": orientation_weights,
+        "input_path": str(input_path),
+        "source_sha256": source_hash,
+        "artifact_source_sha256": job.source_sha256,
+        "git_commit": git_commit,
+        "run_kind": job.run_kind,
+        "experiment_name": job.experiment_name,
+        "config_sha256": job.config_sha256,
+        "canonical_baseline_path": str(job.baseline_path),
+        "result_path": str(result_path),
+        "status": "running",
+    }
+    _atomic_write_json(manifest_path, manifest)
+
     start_time = time.monotonic()
     try:
         with contextlib.ExitStack() as stack:
@@ -223,7 +359,7 @@ def _run_candidate_window(
             try:
                 for handler in stream_handlers:
                     handler.setStream(log_file)
-                run_retargeting(retargeting_config)
+                completed_job = run_retargeting_job(job)
             finally:
                 for handler, original_stream in zip(
                     stream_handlers,
@@ -232,16 +368,20 @@ def _run_candidate_window(
                 ):
                     handler.setStream(original_stream)
         elapsed_seconds = time.monotonic() - start_time
-        manifest["status"] = "completed"
-        manifest["elapsed_seconds"] = elapsed_seconds
+        result_path = completed_job.output_path
+        manifest["result_path"] = str(result_path)
+        manifest["status"] = "reused" if completed_job.resumed else "completed"
+        manifest["elapsed_seconds"] = 0.0 if completed_job.resumed else elapsed_seconds
         summary = _result_summary(
             result_path,
-            elapsed_seconds=elapsed_seconds,
+            elapsed_seconds=manifest["elapsed_seconds"],
         )
         return {
             "run_name": run_name,
             "frame_start": frame_start,
+            "frame_count": frame_count,
             "result_path": str(result_path),
+            "canonical_baseline_path": str(job.baseline_path),
             "summary": summary,
         }
     except Exception as exc:
@@ -249,10 +389,7 @@ def _run_candidate_window(
         manifest["error"] = f"{type(exc).__name__}: {exc}"
         raise
     finally:
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        _atomic_write_json(manifest_path, manifest)
 
 
 def _candidate_metrics(result_paths: list[Path]) -> dict[str, Any]:
@@ -408,10 +545,11 @@ def main(config: Config) -> None:
         raise FileNotFoundError(f"Input motion not found: {source_path}")
 
     candidates = _load_candidates(config.candidate_file)
-    config.output_root.mkdir(parents=True, exist_ok=True)
+    experiment_root = config.output_root / "ablations" / EXPERIMENT_NAME
+    experiment_root.mkdir(parents=True, exist_ok=True)
     window_inputs = _prepare_window_inputs(
         source_path=source_path,
-        destination_root=config.output_root / "_inputs",
+        destination_root=experiment_root / "_inputs",
         frame_starts=config.frame_starts,
         frame_count=config.frame_count,
         overwrite=config.overwrite,
@@ -434,6 +572,7 @@ def main(config: Config) -> None:
             "run_name": run_name,
             "orientation_weights": weights,
             "frame_start": frame_start,
+            "frame_count": config.frame_count,
             "input_path": input_path,
             "output_root": config.output_root,
             "task_name": config.task_name,
@@ -505,6 +644,8 @@ def main(config: Config) -> None:
         key=lambda name: scored_candidates[name]["score"],
     )
     payload = {
+        "experiment_name": EXPERIMENT_NAME,
+        "results_root": str(config.output_root),
         "task_name": config.task_name,
         "source_path": str(source_path),
         "source_sha256": source_hash,
@@ -524,13 +665,17 @@ def main(config: Config) -> None:
         "best_candidate": ranking[0],
         "pareto_front": pareto_front(metrics),
         "candidates": scored_candidates,
+        "records": {
+            run_name: sorted(
+                records,
+                key=lambda record: int(record["frame_start"]),
+            )
+            for run_name, records in task_records.items()
+        },
         "failures": failures,
     }
-    summary_path = config.output_root / "search_summary.json"
-    summary_path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    summary_path = experiment_root / "search_summary.json"
+    _atomic_write_json(summary_path, payload)
     print(
         f"[orientation-search] best={ranking[0]}, "
         f"score={scored_candidates[ranking[0]]['score']:.6f}, "

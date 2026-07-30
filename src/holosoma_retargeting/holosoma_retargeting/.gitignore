@@ -18,6 +18,10 @@ nightly_data/
 nightly_results/
 demo_results/
 demo_results_parallel/
+demo_results_ablation/
+demo_results_orientation/
+demo_results_foot_ablation/
+demo_results_validation/
 *.pyc
 demo_data/lafan/
 converted_res/

@@ -22,6 +22,7 @@ from holosoma_retargeting.config_types.data_type import MotionDataConfig  # noqa
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 from holosoma_retargeting.data_utils.object_assets import (  # noqa: E402
     create_omomo_object_scene,
+    default_generated_assets_root,
     get_omomo_object_asset,
 )
 from holosoma_retargeting.data_utils.omomo import (  # noqa: E402
@@ -55,6 +56,7 @@ def create_task_constants(
     motion_data_config: MotionDataConfig,
     *,
     object_name: str | None = None,
+    generated_assets_dir: str | Path | None = None,
 ) -> SimpleNamespace:
     """Create a mutable namespace with robot and motion data attributes."""
     namespace = SimpleNamespace()
@@ -70,6 +72,10 @@ def create_task_constants(
         namespace.OBJECT_NAME = object_name
 
     if namespace.OBJECT_NAME in OMOMO_OBJECT_NAMES:
+        if generated_assets_dir is None:
+            generated_assets_dir = (
+                default_generated_assets_root() / "downstream" / robot_config.robot_type / namespace.OBJECT_NAME
+            )
         object_asset = get_omomo_object_asset(namespace.OBJECT_NAME)
         robot_xml_path = Path(namespace.ROBOT_URDF_FILE).with_suffix(".xml")
         if not robot_xml_path.is_absolute():
@@ -83,6 +89,7 @@ def create_task_constants(
             create_omomo_object_scene(
                 robot_xml_path,
                 namespace.OBJECT_NAME,
+                output_dir=generated_assets_dir,
             )
         )
     elif namespace.OBJECT_NAME != "ground":
@@ -115,9 +122,7 @@ def resolve_conversion_object_name(
             explicit_object_name=explicit_object_name,
         )
     if has_dynamic_object and explicit_object_name is None:
-        raise ValueError(
-            "Dynamic-object conversion for non-OMOMO data requires an explicit object name"
-        )
+        raise ValueError("Dynamic-object conversion for non-OMOMO data requires an explicit object name")
     return explicit_object_name
 
 
@@ -444,11 +449,20 @@ def run_simulator(args_cli: DataConversionConfig):
         has_dynamic_object,
         args_cli.object_name,
     )
+    if args_cli.output_name is None:
+        raise ValueError("output_name cannot be None")
+    generated_assets_dir = (
+        Path(args_cli.output_name).expanduser().resolve().parent
+        / ".generated-assets"
+        / robot_config.robot_type
+        / (object_name or "ground")
+    )
 
     constants = create_task_constants(
         robot_config,
         motion_config,
         object_name=object_name,
+        generated_assets_dir=generated_assets_dir,
     )
 
     # Load Mujoco model
@@ -646,8 +660,6 @@ def run_simulator(args_cli: DataConversionConfig):
 
             log["body_names"] = body_names
 
-            if args_cli.output_name is None:
-                raise ValueError("output_name cannot be None")
             output_res_folder = Path(args_cli.output_name).parent
             os.makedirs(output_res_folder, exist_ok=True)
             np.savez(args_cli.output_name, **log)

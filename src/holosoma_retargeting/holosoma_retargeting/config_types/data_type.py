@@ -1,3 +1,5 @@
+# ruff: noqa: CPY001
+
 """Configuration types for motion data format."""
 
 from __future__ import annotations
@@ -374,6 +376,23 @@ JOINTS_MAPPINGS = {
 }
 
 ORIENTATION_JOINTS_MAPPINGS: dict[tuple[str, str], dict[str, str]] = {
+    ("noetix_mocap", "g1"): {
+        "Hips": "pelvis",
+        "LeftUpLeg": "left_hip_pitch_link",
+        "RightUpLeg": "right_hip_pitch_link",
+        "LeftLeg": "left_knee_link",
+        "RightLeg": "right_knee_link",
+        "LeftFoot": "left_ankle_roll_link",
+        "RightFoot": "right_ankle_roll_link",
+        "LeftToeBase": "left_ankle_roll_sphere_5_link",
+        "RightToeBase": "right_ankle_roll_sphere_5_link",
+        "LeftArm": "left_shoulder_yaw_link",
+        "RightArm": "right_shoulder_yaw_link",
+        "LeftForeArm": "left_elbow_link",
+        "RightForeArm": "right_elbow_link",
+        "LeftHand": "left_rubber_hand_link",
+        "RightHand": "right_rubber_hand_link",
+    },
     ("noetix_mocap", "e1"): {
         "Hips": "base_link",
         "LeftUpLeg": "l_leg_hip_pitch_link",
@@ -402,6 +421,10 @@ ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ: dict[
     tuple[str, str],
     dict[str, tuple[float, float, float, float]],
 ] = {
+    ("noetix_mocap", "g1"): dict.fromkeys(
+        ORIENTATION_JOINTS_MAPPINGS[("noetix_mocap", "g1")],
+        (1.0, 0.0, 0.0, 0.0),
+    ),
     ("noetix_mocap", "e1"): dict.fromkeys(
         ORIENTATION_JOINTS_MAPPINGS[("noetix_mocap", "e1")],
         (1.0, 0.0, 0.0, 0.0),
@@ -412,7 +435,13 @@ ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ: dict[
     tuple[str, str],
     tuple[float, float, float, float],
 ] = {
-    # Canonical Noetix T-pose faces +Y; E1 qpos0 faces +X.
+    # Canonical Noetix T-pose faces +Y; G1/E1 qpos0 face +X.
+    ("noetix_mocap", "g1"): (
+        0.7071067811865476,
+        0.0,
+        0.0,
+        0.7071067811865475,
+    ),
     ("noetix_mocap", "e1"): (
         0.7071067811865476,
         0.0,
@@ -425,6 +454,21 @@ ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS: dict[
     tuple[str, str],
     dict[str, float],
 ] = {
+    # G1's zero-pose arms are not a T-pose.  These symmetric shoulder/elbow
+    # values make both mapped segments (shoulder-roll -> elbow and elbow ->
+    # rubber-hand) exactly horizontal and collinear in the Noetix-facing frame.
+    # MuJoCo FK then supplies each mapped link's own fixed T-pose frame offset;
+    # the offsets are deliberately not shared or assumed to be identity.
+    ("noetix_mocap", "g1"): {
+        "left_shoulder_pitch_joint": 0.2006477150487628,
+        "left_shoulder_roll_joint": 1.476490678407796,
+        "left_shoulder_yaw_joint": 0.8742948427729365,
+        "left_elbow_joint": 1.414980653432781,
+        "right_shoulder_pitch_joint": 0.2006477150487628,
+        "right_shoulder_roll_joint": -1.476490678407796,
+        "right_shoulder_yaw_joint": -0.8742948427729365,
+        "right_elbow_joint": 1.414980653432781,
+    },
     ("noetix_mocap", "e1"): {
         "l_arm_shoulder_roll_joint": 1.5707963267948966,
         "r_arm_shoulder_roll_joint": -1.5707963267948966,
@@ -457,6 +501,139 @@ DEMO_JOINTS_REGISTRY: dict[str, list[str]] = {
     "mocap": MOCAP_DEMO_JOINTS,
     "amass": AMASS_DEMO_JOINTS,
     "gvhmr": GVHMR_DEMO_JOINTS,
+}
+
+APPROVED_DIRECT_ORIENTATION_SOURCES: dict[str, frozenset[str]] = {
+    "amass": frozenset({"direct_local_rotation_fk"}),
+    "gvhmr": frozenset({"direct_local_rotation_fk"}),
+    "lafan": frozenset({"bvh_rotation_channels_fk"}),
+    "mocap": frozenset({"bone_rotation_channels_fk"}),
+    "noetix_mocap": frozenset({"bvh_rotation_channels_fk"}),
+    "omomo": frozenset({"intermimic_global_orientation_tensor"}),
+}
+
+
+def _parent_indices(
+    joint_names: list[str],
+    parent_names: dict[str, str | None],
+) -> tuple[int, ...]:
+    """Resolve a named canonical skeleton into one stable parent-index order."""
+
+    if set(parent_names) != set(joint_names):
+        missing = sorted(set(joint_names).difference(parent_names))
+        extra = sorted(set(parent_names).difference(joint_names))
+        raise ValueError(
+            f"Canonical skeleton topology does not match its joint registry: missing={missing}, extra={extra}"
+        )
+    index = {name: joint_index for joint_index, name in enumerate(joint_names)}
+    return tuple(-1 if parent_names[name] is None else index[parent_names[name]] for name in joint_names)
+
+
+_LAFAN_PARENT_NAMES: dict[str, str | None] = {
+    "Hips": None,
+    "RightUpLeg": "Hips",
+    "RightLeg": "RightUpLeg",
+    "RightFoot": "RightLeg",
+    "RightToeBase": "RightFoot",
+    "LeftUpLeg": "Hips",
+    "LeftLeg": "LeftUpLeg",
+    "LeftFoot": "LeftLeg",
+    "LeftToeBase": "LeftFoot",
+    "Spine": "Hips",
+    "Spine1": "Spine",
+    "Spine2": "Spine1",
+    "Neck": "Spine2",
+    "Head": "Neck",
+    "RightShoulder": "Spine2",
+    "RightArm": "RightShoulder",
+    "RightForeArm": "RightArm",
+    "RightHand": "RightForeArm",
+    "LeftShoulder": "Spine2",
+    "LeftArm": "LeftShoulder",
+    "LeftForeArm": "LeftArm",
+    "LeftHand": "LeftForeArm",
+}
+
+_SMPLX_PARENT_NAMES: dict[str, str | None] = {
+    name: (None if parent_index == -1 else SMPLX_DEMO_JOINTS[parent_index])
+    for name, parent_index in zip(
+        SMPLX_DEMO_JOINTS,
+        (-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19),
+        strict=True,
+    )
+}
+
+_SMPLH_PARENT_NAMES: dict[str, str | None] = {
+    "Pelvis": None,
+    "L_Hip": "Pelvis",
+    "L_Knee": "L_Hip",
+    "L_Ankle": "L_Knee",
+    "L_Toe": "L_Ankle",
+    "R_Hip": "Pelvis",
+    "R_Knee": "R_Hip",
+    "R_Ankle": "R_Knee",
+    "R_Toe": "R_Ankle",
+    "Torso": "Pelvis",
+    "Spine": "Torso",
+    "Chest": "Spine",
+    "Neck": "Chest",
+    "Head": "Neck",
+    "L_Thorax": "Chest",
+    "L_Shoulder": "L_Thorax",
+    "L_Elbow": "L_Shoulder",
+    "L_Wrist": "L_Elbow",
+    "R_Thorax": "Chest",
+    "R_Shoulder": "R_Thorax",
+    "R_Elbow": "R_Shoulder",
+    "R_Wrist": "R_Elbow",
+}
+for _side in ("L", "R"):
+    for _finger in ("Index", "Middle", "Pinky", "Ring", "Thumb"):
+        _SMPLH_PARENT_NAMES[f"{_side}_{_finger}1"] = f"{_side}_Wrist"
+        _SMPLH_PARENT_NAMES[f"{_side}_{_finger}2"] = f"{_side}_{_finger}1"
+        _SMPLH_PARENT_NAMES[f"{_side}_{_finger}3"] = f"{_side}_{_finger}2"
+
+_MOCAP_PARENT_NAMES: dict[str, str | None] = {
+    "Hips": None,
+    "Spine": "Hips",
+    "Spine1": "Spine",
+    "Neck": "Spine1",
+    "Head": "Neck",
+    "LeftShoulder": "Spine1",
+    "LeftArm": "LeftShoulder",
+    "LeftForeArm": "LeftArm",
+    "LeftHand": "LeftForeArm",
+    "RightShoulder": "Spine1",
+    "RightArm": "RightShoulder",
+    "RightForeArm": "RightArm",
+    "RightHand": "RightForeArm",
+    "LeftUpLeg": "Hips",
+    "LeftLeg": "LeftUpLeg",
+    "LeftFoot": "LeftLeg",
+    "LeftToeBase": "LeftFoot",
+    "RightUpLeg": "Hips",
+    "RightLeg": "RightUpLeg",
+    "RightFoot": "RightLeg",
+    "RightToeBase": "RightFoot",
+    "LeftFootMod": "LeftToeBase",
+    "RightFootMod": "RightToeBase",
+}
+for _side in ("Left", "Right"):
+    for _finger in ("Thumb", "Index", "Middle", "Ring", "Pinky"):
+        _MOCAP_PARENT_NAMES[f"{_side}Hand{_finger}1"] = f"{_side}Hand"
+        _MOCAP_PARENT_NAMES[f"{_side}Hand{_finger}2"] = f"{_side}Hand{_finger}1"
+        _MOCAP_PARENT_NAMES[f"{_side}Hand{_finger}3"] = f"{_side}Hand{_finger}2"
+
+DEMO_JOINT_PARENT_INDICES: dict[str, tuple[int, ...]] = {
+    "lafan": _parent_indices(LAFAN_DEMO_JOINTS, _LAFAN_PARENT_NAMES),
+    "noetix_mocap": _parent_indices(
+        NOETIX_MOCAP_DEMO_JOINTS,
+        _LAFAN_PARENT_NAMES,
+    ),
+    "omomo": _parent_indices(OMOMO_DEMO_JOINTS, _SMPLH_PARENT_NAMES),
+    "mocap": _parent_indices(MOCAP_DEMO_JOINTS, _MOCAP_PARENT_NAMES),
+    "amass": _parent_indices(AMASS_DEMO_JOINTS, _SMPLX_PARENT_NAMES),
+    "gvhmr": _parent_indices(GVHMR_DEMO_JOINTS, _SMPLX_PARENT_NAMES),
 }
 
 DATA_FORMAT_ALIASES = {
@@ -495,6 +672,7 @@ class MotionDataConfig:
 
     # Optional overrides - if None, will use defaults from data_format
     demo_joints: list[str] | None = None
+    joint_parent_indices: tuple[int, ...] | None = None
     joints_mapping: dict[str, str] | None = None
     orientation_joints_mapping: dict[str, str] | None = None
     orientation_t_pose_human_quaternions_wxyz: (
@@ -514,6 +692,52 @@ class MotionDataConfig:
             return self.demo_joints
 
         return DEMO_JOINTS_REGISTRY[self.data_format]
+
+    @property
+    def resolved_joint_parent_indices(self) -> tuple[int, ...]:
+        """Return complete topology matching ``resolved_demo_joints``."""
+
+        if self.joint_parent_indices is not None:
+            parents = tuple(int(parent) for parent in self.joint_parent_indices)
+            if len(parents) != len(self.resolved_demo_joints):
+                raise ValueError("joint_parent_indices must have one entry per demo joint")
+            joint_count = len(parents)
+            if any(parent < -1 or parent >= joint_count for parent in parents):
+                raise ValueError(
+                    "joint_parent_indices must contain -1 or valid joint indices"
+                )
+            if any(parent == index for index, parent in enumerate(parents)):
+                raise ValueError(
+                    "joint_parent_indices must not contain self-parent joints"
+                )
+            roots = tuple(
+                index
+                for index, parent in enumerate(parents)
+                if parent == -1
+            )
+            if len(roots) != 1:
+                raise ValueError(
+                    "joint_parent_indices must describe exactly one rooted tree"
+                )
+            root = roots[0]
+            for start in range(joint_count):
+                current = start
+                visited: set[int] = set()
+                while current != -1:
+                    if current in visited:
+                        raise ValueError(
+                            "joint_parent_indices must not contain cycles"
+                        )
+                    visited.add(current)
+                    current = parents[current]
+                if root not in visited:
+                    raise ValueError(
+                        "every joint_parent_indices entry must connect to the root"
+                    )
+            return parents
+        if self.demo_joints is not None and self.demo_joints != DEMO_JOINTS_REGISTRY[self.data_format]:
+            raise ValueError("Custom demo_joints require explicit joint_parent_indices")
+        return DEMO_JOINT_PARENT_INDICES[self.data_format]
 
     @property
     def resolved_joints_mapping(self) -> dict[str, str]:
@@ -587,6 +811,7 @@ class MotionDataConfig:
         """Return uppercase legacy constants for backward compatibility."""
         return {
             "DEMO_JOINTS": self.resolved_demo_joints,
+            "DEMO_JOINT_PARENT_INDICES": self.resolved_joint_parent_indices,
             "JOINTS_MAPPING": self.resolved_joints_mapping,
             "ORIENTATION_JOINTS_MAPPING": self.resolved_orientation_joints_mapping,
             "ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ": (self.resolved_orientation_t_pose_human_quaternions_wxyz),

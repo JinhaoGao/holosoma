@@ -14,8 +14,14 @@ class ViserConfig:
     Uses a flat structure with default values.
     """
 
-    qpos_npz: str = "rt_results/OMOMO_new/box_parallel/sub8_largebox_051_original.npz"
-    """Path to .npz file with qpos data."""
+    qpos_npz: str | None = None
+    """Legacy result path. Prefer ``input_path`` for new commands."""
+
+    input_path: str | None = None
+    """Canonical motion input path for result, raw-human, or converted data."""
+
+    input_kind: Literal["auto", "result", "raw", "converted"] = "auto"
+    """Input adapter. Auto inspects the path and NPZ fields."""
 
     robot_urdf: str | None = None
     """Robot URDF. If unset, resolved from metadata saved in the result NPZ."""
@@ -25,10 +31,40 @@ class ViserConfig:
     If unset, the viewer tries the sibling .xml next to robot_urdf."""
 
     robot_type: str | None = None
-    """Robot type used to resolve mapped skeleton links. If unset, inferred from robot_urdf parent directory."""
+    """Robot type used to resolve robot assets for legacy results."""
 
     data_format: str | None = None
-    """Motion data format used to resolve mapped skeleton joints."""
+    """Motion data format used for raw inputs or legacy result recovery."""
+
+    task_type: Literal["auto", "robot_only", "object_interaction", "climbing"] = "auto"
+    """Task context used by raw-human inputs."""
+
+    sequence: str | None = None
+    """Sequence stem when a raw motion input is a dataset directory."""
+
+    human_height: float | None = None
+    """Raw-human height override for source datasets without metadata."""
+
+    source_mesh: str | None = None
+    """Optional raw-human object or terrain mesh override."""
+
+    object_name: str | None = None
+    """Optional raw-human object category override."""
+
+    port: int = 8080
+    """Viser web-server port for raw-human inputs."""
+
+    start_frame: int = 0
+    """Initial frame for raw-human inputs."""
+
+    playing: bool = True
+    """Start raw-human or converted playback immediately."""
+
+    velocity_scale: float = 0.1
+    """Length scale for converted rigid-body velocity vectors."""
+
+    dry_run: bool = False
+    """Validate and summarize a raw-human input without starting Viser."""
 
     object_urdf: str | None = None
     """Path to object URDF file (optional)."""
@@ -61,13 +97,58 @@ class ViserConfig:
     """Opacity for object mesh. If unset, uses mesh_opacity."""
 
     show_mapped_skeletons: bool = False
-    """Whether to show saved human mapped skeleton and retargeted robot mapped skeleton."""
+    """Backward-compatible default for both human and robot mapped skeletons."""
+
+    show_human_skeleton: bool | None = None
+    """Whether to show the complete saved source-human skeleton."""
+
+    show_robot_skeleton: bool | None = None
+    """Whether to show the complete saved retargeted robot link skeleton."""
+
+    show_human_hands: bool | None = None
+    """Whether to show visual-only source-human finger details."""
 
     show_object_keypoints: bool = False
     """Whether to show saved demo/target object keypoints."""
 
     show_interaction_mesh: bool = False
     """Whether to show saved source/target interaction mesh overlays."""
+
+    show_foot_sticking: bool = True
+    """Whether to show the saved per-frame foot-sticking status panel."""
+
+    show_source_orientation_axes: bool = False
+    """Whether to show raw source-human global joint frames when available."""
+
+    show_target_orientation_axes: bool = False
+    """Whether to show saved target orientation frames when available."""
+
+    show_robot_orientation_axes: bool = False
+    """Whether to show saved robot orientation frames when available."""
+
+    orientation_joints: tuple[str, ...] = ()
+    """Human joint names whose target and robot orientation frames are shown."""
+
+    orientation_axis_length: float = 0.065
+    """Length of each orientation axis in scene units."""
+
+    orientation_axis_shaft_radius: float = 0.005
+    """Radius of each solid orientation arrow shaft."""
+
+    orientation_axis_head_radius: float = 0.01
+    """Radius of each solid orientation arrow head."""
+
+    orientation_axis_head_length: float = 0.015
+    """Length of each solid orientation arrow head."""
+
+    show_joint_labels: bool = False
+    """Whether to show source joint names when a complete source skeleton is available."""
+
+    show_body_com: bool = True
+    """Whether to show saved rigid-body center positions in converted motion inputs."""
+
+    show_body_velocity: bool = True
+    """Whether to show saved rigid-body velocity vectors in converted motion inputs."""
 
     interaction_mesh_mode: Literal["source", "target", "both"] = "both"
     """Which saved interaction mesh to show: source human-object, target robot-object, or both."""

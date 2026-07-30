@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import re
 import shutil
 import sys
 from collections import defaultdict
@@ -15,12 +16,23 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 src_root = Path(__file__).resolve().parents[2]
 if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
 from holosoma_retargeting.config_types.data_type import MOCAP_DEMO_JOINTS  # noqa: E402
+
+
+Y_UP_TO_SCENE_BASIS = np.asarray(
+    [
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0],
+        [0.0, 1.0, 0.0],
+    ],
+    dtype=np.float64,
+)
 
 
 NOETIX_BONE_PARENTS: dict[str, str | None] = {
@@ -153,6 +165,7 @@ class Config:
     target_fps: float | None = None
     scene_template_dir: Path | None = None
     asset_scale: float = 1.32 / 1.70
+    human_height: float | None = None
 
 
 def _strip_skeleton_prefix(name: str) -> str:
@@ -167,11 +180,7 @@ def _entity_sort_key(entity: tuple[str, str]) -> tuple[int, str, str]:
 
 
 def _metadata_from_row(row: list[str]) -> dict[str, str]:
-    return {
-        row[i].strip(): row[i + 1].strip()
-        for i in range(0, len(row) - 1, 2)
-        if row[i].strip()
-    }
+    return {row[i].strip(): row[i + 1].strip() for i in range(0, len(row) - 1, 2) if row[i].strip()}
 
 
 def _build_column_index(rows: list[list[str]]) -> ColumnIndex:
@@ -212,7 +221,9 @@ def _read_float(row: list[str], col: int, required: bool = True) -> float:
 def _quat_normalize(q: np.ndarray) -> np.ndarray:
     q = np.asarray(q, dtype=np.float64)
     norm = np.linalg.norm(q, axis=-1, keepdims=True)
-    return np.where(norm > 1e-12, q / norm, np.array([1.0, 0.0, 0.0, 0.0]))
+    if not np.isfinite(q).all() or np.any(norm <= 1e-12):
+        raise ValueError("Noetix Bone Rotation quaternions must be finite and non-zero")
+    return q / norm
 
 
 def _quat_multiply(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -311,9 +322,8 @@ def _forward_kinematics(
                 continue
 
             parent_rot = global_rotations[frame_idx, parent_idx]
-            global_positions[frame_idx, joint_idx] = (
-                global_positions[frame_idx, parent_idx]
-                + _quat_rotate(parent_rot, local_offsets[frame_idx, joint_idx])
+            global_positions[frame_idx, joint_idx] = global_positions[frame_idx, parent_idx] + _quat_rotate(
+                parent_rot, local_offsets[frame_idx, joint_idx]
             )
             global_rotations[frame_idx, joint_idx] = _quat_normalize(_quat_multiply(parent_rot, local_rot))
 
@@ -321,10 +331,41 @@ def _forward_kinematics(
 
 
 def _y_up_m_to_scene_axes(points: np.ndarray) -> np.ndarray:
-    points = np.asarray(points, dtype=np.float64)
-    converted = points[..., [0, 2, 1]].copy()
-    converted[..., 1] *= -1.0
-    return converted
+    return np.einsum(
+        "ab,...b->...a",
+        Y_UP_TO_SCENE_BASIS,
+        np.asarray(points, dtype=np.float64),
+    )
+
+
+def _enforce_quaternion_continuity_wxyz(
+    quaternions_wxyz: np.ndarray,
+) -> np.ndarray:
+    result = _quat_normalize(quaternions_wxyz).copy()
+    for frame_index in range(1, result.shape[0]):
+        flip = np.sum(result[frame_index - 1] * result[frame_index], axis=-1) < 0.0
+        result[frame_index, flip] *= -1.0
+    return result
+
+
+def transform_global_rotations_y_up_to_scene_wxyz(
+    quaternions_wxyz: np.ndarray,
+) -> np.ndarray:
+    """Apply the same right-handed basis change used by CSV positions."""
+    quaternions_wxyz = np.asarray(quaternions_wxyz, dtype=np.float64)
+    if quaternions_wxyz.ndim != 3 or quaternions_wxyz.shape[-1] != 4:
+        raise ValueError(f"Noetix global rotations must have shape (T, J, 4), got {quaternions_wxyz.shape}")
+    flat = _quat_normalize(quaternions_wxyz).reshape(-1, 4)
+    matrices_y_up = Rotation.from_quat(flat[:, [1, 2, 3, 0]]).as_matrix()
+    matrices_scene = np.einsum(
+        "ab,nbc,cd->nad",
+        Y_UP_TO_SCENE_BASIS,
+        matrices_y_up,
+        Y_UP_TO_SCENE_BASIS.T,
+    )
+    xyzw = Rotation.from_matrix(matrices_scene).as_quat()
+    wxyz = xyzw[:, [3, 0, 1, 2]].reshape(quaternions_wxyz.shape)
+    return _enforce_quaternion_continuity_wxyz(wxyz)
 
 
 def _read_positions(
@@ -477,6 +518,7 @@ def load_noetix_csv(csv_path: Path) -> NoetixCsvMotion:
         parent_indices,
     )
     bone_positions_scene_axes = _y_up_m_to_scene_axes(bone_positions_y_up)
+    bone_rotations_scene_wxyz = transform_global_rotations_y_up_to_scene_wxyz(bone_rotations_wxyz)
 
     skeleton_marker_names, skeleton_markers_scene_axes = _read_positions(rows, col_index, "SkeletonMarker")
     box_marker_names, box_markers_scene_axes = _read_positions(rows, col_index, "RigidBodyMarker")
@@ -507,7 +549,7 @@ def load_noetix_csv(csv_path: Path) -> NoetixCsvMotion:
         bone_names=bone_names,
         parent_indices=parent_indices,
         bone_positions_z_up_m=bone_positions_z_up_m,
-        bone_rotations_wxyz=bone_rotations_wxyz,
+        bone_rotations_wxyz=bone_rotations_scene_wxyz,
         skeleton_marker_names=skeleton_marker_names,
         skeleton_marker_positions_z_up_m=skeleton_markers_z_up_m,
         box_marker_names=box_marker_names,
@@ -541,6 +583,35 @@ def map_to_mocap_joints(motion: NoetixCsvMotion) -> np.ndarray:
     return motion.bone_positions_z_up_m[:, indices, :].astype(np.float32)
 
 
+def map_to_mocap_orientations(motion: NoetixCsvMotion) -> np.ndarray:
+    """Select direct global Bone Rotation frames in canonical mocap order."""
+    bone_idx = {name: idx for idx, name in enumerate(motion.bone_names)}
+    missing = [
+        source_name
+        for canonical_name in MOCAP_DEMO_JOINTS
+        for source_name in [MOCAP_SOURCE_BONES[canonical_name]]
+        if source_name not in bone_idx
+    ]
+    if missing:
+        raise ValueError(f"Missing source bones for mocap orientations: {missing}")
+    indices = [bone_idx[MOCAP_SOURCE_BONES[name]] for name in MOCAP_DEMO_JOINTS]
+    return motion.bone_rotations_wxyz[:, indices, :].astype(np.float32)
+
+
+def mocap_parent_indices() -> np.ndarray:
+    """Map the source hierarchy to the nearest canonical mocap ancestor."""
+    source_to_canonical = {source_name: canonical_name for canonical_name, source_name in MOCAP_SOURCE_BONES.items()}
+    canonical_index = {name: index for index, name in enumerate(MOCAP_DEMO_JOINTS)}
+    parents: list[int] = []
+    for canonical_name in MOCAP_DEMO_JOINTS:
+        source_name = MOCAP_SOURCE_BONES[canonical_name]
+        parent_name = NOETIX_BONE_PARENTS[source_name]
+        while parent_name is not None and parent_name not in source_to_canonical:
+            parent_name = NOETIX_BONE_PARENTS[parent_name]
+        parents.append(-1 if parent_name is None else canonical_index[source_to_canonical[parent_name]])
+    return np.asarray(parents, dtype=np.int32)
+
+
 def _box_vertices_from_markers(
     box_marker_positions: np.ndarray,
     box_position: np.ndarray | None,
@@ -552,7 +623,11 @@ def _box_vertices_from_markers(
     top = box_marker_positions[int(valid_frames[0])]
     min_x, min_y = np.nanmin(top[:, :2], axis=0)
     max_x, max_y = np.nanmax(top[:, :2], axis=0)
-    if box_position is not None and len(box_position) > int(valid_frames[0]) and not np.isnan(box_position[int(valid_frames[0]), 2]):
+    if (
+        box_position is not None
+        and len(box_position) > int(valid_frames[0])
+        and not np.isnan(box_position[int(valid_frames[0]), 2])
+    ):
         top_z = float(box_position[int(valid_frames[0]), 2])
     else:
         top_z = float(np.nanmax(top[:, 2]))
@@ -604,7 +679,9 @@ def _write_obj(
     bbox_max = vertices.max(axis=0)
     with path.open("w", encoding="utf-8") as f:
         f.write(f"# Reconstructed from {source_csv.name} frame 1 box markers.\n")
-        f.write("# Scene-local frame: Noetix Y-up mm -> MuJoCo Z-up m with right-handed [x, -z, y], then subtract box XY center.\n")
+        f.write(
+            "# Scene-local frame: Noetix Y-up mm -> MuJoCo Z-up m with right-handed [x, -z, y], then subtract box XY center.\n"
+        )
         f.write(f"# scene_origin_xy_m {origin_xy[0]:.9f} {origin_xy[1]:.9f}\n")
         f.write(f"# box_min_m {bbox_min[0]:.9f} {bbox_min[1]:.9f} {bbox_min[2]:.9f}\n")
         f.write(f"# box_max_m {bbox_max[0]:.9f} {bbox_max[1]:.9f} {bbox_max[2]:.9f}\n")
@@ -621,7 +698,9 @@ def _write_single_platform_mesh(
     source_csv: Path,
 ) -> tuple[np.ndarray, np.ndarray]:
     vertices, faces = _box_vertices_from_markers(motion.box_marker_positions_z_up_m, motion.box_position_z_up_m)
-    _write_obj(output_dir / "multi_boxes.obj", vertices, faces, source_csv=source_csv, origin_xy=motion.scene_origin_xy_m)
+    _write_obj(
+        output_dir / "multi_boxes.obj", vertices, faces, source_csv=source_csv, origin_xy=motion.scene_origin_xy_m
+    )
     _write_obj(
         output_dir / "box_models" / "box1.obj",
         vertices,
@@ -734,13 +813,59 @@ def export_mocap_climb(
     scene_template_dir: Path | None,
     asset_scale: float,
     source_csv: Path,
+    human_height: float | None = None,
 ) -> Path:
     seq_dir = output_root / task_name
     seq_dir.mkdir(parents=True, exist_ok=True)
 
-    mocap_positions, stride, output_fps = _downsample(map_to_mocap_joints(motion), motion.fps, target_fps)
+    mocap_positions, stride, output_fps = _downsample(
+        map_to_mocap_joints(motion),
+        motion.fps,
+        target_fps,
+    )
+    mocap_orientations = map_to_mocap_orientations(motion)[::stride]
+    if mocap_orientations.shape[:2] != mocap_positions.shape[:2]:
+        raise RuntimeError("Noetix CSV position and orientation frame/joint counts diverged")
+    if human_height is None:
+        actor_match = next(
+            (
+                re.fullmatch(r"actor_(\d{3})", part)
+                for part in reversed(source_csv.parts)
+                if re.fullmatch(r"actor_(\d{3})", part) is not None
+            ),
+            None,
+        )
+        human_height = (
+            float(actor_match.group(1)) / 100.0
+            if actor_match is not None
+            else 1.78
+        )
+    if not np.isfinite(human_height) or human_height <= 0.0:
+        raise ValueError(
+            f"Noetix CSV human height must be positive and finite, got {human_height}"
+        )
     npy_path = seq_dir / f"{task_name}_joint_positions.npy"
     np.save(npy_path, mocap_positions.astype(np.float32))
+    npz_path = seq_dir / f"{task_name}.npz"
+    np.savez_compressed(
+        npz_path,
+        global_joint_positions=mocap_positions.astype(np.float32),
+        joint_names=np.asarray(MOCAP_DEMO_JOINTS, dtype=str),
+        joint_parents=mocap_parent_indices(),
+        orientation_joint_names=np.asarray(MOCAP_DEMO_JOINTS, dtype=str),
+        orientation_quaternions_wxyz=mocap_orientations.astype(np.float32),
+        height=np.float32(human_height),
+        fps=np.float32(output_fps),
+        source_fps=np.float32(motion.fps),
+        downsample_stride=np.int32(stride),
+        source_csv=np.asarray(str(source_csv)),
+        source_format=np.asarray("noetix_csv_mocap"),
+        coordinate_system=np.asarray("z_up"),
+        quaternion_convention=np.asarray("wxyz"),
+        orientation_provenance=np.asarray("direct_source_bones"),
+        orientation_source=np.asarray("bone_rotation_channels_fk"),
+        orientation_coordinate_transform=np.asarray("basis_conjugation_x_negz_y"),
+    )
 
     box_vertices, box_faces = _write_single_platform_mesh(seq_dir, motion, source_csv)
     _write_single_box_urdf(seq_dir, asset_scale)
@@ -762,6 +887,8 @@ def export_mocap_climb(
         seq_dir / "scene_reconstruction.npz",
         mocap_joint_positions=mocap_positions.astype(np.float32),
         mocap_joint_names=np.asarray(MOCAP_DEMO_JOINTS, dtype=str),
+        mocap_joint_parents=mocap_parent_indices(),
+        mocap_joint_quaternions_wxyz=mocap_orientations.astype(np.float32),
         bone_positions=motion.bone_positions_z_up_m.astype(np.float32),
         bone_names=np.asarray(motion.bone_names, dtype=str),
         skeleton_marker_positions=motion.skeleton_marker_positions_z_up_m.astype(np.float32),
@@ -781,7 +908,8 @@ def export_mocap_climb(
 
     print(
         f"[convert_noetix_csv] mocap climb: frames={mocap_positions.shape[0]}, "
-        f"fps={output_fps:.2f}, joints={mocap_positions.shape[1]} -> {npy_path}"
+        f"fps={output_fps:.2f}, joints={mocap_positions.shape[1]} -> "
+        f"{npy_path}, {npz_path}"
     )
     return seq_dir
 
@@ -817,6 +945,12 @@ def parse_args() -> Config:
         default=1.32 / 1.70,
         help="Initial box mesh scale written into XML/URDF. Retargeting rewrites it per robot height.",
     )
+    parser.add_argument(
+        "--human-height",
+        type=float,
+        default=None,
+        help="Subject height in meters. Defaults to an actor_NNN parent directory or 1.78 m.",
+    )
     args = parser.parse_args()
     return Config(
         csv_path=args.csv_path,
@@ -826,6 +960,7 @@ def parse_args() -> Config:
         target_fps=args.target_fps,
         scene_template_dir=args.scene_template_dir,
         asset_scale=args.asset_scale,
+        human_height=args.human_height,
     )
 
 
@@ -852,6 +987,7 @@ def main(cfg: Config) -> None:
         scene_template_dir=cfg.scene_template_dir,
         asset_scale=cfg.asset_scale,
         source_csv=csv_path,
+        human_height=cfg.human_height,
     )
 
     for stale_dir in ("generated", "__pycache__"):

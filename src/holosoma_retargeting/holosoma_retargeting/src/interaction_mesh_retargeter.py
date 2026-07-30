@@ -1,8 +1,13 @@
+# ruff: noqa: CPY001, PLR0917
+
 from __future__ import annotations
 
+import json
 import sys
 import time
+from collections.abc import Callable, Mapping
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
@@ -19,6 +24,14 @@ from viser.extras import ViserUrdf  # type: ignore[import-not-found]
 
 from holosoma_retargeting.config_types.retargeter import FootLockConfig, SelfCollisionConfig
 from holosoma_retargeting.data_utils.hand_skeleton import build_hand_visualization_spec
+from holosoma_retargeting.result_artifact import (
+    FRAME_ZERO_GROUND_RETRY_POLICY,
+    RESULT_SCHEMA_VERSION,
+    build_object_asset_manifest,
+    collision_interior_margin_m,
+    compute_human_orientation_sha256,
+    write_result_artifact,
+)
 
 # Add src to path for direct execution
 src_path = Path(__file__).parent.parent / "src"
@@ -41,8 +54,179 @@ from viser_utils import (  # type: ignore[import-not-found,no-redef]  # noqa: E4
     actuated_joint_names_from_mujoco_xml,
     build_joint_order_indices,
     create_motion_control_sliders,
+    format_foot_sticking_status,
     register_keyboard_shortcut,
 )
+
+NONLINEAR_FEASIBILITY_ATOL = 1e-6
+NONLINEAR_BACKTRACK_BISECTION_ITERATIONS = 20
+
+
+@dataclass(frozen=True)
+class ConstraintMode:
+    """The exact hard-constraint mode used to produce one SQP candidate."""
+
+    foot_sticking: str
+    object_non_penetration_released: bool = False
+    trust_region_released: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.foot_sticking, str) or self.foot_sticking not in {
+            "inactive",
+            "normal",
+            "relaxed",
+            "released",
+        }:
+            raise ValueError(f"Unknown foot-sticking constraint mode: {self.foot_sticking}")
+        for field_name in (
+            "object_non_penetration_released",
+            "trust_region_released",
+        ):
+            value = getattr(self, field_name)
+            if not isinstance(value, (bool, np.bool_)):
+                raise TypeError(f"{field_name} must be boolean, got {type(value).__name__}")
+
+
+@dataclass(frozen=True)
+class NonlinearConstraintResiduals:
+    """True-geometry hard-constraint violations for one candidate."""
+
+    ground_non_penetration: float
+    object_non_penetration: float
+    foot_sticking: float
+    foot_lock: float
+    self_collision: float
+    joint_limits: float
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "ground_non_penetration",
+            "object_non_penetration",
+            "foot_sticking",
+            "foot_lock",
+            "self_collision",
+            "joint_limits",
+        ):
+            value = float(getattr(self, field_name))
+            if not np.isfinite(value) or value < 0:
+                raise ValueError(
+                    f"{field_name} must be finite and non-negative, got {value}",
+                )
+
+    def hard_max_violation(self, mode: ConstraintMode) -> float:
+        """Return the maximum violation among constraints active in ``mode``."""
+
+        values = [
+            self.ground_non_penetration,
+            self.foot_lock,
+            self.self_collision,
+            self.joint_limits,
+        ]
+        if not mode.object_non_penetration_released:
+            values.append(self.object_non_penetration)
+        if mode.foot_sticking not in {"inactive", "released"}:
+            values.append(self.foot_sticking)
+        return float(max(values, default=0.0))
+
+    def is_feasible(
+        self,
+        mode: ConstraintMode,
+        *,
+        atol: float = NONLINEAR_FEASIBILITY_ATOL,
+    ) -> bool:
+        return self.hard_max_violation(mode) <= atol
+
+
+@dataclass(frozen=True)
+class SQPIterationResult:
+    """One linearized solve and its nonlinear acceptance diagnostics."""
+
+    q: np.ndarray
+    linearized_cost: float
+    constraint_mode: ConstraintMode
+    residuals: NonlinearConstraintResiduals
+
+    def __iter__(self):
+        """Preserve the historical ``q, cost = solve_single_iteration(...)`` API."""
+
+        yield self.q
+        yield self.linearized_cost
+
+
+@dataclass(frozen=True)
+class FrameZeroGroundRetryState:
+    """One top-level motion call's single, auditable ground-retry state."""
+
+    eligible: bool
+    attempted: bool = False
+    triggered: bool = False
+    initial_min_distance_m: float = 0.0
+    corrected_min_distance_m: float = 0.0
+    lift_m: float = 0.0
+    interior_margin_m: float = 0.0
+    initial_sqp_iterations: int = 0
+    corrected_q: np.ndarray | None = None
+
+
+class SQPNonlinearFeasibilityError(RuntimeError):
+    """A full mode schedule failed, with structured foot-causality evidence."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        foot_related_failure: bool,
+        frame_idx: int | None = None,
+        total_iterations: int | None = None,
+        closest_residuals: NonlinearConstraintResiduals | None = None,
+        closest_constraint_mode: ConstraintMode | None = None,
+        minimum_hard_constraint_violation: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.foot_related_failure = bool(foot_related_failure)
+        self.frame_idx = frame_idx
+        self.total_iterations = total_iterations
+        self.closest_residuals = closest_residuals
+        self.closest_constraint_mode = closest_constraint_mode
+        self.minimum_hard_constraint_violation = minimum_hard_constraint_violation
+
+    def __reduce__(self):
+        """Serialize every structured diagnostic across spawned worker pools."""
+
+        return (
+            _reconstruct_sqp_nonlinear_feasibility_error,
+            (
+                str(self),
+                self.foot_related_failure,
+                self.frame_idx,
+                self.total_iterations,
+                self.closest_residuals,
+                self.closest_constraint_mode,
+                self.minimum_hard_constraint_violation,
+            ),
+        )
+
+
+def _reconstruct_sqp_nonlinear_feasibility_error(
+    message: str,
+    foot_related_failure: bool,
+    frame_idx: int | None,
+    total_iterations: int | None,
+    closest_residuals: NonlinearConstraintResiduals | None,
+    closest_constraint_mode: ConstraintMode | None,
+    minimum_hard_constraint_violation: float | None,
+) -> SQPNonlinearFeasibilityError:
+    """Rebuild a structured feasibility error after multiprocessing transport."""
+
+    return SQPNonlinearFeasibilityError(
+        message,
+        foot_related_failure=foot_related_failure,
+        frame_idx=frame_idx,
+        total_iterations=total_iterations,
+        closest_residuals=closest_residuals,
+        closest_constraint_mode=closest_constraint_mode,
+        minimum_hard_constraint_violation=minimum_hard_constraint_violation,
+    )
 
 
 class InteractionMeshRetargeter:
@@ -67,18 +251,17 @@ class InteractionMeshRetargeter:
         release_foot_sticking_on_infeasible: bool = True,
         release_object_non_penetration_on_infeasible: bool = False,
         retry_without_foot_sticking_on_infeasible: bool = True,
+        retry_frame_zero_ground_on_infeasible: bool = True,
         foot_lock: FootLockConfig | None = None,
         self_collision: SelfCollisionConfig | None = None,
         sqp_max_iterations: int = 50,
         sqp_min_iterations: int = 4,
         sqp_convergence_patience: int = 3,
-        sqp_abs_cost_tolerance: float = 1e-9,
-        sqp_rel_cost_tolerance: float = 1e-7,
         visualize: bool = False,
         mesh_opacity: float = 1.0,
         debug: bool = False,
         show_interaction_mesh: bool = False,
-        save_interaction_mesh: bool = False,
+        save_interaction_mesh: bool = True,
         interaction_mesh_mode: str = "both",
         interaction_mesh_edges: str = "cross",
         interaction_mesh_line_width: float = 1.0,
@@ -116,9 +299,12 @@ class InteractionMeshRetargeter:
         The constraints are linearized and the costs are quadratic with a trust region.
 
         Args:
-            q_a_init_idx: the index in robot's configuration where the optimization variables start. -7: starts from the
-            floating base, -3: starts from the translation of the floating base, 0: starts from the actuated DOF,
-            12: starts from waist, 15: starts from left shoulder
+            q_a_init_idx: offset used to select the first optimized qpos
+                address as ``7 + q_a_init_idx``. For example, -7 starts at
+                qpos[0] (the full floating base), -3 starts at qpos[4] (the
+                final three floating-base quaternion components), and 0 starts
+                at qpos[7] (the actuated DOFs). Positive offsets select later
+                actuated joints according to the configured robot topology.
             step_size: trust region for each SQP iteration.
             collision_detection_threshold: only start to detect collision
             when the distance is smaller than this threshold.
@@ -134,31 +320,51 @@ class InteractionMeshRetargeter:
                 remain enabled.
             retry_without_foot_sticking_on_infeasible: retry the full sequence
                 without foot sticking if a local release remains infeasible.
+            retry_frame_zero_ground_on_infeasible: permit one fail-closed,
+                robot-only frame-zero retry that lifts only an optimized root Z
+                coordinate after a pure horizontal-ground feasibility failure.
             foot_lock: configuration for explicit frame-range based foot locking constraints.
             sqp_max_iterations: safety cap for SQP iterations per frame.
             sqp_min_iterations: minimum iterations before convergence-based stopping.
-            sqp_convergence_patience: consecutive non-improving iterations required
-                before stopping.
-            sqp_abs_cost_tolerance: absolute significant-improvement threshold.
-            sqp_rel_cost_tolerance: relative significant-improvement threshold.
+            sqp_convergence_patience: consecutive stable feasible iterations
+                required before stopping.
             nominal_tracking_tau: the time constant for the nominal tracking cost.
         """
 
         self.robot_model_path = task_constants.ROBOT_URDF_FILE
-        self.object_model_path = object_urdf_path
+        if object_urdf_path:
+            object_path = Path(object_urdf_path).expanduser()
+            if not object_path.is_absolute():
+                object_path = Path.cwd() / object_path
+            (
+                self.object_asset_manifest_json,
+                self.object_asset_manifest_sha256,
+            ) = build_object_asset_manifest(object_path)
+            manifest = json.loads(self.object_asset_manifest_json)
+            self.object_model_path = str(manifest["urdf"]["path"])
+            self.object_urdf_sha256 = str(manifest["urdf"]["sha256"])
+        else:
+            self.object_model_path = None
+            self.object_urdf_sha256 = ""
+            self.object_asset_manifest_json = ""
+            self.object_asset_manifest_sha256 = ""
         self.object_name = task_constants.OBJECT_NAME
         self.collision_detection_threshold = collision_detection_threshold
         self.activate_foot_sticking = activate_foot_sticking
         self.activate_obj_non_penetration = activate_obj_non_penetration
         self.activate_joint_limits = activate_joint_limits
         self.foot_links = dict(zip(task_constants.FOOT_STICKING_LINKS, task_constants.FOOT_STICKING_LINKS))
-        self.penetration_tolerance = penetration_tolerance
+        self.penetration_tolerance = float(penetration_tolerance)
+        if not np.isfinite(self.penetration_tolerance) or self.penetration_tolerance < 0:
+            raise ValueError("penetration_tolerance must be finite and non-negative")
         self.step_size = step_size
         self.visualize = visualize
         self.mesh_opacity = float(mesh_opacity)
         self.debug = debug
         self.show_interaction_mesh = show_interaction_mesh
-        self.save_interaction_mesh = save_interaction_mesh
+        if not save_interaction_mesh:
+            raise ValueError("Canonical retargeting artifacts require Interaction Mesh data")
+        self.save_interaction_mesh = True
         self.interaction_mesh_mode = interaction_mesh_mode
         self.interaction_mesh_edges = interaction_mesh_edges
         self.interaction_mesh_line_width = float(interaction_mesh_line_width)
@@ -167,6 +373,12 @@ class InteractionMeshRetargeter:
         if self.interaction_mesh_edges not in {"all", "cross"}:
             raise ValueError(f"Unknown interaction_mesh_edges: {self.interaction_mesh_edges}")
         self.demo_joints = task_constants.DEMO_JOINTS
+        self.human_joint_parent_indices = np.asarray(
+            task_constants.DEMO_JOINT_PARENT_INDICES,
+            dtype=np.int32,
+        )
+        if self.human_joint_parent_indices.shape != (len(self.demo_joints),):
+            raise ValueError("DEMO_JOINT_PARENT_INDICES must contain one parent for every DEMO_JOINTS entry")
         self.laplacian_match_links = task_constants.JOINTS_MAPPING
         self.task_constants = task_constants
         self.qpos_to_viser_joint_indices: np.ndarray | None = None
@@ -188,6 +400,9 @@ class InteractionMeshRetargeter:
         self.release_foot_sticking_on_infeasible = bool(release_foot_sticking_on_infeasible)
         self.release_object_non_penetration_on_infeasible = bool(release_object_non_penetration_on_infeasible)
         self.retry_without_foot_sticking_on_infeasible = bool(retry_without_foot_sticking_on_infeasible)
+        self.retry_frame_zero_ground_on_infeasible = bool(
+            retry_frame_zero_ground_on_infeasible,
+        )
         if self.foot_sticking_tolerance < 0:
             raise ValueError("foot_sticking_tolerance must be non-negative")
         if (
@@ -224,6 +439,13 @@ class InteractionMeshRetargeter:
         print("Loading robot model from: ", self.robot_xml_path)
 
         self.robot_data = mujoco.MjData(self.robot_model)
+        (
+            self.robot_link_body_ids,
+            self.robot_link_names,
+            self.robot_link_parent_indices,
+        ) = self._robot_link_topology()
+        self.robot_actuated_joint_names = self._robot_actuated_joint_names()
+        self.robot_link_name_to_index = {name: index for index, name in enumerate(self.robot_link_names)}
         self._init_self_collision(self._self_collision_config)
 
         if self.robot_data.qpos.shape[0] > 7 + self.task_constants.ROBOT_DOF:
@@ -234,7 +456,13 @@ class InteractionMeshRetargeter:
         self.nq = self.robot_model.nq
 
         self.q_a_init_idx = q_a_init_idx
-        self.q_a_indices = np.arange(7 + self.q_a_init_idx, 7 + self.task_constants.ROBOT_DOF)
+        first_optimized_qpos = 7 + self.q_a_init_idx
+        robot_qpos_stop = 7 + self.task_constants.ROBOT_DOF
+        if not 0 <= first_optimized_qpos < robot_qpos_stop:
+            raise ValueError(
+                f"q_a_init_idx must select a non-empty suffix of the robot configuration; got {q_a_init_idx}"
+            )
+        self.q_a_indices = np.arange(first_optimized_qpos, robot_qpos_stop)
 
         self.nq_a = len(self.q_a_indices)
 
@@ -259,24 +487,28 @@ class InteractionMeshRetargeter:
         self.q_a_lb = complete_lower_limits[self.q_a_indices]
         self.q_a_ub = complete_upper_limits[self.q_a_indices]
 
-        self.q_a_lb[np.array(list(self.task_constants.MANUAL_LB.keys())).astype(int)] = list(
-            self.task_constants.MANUAL_LB.values()
+        self._apply_qpos_overrides(
+            self.q_a_lb,
+            self.task_constants.MANUAL_LB,
+            metadata_name="MANUAL_LB",
         )
-        self.q_a_ub[np.array(list(self.task_constants.MANUAL_UB.keys())).astype(int)] = list(
-            self.task_constants.MANUAL_UB.values()
+        self._apply_qpos_overrides(
+            self.q_a_ub,
+            self.task_constants.MANUAL_UB,
+            metadata_name="MANUAL_UB",
         )
 
         # Prevent too much waist twist
         self.Q_diag = np.zeros(self.nq_a) * 1e-3
-        self.Q_diag[np.array(list(self.task_constants.MANUAL_COST.keys())).astype(int)] = list(
-            self.task_constants.MANUAL_COST.values()
+        self._apply_qpos_overrides(
+            self.Q_diag,
+            self.task_constants.MANUAL_COST,
+            metadata_name="MANUAL_COST",
         )
 
         self.sqp_max_iterations = int(sqp_max_iterations)
         self.sqp_min_iterations = int(sqp_min_iterations)
         self.sqp_convergence_patience = int(sqp_convergence_patience)
-        self.sqp_abs_cost_tolerance = float(sqp_abs_cost_tolerance)
-        self.sqp_rel_cost_tolerance = float(sqp_rel_cost_tolerance)
         if self.sqp_max_iterations <= 0:
             raise ValueError("sqp_max_iterations must be positive")
         if self.sqp_min_iterations <= 0:
@@ -285,16 +517,24 @@ class InteractionMeshRetargeter:
             raise ValueError("sqp_min_iterations must not exceed sqp_max_iterations")
         if self.sqp_convergence_patience <= 0:
             raise ValueError("sqp_convergence_patience must be positive")
-        if self.sqp_abs_cost_tolerance < 0:
-            raise ValueError("sqp_abs_cost_tolerance must be non-negative")
-        if self.sqp_rel_cost_tolerance < 0:
-            raise ValueError("sqp_rel_cost_tolerance must be non-negative")
         self.last_sqp_iteration_count = 0
         self.last_sqp_stop_reason = "not_started"
+        self.last_constraint_mode = ConstraintMode("inactive")
+        self.last_nonlinear_constraint_residuals = NonlinearConstraintResiduals(
+            ground_non_penetration=0.0,
+            object_non_penetration=0.0,
+            foot_sticking=0.0,
+            foot_lock=0.0,
+            self_collision=0.0,
+            joint_limits=0.0,
+        )
 
         self.w_nominal_tracking_init = w_nominal_tracking_init
         self.nominal_tracking_tau = nominal_tracking_tau
-        self.track_nominal_indices = task_constants.NOMINAL_TRACKING_INDICES
+        self.track_nominal_indices = self._reduced_indices_for_qpos_addresses(
+            task_constants.NOMINAL_TRACKING_INDICES,
+            metadata_name="NOMINAL_TRACKING_INDICES",
+        )
         self._init_orientation_tracking(
             orientation_joints_mapping=orientation_joints_mapping,
             orientation_weights=orientation_weights,
@@ -483,6 +723,32 @@ class InteractionMeshRetargeter:
                 normalized_windows.append((start, end))
             self._foot_lock_windows[side] = tuple(normalized_windows)
 
+    @classmethod
+    def _foot_sticking_states_array(
+        cls,
+        foot_sticking_sequences,
+        num_frames: int,
+    ) -> np.ndarray:
+        """Pack per-frame source-joint dictionaries into canonical [left, right] order."""
+        if len(foot_sticking_sequences) != num_frames:
+            raise ValueError(
+                "foot_sticking_sequences must contain one entry per motion frame; "
+                f"got {len(foot_sticking_sequences)} entries for {num_frames} frames"
+            )
+
+        states = np.zeros((num_frames, 2), dtype=bool)
+        for frame_idx, frame_state in enumerate(foot_sticking_sequences):
+            side_values: dict[str, bool] = {}
+            for key in frame_state:
+                side = cls._name_side(key)
+                if side is not None:
+                    side_values[side] = bool(frame_state[key])
+            missing = [side for side in ("left", "right") if side not in side_values]
+            if missing:
+                raise ValueError(f"foot_sticking_sequences[{frame_idx}] is missing side(s): " + ", ".join(missing))
+            states[frame_idx] = (side_values["left"], side_values["right"])
+        return states
+
     @staticmethod
     def _name_side(name: str) -> str | None:
         """Infer left/right side from common robot or mocap naming conventions."""
@@ -610,6 +876,45 @@ class InteractionMeshRetargeter:
             width=8,
             height=8,
             position=(0.0, 0.0, 0.0),
+        )
+        with self.server.gui.add_folder("Foot sticking"):
+            self._foot_sticking_status_handle = self.server.gui.add_markdown(
+                format_foot_sticking_status(
+                    0,
+                    (False, False),
+                    constraint_status="waiting for first frame",
+                )
+            )
+
+    def _update_foot_sticking_status(
+        self,
+        frame_idx: int,
+        states: np.ndarray,
+        *,
+        constraints_enabled: bool | None = None,
+    ) -> None:
+        """Update live/replay detector lights and actual constraint status."""
+        if not self.visualize or not hasattr(self, "_foot_sticking_status_handle"):
+            return
+
+        enabled = self.activate_foot_sticking if constraints_enabled is None else constraints_enabled
+        if not enabled:
+            constraint_status = "disabled"
+        elif self.q_a_init_idx >= 12:
+            constraint_status = "not applied for current optimization variables"
+        elif frame_idx in self.foot_sticking_release_frames:
+            constraint_status = "released after infeasible solve"
+        elif frame_idx in self.foot_sticking_fallback_frames:
+            constraint_status = "active with relaxed tolerance"
+        elif bool(np.any(states)):
+            constraint_status = "active"
+        else:
+            constraint_status = "inactive (no sticking foot)"
+
+        self._foot_sticking_status_handle.content = format_foot_sticking_status(
+            frame_idx,
+            states,
+            constraint_status=constraint_status,
         )
 
     def _mesh_color_override(self):
@@ -862,6 +1167,281 @@ class InteractionMeshRetargeter:
             ),
         )
 
+    def _robot_link_topology(
+        self,
+    ) -> tuple[np.ndarray, tuple[str, ...], np.ndarray]:
+        """Return the robot root subtree, excluding world and scene objects."""
+
+        root_joint_candidates = [
+            joint_id for joint_id in range(self.robot_model.njnt) if int(self.robot_model.jnt_qposadr[joint_id]) == 0
+        ]
+        if len(root_joint_candidates) != 1:
+            raise ValueError(
+                f"Expected exactly one robot root joint at qpos address 0, found {len(root_joint_candidates)}"
+            )
+        root_body_id = int(self.robot_model.jnt_bodyid[root_joint_candidates[0]])
+
+        body_ids: list[int] = []
+        for body_id in range(1, self.robot_model.nbody):
+            ancestor = body_id
+            while ancestor not in {0, root_body_id}:
+                ancestor = int(self.robot_model.body_parentid[ancestor])
+            if ancestor == root_body_id:
+                body_ids.append(body_id)
+
+        if not body_ids or body_ids[0] != root_body_id:
+            raise ValueError("Could not resolve the robot body subtree")
+        names = tuple(
+            name
+            for body_id in body_ids
+            for name in [
+                mujoco.mj_id2name(
+                    self.robot_model,
+                    mujoco.mjtObj.mjOBJ_BODY,
+                    body_id,
+                )
+            ]
+            if name is not None
+        )
+        if len(names) != len(body_ids) or len(set(names)) != len(names):
+            raise ValueError("Robot bodies must have unique MuJoCo names")
+
+        local_index = {body_id: index for index, body_id in enumerate(body_ids)}
+        parent_indices = np.asarray(
+            [
+                -1 if body_id == root_body_id else local_index[int(self.robot_model.body_parentid[body_id])]
+                for body_id in body_ids
+            ],
+            dtype=np.int32,
+        )
+        return np.asarray(body_ids, dtype=np.int32), names, parent_indices
+
+    def _get_robot_link_transforms(
+        self,
+        q: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return world positions and rotation matrices for every robot link."""
+
+        q_array = np.asarray(q, dtype=np.float64)
+        if q_array.shape != self.robot_data.qpos.shape:
+            raise ValueError(
+                f"Robot qpos shape {q_array.shape} does not match model shape {self.robot_data.qpos.shape}"
+            )
+        self.robot_data.qpos[:] = q_array
+        mujoco.mj_forward(self.robot_model, self.robot_data)
+        positions = np.array(
+            self.robot_data.xpos[self.robot_link_body_ids],
+            dtype=np.float64,
+            copy=True,
+        )
+        matrices = np.array(
+            self.robot_data.xmat[self.robot_link_body_ids].reshape(-1, 3, 3),
+            dtype=np.float64,
+            copy=True,
+        )
+        return positions, matrices
+
+    def _reduced_indices_for_qpos_addresses(
+        self,
+        qpos_addresses,
+        *,
+        metadata_name: str,
+    ) -> np.ndarray:
+        """Map full robot-qpos addresses into the active optimization suffix."""
+
+        requested = np.asarray(qpos_addresses, dtype=np.int64).reshape(-1)
+        robot_qpos_stop = 7 + self.task_constants.ROBOT_DOF
+        if np.any(requested < 0) or np.any(requested >= robot_qpos_stop):
+            raise ValueError(f"{metadata_name} contains addresses outside the robot qpos range [0, {robot_qpos_stop})")
+        reduced_index = {int(qpos_address): index for index, qpos_address in enumerate(self.q_a_indices)}
+        return np.asarray(
+            [reduced_index[int(qpos_address)] for qpos_address in requested if int(qpos_address) in reduced_index],
+            dtype=np.int32,
+        )
+
+    def _apply_qpos_overrides(
+        self,
+        target: np.ndarray,
+        overrides,
+        *,
+        metadata_name: str,
+    ) -> None:
+        """Apply full-qpos keyed overrides only to active optimization values."""
+
+        if not overrides:
+            return
+        qpos_addresses = np.asarray(
+            [int(address) for address in overrides],
+            dtype=np.int64,
+        )
+        reduced_indices = self._reduced_indices_for_qpos_addresses(
+            qpos_addresses,
+            metadata_name=metadata_name,
+        )
+        active_addresses = {int(address) for address in self.q_a_indices}
+        values = np.asarray(
+            [value for address, value in overrides.items() if int(address) in active_addresses],
+            dtype=np.float64,
+        )
+        target[reduced_indices] = values
+
+    def _initial_optimization_values(
+        self,
+        q_a_init,
+    ) -> np.ndarray:
+        """Accept either a reduced vector or the complete robot qpos vector."""
+
+        if q_a_init is None:
+            raise ValueError("q_a_init is required when q_nominal_list is not provided")
+        initial = np.asarray(q_a_init, dtype=np.float64)
+        if initial.shape == (self.nq_a,):
+            return initial
+        robot_qpos_count = 7 + self.task_constants.ROBOT_DOF
+        if initial.shape in {
+            (robot_qpos_count,),
+            (self.nq,),
+        }:
+            return initial[self.q_a_indices]
+        raise ValueError(
+            "q_a_init must contain either the active optimization suffix "
+            f"({self.nq_a} values) or a complete robot/model qpos vector "
+            f"({robot_qpos_count} or {self.nq} values); got {initial.shape}"
+        )
+
+    def _initial_locked_qpos(self, q_a_init) -> np.ndarray:
+        """Build a valid full model qpos while preserving locked coordinates."""
+
+        if q_a_init is None:
+            raise ValueError("q_a_init is required when q_nominal_list is not provided")
+        initial = np.asarray(q_a_init, dtype=np.float64)
+        full_qpos = self.robot_model.qpos0.copy()
+        robot_qpos_count = 7 + self.task_constants.ROBOT_DOF
+        if initial.shape == (self.nq,):
+            full_qpos[:] = initial
+        elif initial.shape == (robot_qpos_count,):
+            full_qpos[:robot_qpos_count] = initial
+        elif initial.shape == (self.nq_a,):
+            full_qpos[self.q_a_indices] = initial
+        else:
+            raise ValueError(
+                "q_a_init must contain either the active optimization suffix "
+                f"({self.nq_a} values) or a complete robot/model qpos vector "
+                f"({robot_qpos_count} or {self.nq} values); got "
+                f"{initial.shape}"
+            )
+        if not np.isfinite(full_qpos).all():
+            raise ValueError("q_a_init must contain only finite values")
+        return full_qpos
+
+    def _owned_nominal_qpos(
+        self,
+        q_nominal_list,
+        *,
+        num_frames: int,
+    ) -> np.ndarray:
+        """Validate and own the full-qpos nominal trajectory in solver precision."""
+
+        try:
+            nominal = np.asarray(q_nominal_list)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("q_nominal_list must be a rectangular two-dimensional array") from exc
+        if nominal.ndim != 2:
+            raise ValueError(
+                "q_nominal_list must be a two-dimensional array with shape "
+                f"({num_frames}, {self.nq}); got {nominal.shape}"
+            )
+        if nominal.shape[0] != num_frames:
+            raise ValueError(f"q_nominal_list must contain exactly {num_frames} frames; got {nominal.shape[0]}")
+        if nominal.shape[1] != self.nq:
+            raise ValueError(
+                f"q_nominal_list must contain complete model qpos vectors with width {self.nq}; got {nominal.shape[1]}"
+            )
+        try:
+            owned_nominal = np.array(
+                nominal,
+                dtype=np.float64,
+                copy=True,
+                order="C",
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("q_nominal_list must contain numeric values") from exc
+        if not np.isfinite(owned_nominal).all():
+            raise ValueError("q_nominal_list must contain only finite values")
+        return owned_nominal
+
+    def _robot_actuated_joint_names(self) -> tuple[str, ...]:
+        """Return scalar robot joints in qpos order, excluding free joints."""
+
+        robot_qpos_start = 7
+        robot_qpos_stop = robot_qpos_start + self.task_constants.ROBOT_DOF
+        joints: list[tuple[int, str]] = []
+        for joint_id in range(self.robot_model.njnt):
+            qpos_address = int(self.robot_model.jnt_qposadr[joint_id])
+            if not robot_qpos_start <= qpos_address < robot_qpos_stop:
+                continue
+            joint_type = int(self.robot_model.jnt_type[joint_id])
+            if joint_type not in {
+                int(mujoco.mjtJoint.mjJNT_HINGE),
+                int(mujoco.mjtJoint.mjJNT_SLIDE),
+            }:
+                raise ValueError(f"Robot actuated qpos range contains a non-scalar joint at address {qpos_address}")
+            name = mujoco.mj_id2name(
+                self.robot_model,
+                mujoco.mjtObj.mjOBJ_JOINT,
+                joint_id,
+            )
+            if name is None:
+                raise ValueError(f"Robot joint at qpos address {qpos_address} has no name")
+            joints.append((qpos_address, name))
+        joints.sort()
+        names = tuple(name for _, name in joints)
+        if len(names) != self.task_constants.ROBOT_DOF:
+            raise ValueError(
+                "Robot actuated joint metadata does not match ROBOT_DOF: "
+                f"{len(names)} != {self.task_constants.ROBOT_DOF}"
+            )
+        return names
+
+    def _validate_source_orientations(
+        self,
+        quaternions_wxyz: np.ndarray | None,
+        joint_names: tuple[str, ...] | list[str] | np.ndarray | None,
+        num_frames: int,
+    ) -> tuple[np.ndarray | None, np.ndarray | None, tuple[str, ...]]:
+        """Keep exact float32 source evidence separate from normalized math."""
+
+        if quaternions_wxyz is None:
+            if joint_names is not None and len(joint_names) != 0:
+                raise ValueError("Source orientation names were provided without quaternions")
+            return None, None, ()
+
+        saved_quaternions = np.ascontiguousarray(
+            quaternions_wxyz,
+            dtype=np.float32,
+        ).copy()
+        if joint_names is None:
+            if saved_quaternions.shape[1:] != (len(self.demo_joints), 4):
+                raise ValueError("Source orientation names are required for a partial orientation tensor")
+            names = tuple(self.demo_joints)
+        else:
+            names = tuple(str(name) for name in joint_names)
+        if not names or len(set(names)) != len(names):
+            raise ValueError("Source orientation joint names must be non-empty and unique")
+        unavailable = [name for name in names if name not in self.demo_joints]
+        if unavailable:
+            raise ValueError(f"Source orientation joints are absent from the human skeleton: {unavailable}")
+        expected_shape = (num_frames, len(names), 4)
+        if saved_quaternions.shape != expected_shape:
+            raise ValueError(f"Source orientations must have shape {expected_shape}, got {saved_quaternions.shape}")
+        math_quaternions = saved_quaternions.astype(np.float64)
+        norms = np.linalg.norm(math_quaternions, axis=-1)
+        if not np.isfinite(math_quaternions).all() or np.any(norms <= 1e-8):
+            raise ValueError("Source orientation quaternions must be finite and non-zero")
+        if np.any(np.abs(norms - 1.0) > 1e-3):
+            raise ValueError("Source orientation quaternions must already be unit length")
+        normalized_math_quaternions = math_quaternions / norms[..., None]
+        return saved_quaternions, normalized_math_quaternions, names
+
     def _orientation_t_pose_robot_qpos(self) -> np.ndarray:
         """Build the robot configuration used for canonical T-pose alignment."""
         reference_q = self.robot_model.qpos0.copy()
@@ -878,34 +1458,67 @@ class InteractionMeshRetargeter:
 
     def _prepare_orientation_targets(
         self,
-        human_joint_quaternions_wxyz: np.ndarray | None,
+        normalized_human_joint_quaternions_wxyz: np.ndarray | None,
         initial_q: np.ndarray,
         num_frames: int,
+        human_orientation_joint_names: tuple[str, ...] | None = None,
+        orientation_target_world_rotation_deltas_wxyz: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Validate source orientations and construct fixed-alignment targets."""
+        """Construct target-world orientations from normalized source rotations."""
+
+        if orientation_target_world_rotation_deltas_wxyz is None:
+            world_rotation_deltas = np.zeros((num_frames, 4), dtype=np.float64)
+            world_rotation_deltas[:, 0] = 1.0
+        else:
+            world_rotation_deltas = np.asarray(
+                orientation_target_world_rotation_deltas_wxyz,
+                dtype=np.float64,
+            )
+            if world_rotation_deltas.shape != (num_frames, 4):
+                raise ValueError(
+                    "orientation_target_world_rotation_deltas_wxyz must have "
+                    f"shape {(num_frames, 4)}, got {world_rotation_deltas.shape}"
+                )
+            delta_norms = np.linalg.norm(
+                world_rotation_deltas,
+                axis=-1,
+                keepdims=True,
+            )
+            if not np.isfinite(world_rotation_deltas).all() or np.any(delta_norms <= 1e-8):
+                raise ValueError(
+                    "orientation_target_world_rotation_deltas_wxyz must contain finite, non-zero quaternions"
+                )
+            world_rotation_deltas = world_rotation_deltas / delta_norms
+
         tracked_count = len(self.orientation_human_joint_names)
         if not self.orientation_diagnostics_enabled:
             return (
                 np.empty((num_frames, 0, 3, 3), dtype=np.float64),
                 np.empty((0, 3, 3), dtype=np.float64),
             )
-        if human_joint_quaternions_wxyz is None:
+        if normalized_human_joint_quaternions_wxyz is None:
             raise ValueError("Configured orientation tracking or diagnostics require source global joint orientations")
         quaternions = np.asarray(
-            human_joint_quaternions_wxyz,
+            normalized_human_joint_quaternions_wxyz,
             dtype=np.float64,
         )
-        expected_shape = (num_frames, len(self.demo_joints), 4)
-        if quaternions.shape != expected_shape:
+        available_orientation_names = (
+            tuple(self.demo_joints) if human_orientation_joint_names is None else human_orientation_joint_names
+        )
+        orientation_index = {name: index for index, name in enumerate(available_orientation_names)}
+        unavailable = [name for name in self.orientation_human_joint_names if name not in orientation_index]
+        if unavailable:
             raise ValueError(
-                f"Source global joint orientations must have shape {expected_shape}, got {quaternions.shape}"
+                "Configured orientation tracking or diagnostics require direct "
+                f"source orientations for joints: {unavailable}"
             )
         selected_quaternions = quaternions[
             :,
-            self.orientation_human_joint_indices,
+            [orientation_index[name] for name in self.orientation_human_joint_names],
             :,
         ]
         human_matrices = self._wxyz_to_matrices(selected_quaternions)
+        target_world_human_matrices = self._wxyz_to_matrices(world_rotation_deltas)[:, None, ...] @ human_matrices
 
         if self.orientation_alignment_mode == "t_pose":
             reference_human_quaternions = np.asarray(
@@ -926,10 +1539,10 @@ class InteractionMeshRetargeter:
                 self.orientation_robot_link_names,
                 with_jacobians=False,
             )
-            reference_human_matrices = human_matrices[0].copy()
+            reference_human_matrices = target_world_human_matrices[0].copy()
             reference_robot_matrices = initial_robot_matrices.copy()
             reference_robot_q = np.asarray(initial_q, dtype=np.float64).copy()
-            alignment_matrices = np.swapaxes(human_matrices[0], -1, -2) @ initial_robot_matrices
+            alignment_matrices = np.swapaxes(target_world_human_matrices[0], -1, -2) @ initial_robot_matrices
         else:
             alignment_quaternions = np.asarray(
                 [
@@ -957,7 +1570,7 @@ class InteractionMeshRetargeter:
         self.orientation_reference_human_matrices = reference_human_matrices
         self.orientation_reference_robot_matrices = reference_robot_matrices
         self.orientation_reference_robot_qpos = reference_robot_q
-        target_matrices = human_matrices @ alignment_matrices[None, ...]
+        target_matrices = target_world_human_matrices @ alignment_matrices[None, ...]
         return target_matrices, alignment_matrices
 
     def draw_interaction_meshes(
@@ -1003,7 +1616,11 @@ class InteractionMeshRetargeter:
         dest_res_path=None,
         fps=30.0,
         human_joint_quaternions_wxyz: np.ndarray | None = None,
+        human_orientation_joint_names: (tuple[str, ...] | list[str] | np.ndarray | None) = None,
+        orientation_target_world_rotation_deltas_wxyz: np.ndarray | None = None,
+        result_metadata: dict[str, object] | None = None,
         _foot_sticking_retry: bool = False,
+        _frame_zero_ground_retry_state: FrameZeroGroundRetryState | None = None,
     ):
         """
         The main function to retarget an entire motion sequence frame by frame.
@@ -1011,9 +1628,17 @@ class InteractionMeshRetargeter:
         Args:
             human_joint_motions (np.ndarray): (num_frames, num_joints, 3) array.
             human_joint_quaternions_wxyz (np.ndarray | None): Optional
-                (num_frames, num_joints, 4) global human orientations in wxyz.
-            object_poses (np.ndarray): (num_frames, 7) array of demo object poses (quat, trans).
-            object_poses_augmented (np.ndarray): (num_frames, 7) array of augmented object poses (quat, trans).
+                (num_frames, num_oriented_joints, 4) direct global human
+                orientations in wxyz.
+            human_orientation_joint_names: Joint names corresponding to the
+                optional source orientation tensor. Missing joints remain
+                absent rather than being estimated.
+            orientation_target_world_rotation_deltas_wxyz: Optional
+                per-frame WXYZ world rotations applied only to orientation
+                targets. The direct source tensor remains unchanged.
+            object_poses (np.ndarray): source object poses in ``xyz_wxyz`` layout.
+            object_poses_augmented (np.ndarray): target object poses in
+                ``xyz_wxyz`` layout.
             object_points_local_demo (np.ndarray): Demo object points in local frame (rest pose).
             object_points_local (np.ndarray): Current object points in local frame (rest pose).
             foot_sticking_sequences (list): List of foot sticking sequences for each frame.
@@ -1024,11 +1649,45 @@ class InteractionMeshRetargeter:
             tuple: (retargeted_motions, obj_pts_demo_list, obj_pts_list, tetrahedra)
         """
         num_frames = human_joint_motions.shape[0]
+        frame_zero_ground_retry_eligible = self._frame_zero_ground_retry_eligible(
+            q_nominal_list=q_nominal_list,
+            original=original,
+        )
+        if _frame_zero_ground_retry_state is None:
+            frame_zero_ground_retry_state = FrameZeroGroundRetryState(
+                eligible=frame_zero_ground_retry_eligible,
+            )
+        else:
+            frame_zero_ground_retry_state = _frame_zero_ground_retry_state
+            if frame_zero_ground_retry_state.eligible != frame_zero_ground_retry_eligible:
+                raise ValueError(
+                    "Inherited frame-zero ground retry state no longer matches the current motion invocation",
+                )
+        (
+            saved_human_joint_quaternions_wxyz,
+            normalized_math_human_joint_quaternions_wxyz,
+            source_orientation_joint_names,
+        ) = self._validate_source_orientations(
+            human_joint_quaternions_wxyz,
+            human_orientation_joint_names,
+            num_frames,
+        )
+        foot_sticking_states = self._foot_sticking_states_array(
+            foot_sticking_sequences,
+            num_frames,
+        )
         if q_nominal_list is not None:
+            q_nominal_list = self._owned_nominal_qpos(
+                q_nominal_list,
+                num_frames=num_frames,
+            )
             q_locked_list = q_nominal_list
         else:
-            q_locked_list = np.zeros((num_frames, self.nq))
-            q_locked_list[0, self.q_a_indices] = q_a_init
+            q_locked_list = np.repeat(
+                self._initial_locked_qpos(q_a_init)[None, :],
+                num_frames,
+                axis=0,
+            )
 
         self._apply_dynamic_object_poses(
             q_locked_list,
@@ -1040,9 +1699,11 @@ class InteractionMeshRetargeter:
             orientation_target_matrices,
             orientation_alignment_matrices,
         ) = self._prepare_orientation_targets(
-            human_joint_quaternions_wxyz,
+            normalized_math_human_joint_quaternions_wxyz,
             q,
             num_frames,
+            human_orientation_joint_names=source_orientation_joint_names,
+            orientation_target_world_rotation_deltas_wxyz=(orientation_target_world_rotation_deltas_wxyz),
         )
 
         tetrahedra = []
@@ -1051,9 +1712,28 @@ class InteractionMeshRetargeter:
         interaction_source_vertices_w_list = []
         interaction_target_vertices_w_list = []
         mapped_robot_joints_w_list = []
+        robot_link_positions_w_list = []
+        robot_link_quaternions_wxyz_list = []
+        mapped_robot_link_indices = np.asarray(
+            [self.robot_link_name_to_index[name] for name in self.laplacian_match_links.values()],
+            dtype=np.int32,
+        )
+        orientation_robot_link_indices = np.asarray(
+            [self.robot_link_name_to_index[name] for name in self.orientation_robot_link_names],
+            dtype=np.int32,
+        )
         frame_costs = []
         sqp_iteration_counts = []
         sqp_stop_reasons = []
+        ground_non_penetration_violations = []
+        object_non_penetration_violations = []
+        foot_sticking_violations = []
+        foot_lock_violations = []
+        self_collision_violations = []
+        joint_limits_violations = []
+        constraint_mode_foot_sticking = []
+        constraint_mode_object_non_penetration_released = []
+        constraint_mode_trust_region_released = []
         orientation_robot_quaternions_wxyz: list[np.ndarray] = []
         orientation_errors_rad: list[np.ndarray] = []
         orientation_frame_costs: list[float] = []
@@ -1145,6 +1825,7 @@ class InteractionMeshRetargeter:
                 else:
                     w_nominal_tracking = self.w_nominal_tracking_init * np.exp(-i / self.nominal_tracking_tau)
 
+                frame_entry_q = np.copy(q)
                 try:
                     q, cost = self.iterate(
                         q_locked=q_locked_list[i],
@@ -1160,33 +1841,141 @@ class InteractionMeshRetargeter:
                         frame_idx=i,
                         orientation_target_matrices=orientation_target_matrices[i],
                     )
-                except RuntimeError as exc:
-                    should_retry_without_foot_sticking = (
-                        self.retry_without_foot_sticking_on_infeasible
-                        and self.activate_foot_sticking
-                        and not _foot_sticking_retry
-                        and "CVXPY solve failed" in str(exc)
-                    )
-                    if not should_retry_without_foot_sticking:
-                        raise
-                    retry_without_foot_sticking_exception = exc
-                    retry_without_foot_sticking_frame = i
-                    break
+                except RuntimeError as initial_exception:
+                    try:
+                        prepared_retry = (
+                            self._prepare_frame_zero_ground_retry(
+                                frame_entry_q=frame_entry_q,
+                                foot_sticking=foot_sticking_sequences[i],
+                                exception=initial_exception,
+                                state=frame_zero_ground_retry_state,
+                            )
+                            if i == 0
+                            else None
+                        )
+                    except RuntimeError as rejection:
+                        if not isinstance(
+                            initial_exception,
+                            SQPNonlinearFeasibilityError,
+                        ):
+                            raise
+                        raise SQPNonlinearFeasibilityError(
+                            f"{initial_exception}; frame-zero ground retry was rejected: {rejection}",
+                            foot_related_failure=False,
+                            frame_idx=initial_exception.frame_idx,
+                            total_iterations=initial_exception.total_iterations,
+                            closest_residuals=initial_exception.closest_residuals,
+                            closest_constraint_mode=(initial_exception.closest_constraint_mode),
+                            minimum_hard_constraint_violation=(initial_exception.minimum_hard_constraint_violation),
+                        ) from rejection
 
+                    solve_exception: RuntimeError | None = initial_exception
+                    if prepared_retry is not None:
+                        frame_zero_ground_retry_state = prepared_retry
+                        if prepared_retry.corrected_q is None:
+                            raise RuntimeError(
+                                "Triggered frame-zero ground retry has no corrected qpos",
+                            )
+                        corrected_q = np.array(
+                            prepared_retry.corrected_q,
+                            dtype=np.float64,
+                            copy=True,
+                        )
+                        q = corrected_q
+                        q_locked_list[i] = corrected_q
+                        retargeted_motions[-1] = corrected_q.copy()
+                        print(
+                            "WARNING: Retrying robot-only frame zero after a "
+                            "pure horizontal-ground feasibility failure by "
+                            f"lifting root Z {prepared_retry.lift_m:.9g} m. "
+                            "No physical feasibility constraint is released.",
+                            flush=True,
+                        )
+                        try:
+                            q, cost = self.iterate(
+                                q_locked=q_locked_list[i],
+                                q_n=q,
+                                q_t_last=retargeted_motions[-1],
+                                target_laplacian=target_laplacian,
+                                adj_list=adj_list,
+                                obj_pts_local=object_points_local,
+                                foot_sticking=foot_sticking_sequences[i],
+                                w_nominal_tracking=w_nominal_tracking,
+                                q_a_nominal=None,
+                                init_t=True,
+                                frame_idx=0,
+                                orientation_target_matrices=(orientation_target_matrices[i]),
+                            )
+                        except RuntimeError as retry_exception:
+                            solve_exception = retry_exception
+                        else:
+                            solve_exception = None
+                            self.last_sqp_stop_reason = self._frame_zero_ground_retry_stop_reason(
+                                self.last_sqp_stop_reason,
+                                triggered=True,
+                            )
+
+                    if solve_exception is not None:
+                        should_retry_without_foot_sticking = self._should_retry_without_foot_sticking(
+                            exception=solve_exception,
+                            foot_sticking=foot_sticking_sequences[i],
+                            already_retrying=_foot_sticking_retry,
+                        )
+                        if not should_retry_without_foot_sticking:
+                            if solve_exception is initial_exception:
+                                raise
+                            raise solve_exception from initial_exception
+                        retry_without_foot_sticking_exception = solve_exception
+                        retry_without_foot_sticking_frame = i
+                        break
+
+                if i == 0:
+                    self.last_sqp_stop_reason = self._frame_zero_ground_retry_stop_reason(
+                        self.last_sqp_stop_reason,
+                        triggered=frame_zero_ground_retry_state.triggered,
+                    )
                 frame_costs.append(float(cost))
                 sqp_iteration_counts.append(self.last_sqp_iteration_count)
                 sqp_stop_reasons.append(self.last_sqp_stop_reason)
+                ground_non_penetration_violations.append(
+                    self.last_nonlinear_constraint_residuals.ground_non_penetration,
+                )
+                object_non_penetration_violations.append(
+                    self.last_nonlinear_constraint_residuals.object_non_penetration,
+                )
+                foot_sticking_violations.append(
+                    self.last_nonlinear_constraint_residuals.foot_sticking,
+                )
+                foot_lock_violations.append(
+                    self.last_nonlinear_constraint_residuals.foot_lock,
+                )
+                self_collision_violations.append(
+                    self.last_nonlinear_constraint_residuals.self_collision,
+                )
+                joint_limits_violations.append(
+                    self.last_nonlinear_constraint_residuals.joint_limits,
+                )
+                constraint_mode_foot_sticking.append(
+                    self.last_constraint_mode.foot_sticking,
+                )
+                constraint_mode_object_non_penetration_released.append(
+                    self.last_constraint_mode.object_non_penetration_released,
+                )
+                constraint_mode_trust_region_released.append(
+                    self.last_constraint_mode.trust_region_released,
+                )
 
-                robot_link_positions = self._get_robot_link_positions(
-                    q, self.laplacian_match_links.values()
-                )  # n_mapped_links X 3
+                (
+                    all_robot_link_positions,
+                    all_robot_link_matrices,
+                ) = self._get_robot_link_transforms(q)
+                all_robot_link_quaternions = self._matrices_to_wxyz(all_robot_link_matrices)
+                robot_link_positions_w_list.append(all_robot_link_positions.astype(np.float32))
+                robot_link_quaternions_wxyz_list.append(all_robot_link_quaternions.astype(np.float32))
+                robot_link_positions = all_robot_link_positions[mapped_robot_link_indices]
                 mapped_robot_joints_w_list.append(robot_link_positions.astype(np.float32))
                 if self.orientation_diagnostics_enabled:
-                    robot_orientation_matrices, _ = self._get_robot_link_orientation_data(
-                        q,
-                        self.orientation_robot_link_names,
-                        with_jacobians=False,
-                    )
+                    robot_orientation_matrices = all_robot_link_matrices[orientation_robot_link_indices]
                     error_vectors = self._so3_error_vectors(
                         orientation_target_matrices[i],
                         robot_orientation_matrices,
@@ -1228,8 +2017,10 @@ class InteractionMeshRetargeter:
                     )
 
                 retargeted_motions.append(q)
-                if self.visualize and (self.debug or self.show_interaction_mesh):
-                    self.draw_q(q)
+                if self.visualize:
+                    self._update_foot_sticking_status(i, foot_sticking_states[i])
+                    if self.debug or self.show_interaction_mesh:
+                        self.draw_q(q)
 
                 pbar.set_postfix(cost=cost)
 
@@ -1278,20 +2069,27 @@ class InteractionMeshRetargeter:
             activate_foot_sticking = self.activate_foot_sticking
             self.activate_foot_sticking = False
             try:
+                inherited_q_a_init = (
+                    frame_zero_ground_retry_state.corrected_q if frame_zero_ground_retry_state.triggered else q_a_init
+                )
                 return self.retarget_motion(
                     human_joint_motions=human_joint_motions,
-                    human_joint_quaternions_wxyz=human_joint_quaternions_wxyz,
+                    human_joint_quaternions_wxyz=(saved_human_joint_quaternions_wxyz),
+                    human_orientation_joint_names=source_orientation_joint_names,
+                    orientation_target_world_rotation_deltas_wxyz=(orientation_target_world_rotation_deltas_wxyz),
                     object_poses=object_poses,
                     object_poses_augmented=object_poses_augmented,
                     object_points_local_demo=object_points_local_demo,
                     object_points_local=object_points_local,
                     foot_sticking_sequences=foot_sticking_sequences,
-                    q_a_init=q_a_init,
+                    q_a_init=inherited_q_a_init,
                     q_nominal_list=q_nominal_list,
                     original=original,
                     dest_res_path=dest_res_path,
                     fps=fps,
+                    result_metadata=result_metadata,
                     _foot_sticking_retry=True,
+                    _frame_zero_ground_retry_state=(frame_zero_ground_retry_state),
                 )
             finally:
                 self.activate_foot_sticking = activate_foot_sticking
@@ -1330,19 +2128,106 @@ class InteractionMeshRetargeter:
                 num_frames,
                 dtype=np.float64,
             )
+        constraint_mode_foot_sticking_array = np.asarray(
+            constraint_mode_foot_sticking,
+            dtype=str,
+        )
+        fallback_available = (
+            self.foot_sticking_fallback_tolerance is not None
+            and self.foot_sticking_fallback_tolerance > self.foot_sticking_tolerance
+        )
+        self.foot_sticking_fallback_frames = set(
+            np.flatnonzero(
+                (constraint_mode_foot_sticking_array == "relaxed")
+                | ((constraint_mode_foot_sticking_array == "released") & fallback_available),
+            ).tolist()
+        )
+        self.foot_sticking_release_frames = set(
+            np.flatnonzero(
+                constraint_mode_foot_sticking_array == "released",
+            ).tolist()
+        )
+        constraint_mode_object_non_penetration_released_array = np.asarray(
+            constraint_mode_object_non_penetration_released,
+            dtype=bool,
+        )
+        self.object_non_penetration_release_frames = set(
+            np.flatnonzero(
+                constraint_mode_object_non_penetration_released_array,
+            ).tolist()
+        )
+        if self.object_model_path:
+            (
+                observed_object_asset_manifest_json,
+                observed_object_asset_manifest_sha256,
+            ) = build_object_asset_manifest(self.object_model_path)
+            if (
+                observed_object_asset_manifest_json != self.object_asset_manifest_json
+                or observed_object_asset_manifest_sha256 != self.object_asset_manifest_sha256
+            ):
+                raise RuntimeError(
+                    f"Object URDF dependency closure changed during retargeting: {self.object_model_path}"
+                )
         save_payload = {
-            "qpos": np.array(retargeted_motions)[1:],
-            "human_joints": human_joint_motions,
+            "schema_version": np.asarray(
+                RESULT_SCHEMA_VERSION,
+                dtype=np.int32,
+            ),
+            # Preserve the exact accepted SQP states. Casting to float32 here
+            # can move a contact-constrained trajectory outside the nonlinear
+            # feasibility tolerance and makes augmentation warm starts differ
+            # from the states whose residuals and costs are saved below.
+            "qpos": np.asarray(retargeted_motions[1:], dtype=np.float64),
+            "qpos_layout": np.asarray("mujoco_free_root_xyz_wxyz_then_actuated_then_optional_object_free_joint"),
+            "human_joints": np.asarray(
+                human_joint_motions,
+                dtype=np.float32,
+            ),
             "human_joint_names": np.asarray(self.demo_joints, dtype=str),
+            "human_joint_parent_indices": self.human_joint_parent_indices,
             "mapped_human_joints": human_joint_motions[:, self.mapped_joint_indices],
             "mapped_human_joint_names": np.asarray(mapped_human_joint_names, dtype=str),
             "mapped_robot_joints": np.asarray(mapped_robot_joints_w_list, dtype=np.float32),
             "mapped_robot_link_names": np.asarray(list(self.laplacian_match_links.values()), dtype=str),
+            "robot_link_positions": np.asarray(
+                robot_link_positions_w_list,
+                dtype=np.float32,
+            ),
+            "robot_link_quaternions_wxyz": np.asarray(
+                robot_link_quaternions_wxyz_list,
+                dtype=np.float32,
+            ),
+            "robot_link_names": np.asarray(self.robot_link_names, dtype=str),
+            "robot_link_parent_indices": self.robot_link_parent_indices,
+            "robot_actuated_joint_names": np.asarray(
+                self.robot_actuated_joint_names,
+                dtype=str,
+            ),
             "source_data_format": np.asarray(self.task_constants.SOURCE_DATA_FORMAT),
             "robot_type": np.asarray(self.task_constants.ROBOT_TYPE),
+            "task_type": np.asarray(getattr(self.task_constants, "TASK_TYPE", "")),
             "object_name": np.asarray(self.object_name),
             "object_urdf": np.asarray(self.object_model_path or ""),
+            "object_urdf_sha256": np.asarray(
+                self.object_urdf_sha256,
+            ),
+            "object_asset_manifest_json": np.asarray(
+                self.object_asset_manifest_json,
+            ),
+            "object_asset_manifest_sha256": np.asarray(
+                self.object_asset_manifest_sha256,
+            ),
             "contains_object_in_qpos": np.asarray(bool(self.object_model_path) and bool(self.has_dynamic_object)),
+            "object_poses_demo": np.asarray(object_poses, dtype=np.float32),
+            "object_poses_target": np.asarray(
+                object_poses_augmented,
+                dtype=np.float32,
+            ),
+            "object_pose_layout": np.asarray("xyz_wxyz"),
+            "quaternion_convention": np.asarray("wxyz"),
+            "world_coordinate_system": np.asarray("right_handed_z_up"),
+            "foot_sticking_side_names": np.asarray(("left", "right"), dtype=str),
+            "foot_sticking_states": foot_sticking_states,
             "foot_sticking_tolerance": np.asarray(self.foot_sticking_tolerance),
             "foot_sticking_fallback_tolerance": np.asarray(
                 np.nan if self.foot_sticking_fallback_tolerance is None else self.foot_sticking_fallback_tolerance
@@ -1363,16 +2248,82 @@ class InteractionMeshRetargeter:
                 sorted(self.object_non_penetration_release_frames),
                 dtype=np.int32,
             ),
-            "foot_sticking_enabled_for_saved_trajectory": np.asarray(self.activate_foot_sticking),
+            "object_non_penetration_eligible_for_saved_trajectory": np.asarray(
+                bool(self.activate_obj_non_penetration)
+                and self.object_name != "ground"
+                and bool(self.object_model_path)
+            ),
+            "foot_sticking_enabled_for_saved_trajectory": np.asarray(
+                self.activate_foot_sticking and self.q_a_init_idx < 12,
+            ),
             "foot_sticking_full_sequence_retry_frame": np.asarray(
                 -1
                 if self.foot_sticking_full_sequence_retry_frame is None
                 else self.foot_sticking_full_sequence_retry_frame,
                 dtype=np.int32,
             ),
+            "frame_zero_ground_retry_policy": np.asarray(
+                FRAME_ZERO_GROUND_RETRY_POLICY,
+            ),
+            "frame_zero_ground_retry_eligible": np.asarray(
+                frame_zero_ground_retry_state.eligible,
+            ),
+            "frame_zero_ground_retry_triggered": np.asarray(
+                frame_zero_ground_retry_state.triggered,
+            ),
+            "frame_zero_ground_retry_initial_min_distance_m": np.asarray(
+                frame_zero_ground_retry_state.initial_min_distance_m,
+                dtype=np.float64,
+            ),
+            "frame_zero_ground_retry_corrected_min_distance_m": np.asarray(
+                frame_zero_ground_retry_state.corrected_min_distance_m,
+                dtype=np.float64,
+            ),
+            "frame_zero_ground_retry_lift_m": np.asarray(
+                frame_zero_ground_retry_state.lift_m,
+                dtype=np.float64,
+            ),
+            "frame_zero_ground_retry_interior_margin_m": np.asarray(
+                frame_zero_ground_retry_state.interior_margin_m,
+                dtype=np.float64,
+            ),
+            "frame_zero_ground_retry_initial_sqp_iterations": np.asarray(
+                frame_zero_ground_retry_state.initial_sqp_iterations,
+                dtype=np.int32,
+            ),
             "frame_costs": np.asarray(frame_costs, dtype=np.float64),
             "sqp_iteration_counts": np.asarray(sqp_iteration_counts, dtype=np.int32),
             "sqp_stop_reasons": np.asarray(sqp_stop_reasons, dtype=str),
+            "ground_non_penetration_violation": np.asarray(
+                ground_non_penetration_violations,
+                dtype=np.float64,
+            ),
+            "object_non_penetration_violation": np.asarray(
+                object_non_penetration_violations,
+                dtype=np.float64,
+            ),
+            "foot_sticking_violation": np.asarray(
+                foot_sticking_violations,
+                dtype=np.float64,
+            ),
+            "foot_lock_violation": np.asarray(
+                foot_lock_violations,
+                dtype=np.float64,
+            ),
+            "self_collision_violation": np.asarray(
+                self_collision_violations,
+                dtype=np.float64,
+            ),
+            "joint_limits_violation": np.asarray(
+                joint_limits_violations,
+                dtype=np.float64,
+            ),
+            "constraint_mode_foot_sticking": constraint_mode_foot_sticking_array,
+            "constraint_mode_object_non_penetration_released": (constraint_mode_object_non_penetration_released_array),
+            "constraint_mode_trust_region_released": np.asarray(
+                constraint_mode_trust_region_released,
+                dtype=bool,
+            ),
             "orientation_tracking_enabled": np.asarray(self.orientation_tracking_enabled),
             "orientation_diagnostics_enabled": np.asarray(self.orientation_diagnostics_enabled),
             "orientation_human_joint_names": np.asarray(
@@ -1402,6 +2353,32 @@ class InteractionMeshRetargeter:
             "fps": float(fps),
             "cost": cost,
         }
+        if saved_human_joint_quaternions_wxyz is not None:
+            saved_human_orientation_names = np.asarray(
+                source_orientation_joint_names,
+                dtype=str,
+            )
+            saved_human_orientation_quaternions = np.asarray(
+                saved_human_joint_quaternions_wxyz,
+                dtype=np.float32,
+            )
+            save_payload.update(
+                {
+                    "human_orientation_joint_names": (saved_human_orientation_names),
+                    "human_orientation_quaternions_wxyz": (saved_human_orientation_quaternions),
+                    "human_orientation_sha256": np.asarray(
+                        compute_human_orientation_sha256(
+                            saved_human_orientation_names,
+                            saved_human_orientation_quaternions,
+                        )
+                    ),
+                }
+            )
+        if result_metadata:
+            conflicts = sorted(set(result_metadata).intersection(save_payload))
+            if conflicts:
+                raise ValueError(f"Result metadata cannot replace solver fields: {conflicts}")
+            save_payload.update({key: np.asarray(value) for key, value in result_metadata.items()})
         save_payload.update(
             self._object_points_save_payload(
                 has_dynamic_object=self.has_dynamic_object,
@@ -1419,15 +2396,24 @@ class InteractionMeshRetargeter:
                     "interaction_target_vertices_w": np.asarray(interaction_target_vertices_w_list, dtype=np.float32),
                     "interaction_tetrahedra": packed_tetrahedra,
                     "interaction_tetrahedra_counts": tetrahedra_counts,
-                    "interaction_num_human_vertices": len(self.laplacian_match_links),
-                    "interaction_num_object_vertices": len(object_points_local),
+                    "interaction_num_human_vertices": np.asarray(
+                        len(self.laplacian_match_links),
+                        dtype=np.int32,
+                    ),
+                    "interaction_num_object_vertices": np.asarray(
+                        len(object_points_local),
+                        dtype=np.int32,
+                    ),
                     "interaction_mesh_edges_default": self.interaction_mesh_edges,
                 }
             )
-        np.savez(dest_res_path, **save_payload)
+        write_result_artifact(dest_res_path, save_payload)
         print("Saving results to path:", dest_res_path)
 
         if self.visualize:
+            saved_foot_sticking_enabled = bool(
+                self.activate_foot_sticking and self.q_a_init_idx < 12,
+            )
             robot_dof = len(self.viser_robot.get_actuated_joint_limits())
             replay_overlay_handles = []
 
@@ -1462,6 +2448,12 @@ class InteractionMeshRetargeter:
 
             def _draw_replay_overlays(q: np.ndarray, frame_float: float) -> None:
                 _clear_replay_overlay()
+                replay_frame_idx = _interaction_mesh_frame_index(frame_float)
+                self._update_foot_sticking_status(
+                    replay_frame_idx,
+                    foot_sticking_states[replay_frame_idx],
+                    constraints_enabled=saved_foot_sticking_enabled,
+                )
 
                 if self.debug:
                     human_frame = _human_joints_at_frame(frame_float)
@@ -1534,7 +2526,7 @@ class InteractionMeshRetargeter:
                 initial_interp_mult=2,
                 loop=False,
                 qpos_to_viser_joint_indices=self.qpos_to_viser_joint_indices,
-                on_frame=_draw_replay_overlays if (self.debug or self.show_interaction_mesh) else None,
+                on_frame=_draw_replay_overlays,
             )
 
             # 4) optional: visibility toggle
@@ -1565,6 +2557,12 @@ class InteractionMeshRetargeter:
                     callback=lambda: _set_mesh_visibility(not bool(show_meshes_cb.value)),
                 )
 
+            self._update_foot_sticking_status(
+                0,
+                foot_sticking_states[0],
+                constraints_enabled=saved_foot_sticking_enabled,
+            )
+
         return (
             np.array(retargeted_motions)[1:],
             obj_pts_demo_list,
@@ -1580,20 +2578,21 @@ class InteractionMeshRetargeter:
         target_laplacian: np.ndarray,
         adj_list: list[list[int]],
         obj_pts_local: np.ndarray,
-        foot_sticking: tuple[bool, bool],
+        foot_sticking: Mapping[str, bool],
         w_nominal_tracking: float = 0.0,
         q_a_nominal: np.ndarray | None = None,
         verbose=False,
         init_t=False,
         frame_idx: int = 0,
         orientation_target_matrices: np.ndarray | None = None,
-    ):
+        requested_mode: ConstraintMode | None = None,
+    ) -> SQPIterationResult:
         """The main function to solve a single iteration of the DiffIK problem.
         Args:
             q_locked: the locked robot and object configuration.
             q_a_n_last: the last optimized robot configuration at current time step.
             q_t_last: the robot and object configuration at the last time step.
-            foot_sticking: a sequence of booleans indicating whether the foot [left, right] is sticking to the ground.
+            foot_sticking: named left/right source-foot sticking states.
             smpl_joints: the (possibly scaled) SMPL joint positions to match for IK.
             q_ref: the reference robot configuration.
             smpl_joints_original: the original SMPL joint positions (used for contact matching).
@@ -1651,7 +2650,8 @@ class InteractionMeshRetargeter:
         object_non_penetration_constraints = []
 
         # Linear equality
-        constraints += [cp.Constant(J_L[:, self.q_a_indices]) @ dqa - lap_var == -lap0_vec]
+        active_laplacian_jacobian = J_L
+        constraints += [cp.Constant(active_laplacian_jacobian) @ dqa - lap_var == -lap0_vec]
 
         # Foot constraints (sticking + foot lock window Z pinning)
         apply_foot_sticking = (self.q_a_init_idx < 12) and self.activate_foot_sticking
@@ -1679,7 +2679,7 @@ class InteractionMeshRetargeter:
                     apply_left = (side == "left") and foot_sticking[left_key]
                     apply_right = (side == "right") and foot_sticking[right_key]
                     if apply_left or apply_right:
-                        Jxy = J_WF[:2, self.q_a_indices]  # (2 x nq_act)
+                        Jxy = J_WF[:2]
                         delta = p_WF_t_last_dict[key] - p_WF_dict[key]
                         p_lb = delta - self.foot_sticking_tolerance
                         p_ub = delta + self.foot_sticking_tolerance
@@ -1706,7 +2706,7 @@ class InteractionMeshRetargeter:
 
                     z_anchor = self.foot_lock.z_floor
                     z_delta = z_anchor - p_WF_dict[key][2]
-                    Jz = J_WF[2, self.q_a_indices]
+                    Jz = J_WF[2]
                     constraints += [
                         Jz @ dqa >= z_delta - self.foot_lock.tolerance,
                         Jz @ dqa <= z_delta + self.foot_lock.tolerance,
@@ -1717,7 +2717,15 @@ class InteractionMeshRetargeter:
         for key, phi in phis.items():
             Ja_n_full = Js[key]
             Ja_n = Ja_n_full[self.q_a_indices]
-            rhs = -phi - self.penetration_tolerance
+            # The qpos update is subsequently normalized on the quaternion
+            # manifold, so a candidate that sits exactly on the linearized
+            # penetration boundary can end up slightly outside the configured
+            # tolerance in true MuJoCo geometry. Keep a small, bounded interior
+            # margin instead of weakening the nonlinear acceptance criterion.
+            rhs = self._non_penetration_linearization_rhs(
+                phi,
+                self.penetration_tolerance,
+            )
             constraint = Ja_n @ dqa >= rhs
             if self._collision_pair_involves_dynamic_object(*key):
                 object_non_penetration_constraints.append(constraint)
@@ -1794,24 +2802,108 @@ class InteractionMeshRetargeter:
                 obj_terms.append(cp.quad_form(dqa - dqa_smooth, Wsmooth))
 
         objective = cp.Minimize(cp.sum(obj_terms))
+
+        def _linearized_cost_at_step(active_step: np.ndarray) -> float:
+            """Evaluate this iteration's objective at one actual active-q step."""
+
+            step = np.asarray(active_step, dtype=np.float64)
+            if step.shape != (self.nq_a,) or not np.all(np.isfinite(step)):
+                raise ValueError(
+                    "The linearized objective step must be a finite vector with "
+                    f"shape ({self.nq_a},), got {step.shape}",
+                )
+            dqa.value = step
+            laplacian_value = active_laplacian_jacobian @ step + lap0_vec
+            lap_var.value = np.asarray(
+                laplacian_value,
+                dtype=np.float64,
+            ).reshape(-1)
+            value = objective.expr.value
+            if value is None or not np.isfinite(value):
+                raise RuntimeError(
+                    f"Linearized objective evaluation failed at frame {frame_idx}",
+                )
+            return float(value)
+
         solver_kwargs = {"verbose": verbose}
-        (
-            problem,
-            foot_sticking_resolution,
-            object_non_penetration_released,
-        ) = self._solve_with_foot_sticking_fallback(
-            objective=objective,
-            base_constraints=constraints,
-            object_non_penetration_constraints=object_non_penetration_constraints,
-            foot_sticking_constraints=foot_sticking_constraints,
-            foot_sticking_fallback_constraints=foot_sticking_fallback_constraints,
-            solver_kwargs=solver_kwargs,
-            remove_soc_on_failure=init_t,
-            release_on_failure=self.release_foot_sticking_on_infeasible,
-            release_object_non_penetration_on_failure=(self.release_object_non_penetration_on_infeasible),
-        )
+        if requested_mode is None:
+            problem, constraint_mode = self._solve_with_foot_sticking_fallback(
+                objective=objective,
+                base_constraints=constraints,
+                object_non_penetration_constraints=object_non_penetration_constraints,
+                foot_sticking_constraints=foot_sticking_constraints,
+                foot_sticking_fallback_constraints=foot_sticking_fallback_constraints,
+                solver_kwargs=solver_kwargs,
+                remove_soc_on_failure=init_t,
+                release_on_failure=self.release_foot_sticking_on_infeasible,
+                release_object_non_penetration_on_failure=(
+                    self.release_object_non_penetration_on_infeasible
+                    and self.activate_obj_non_penetration
+                    and self.object_name not in {"", "ground"}
+                    and bool(self.object_model_path)
+                ),
+            )
+        else:
+            problem, constraint_mode = self._solve_requested_constraint_mode(
+                objective=objective,
+                base_constraints=constraints,
+                object_non_penetration_constraints=object_non_penetration_constraints,
+                foot_sticking_constraints=foot_sticking_constraints,
+                foot_sticking_fallback_constraints=foot_sticking_fallback_constraints,
+                solver_kwargs=solver_kwargs,
+                requested_mode=requested_mode,
+                remove_soc_on_failure=init_t,
+            )
+
+        active_root_quaternion = bool(set(range(3, 7)).intersection(int(index) for index in self.q_a_indices))
+
+        def _candidate_at_alpha(
+            alpha: float,
+            proposal_step: np.ndarray,
+        ) -> SQPIterationResult:
+            """Evaluate one true-geometry point on the incumbent-to-QP segment."""
+
+            alpha_value = float(alpha)
+            if not np.isfinite(alpha_value) or not 0.0 <= alpha_value <= 1.0:
+                raise ValueError(f"Backtracking alpha must be within [0, 1], got {alpha}")
+            full_step = np.asarray(proposal_step, dtype=np.float64)
+            if full_step.shape != (self.nq_a,) or not np.all(np.isfinite(full_step)):
+                raise ValueError(
+                    f"The QP proposal must be a finite vector with shape ({self.nq_a},), got {full_step.shape}",
+                )
+
+            candidate_q = np.copy(q)
+            candidate_q[self.q_a_indices] = q_a_n_last + alpha_value * full_step
+            if alpha_value != 0.0 and active_root_quaternion:
+                quaternion_norm = float(np.linalg.norm(candidate_q[3:7]))
+                if not np.isfinite(quaternion_norm) or quaternion_norm <= np.finfo(np.float64).eps:
+                    raise RuntimeError(
+                        f"QP proposal produced an invalid root quaternion at frame {frame_idx}",
+                    )
+                candidate_q[3:7] /= quaternion_norm
+
+            actual_step = candidate_q[self.q_a_indices] - q_a_n_last
+            residuals = self._evaluate_nonlinear_constraint_residuals(
+                candidate_q,
+                q_t_last=q_t_last,
+                foot_sticking=foot_sticking,
+                frame_idx=frame_idx,
+                mode=constraint_mode,
+            )
+            return SQPIterationResult(
+                q=candidate_q,
+                linearized_cost=_linearized_cost_at_step(actual_step),
+                constraint_mode=constraint_mode,
+                residuals=residuals,
+            )
 
         if problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
+            incumbent = _candidate_at_alpha(
+                0.0,
+                np.zeros(self.nq_a, dtype=np.float64),
+            )
+            if incumbent.residuals.is_feasible(incumbent.constraint_mode):
+                return incumbent
             raise RuntimeError(
                 f"CVXPY solve failed at frame {frame_idx}: {problem.status}; "
                 f"foot tolerance={self.foot_sticking_tolerance}, "
@@ -1820,6 +2912,47 @@ class InteractionMeshRetargeter:
                 "release object non-penetration on infeasible="
                 f"{self.release_object_non_penetration_on_infeasible}"
             )
+
+        dqa_star = dqa.value
+        if dqa_star is None:
+            raise RuntimeError(
+                f"CVXPY solve returned no candidate at frame {frame_idx}: {problem.status}",
+            )
+        proposal_step = np.asarray(
+            dqa_star,
+            dtype=np.float64,
+        ).reshape(-1)
+        return self._accept_or_backtrack_candidate(
+            lambda alpha: _candidate_at_alpha(alpha, proposal_step),
+        )
+
+    @staticmethod
+    def _non_penetration_linearization_rhs(
+        signed_distance: float,
+        penetration_tolerance: float,
+    ) -> float:
+        """Return an interior collision boundary for one linearized solve."""
+
+        distance = float(signed_distance)
+        tolerance = float(penetration_tolerance)
+        if not np.isfinite(distance):
+            raise ValueError("signed_distance must be finite")
+        if not np.isfinite(tolerance) or tolerance < 0:
+            raise ValueError(
+                "penetration_tolerance must be finite and non-negative",
+            )
+        buffer = collision_interior_margin_m(tolerance)
+        return -distance - tolerance + buffer
+
+    def _record_constraint_fallbacks(
+        self,
+        *,
+        frame_idx: int,
+        foot_sticking_resolution: str | None,
+        foot_sticking_fallback_available: bool,
+        object_non_penetration_released: bool,
+    ) -> None:
+        """Record only the constraint mode used by the successful solve."""
         if foot_sticking_resolution == "relaxed" and frame_idx not in self.foot_sticking_fallback_frames:
             self.foot_sticking_fallback_frames.add(frame_idx)
             print(
@@ -1830,11 +2963,13 @@ class InteractionMeshRetargeter:
                 flush=True,
             )
         elif foot_sticking_resolution == "released" and frame_idx not in self.foot_sticking_release_frames:
-            self.foot_sticking_fallback_frames.add(frame_idx)
+            if foot_sticking_fallback_available:
+                self.foot_sticking_fallback_frames.add(frame_idx)
             self.foot_sticking_release_frames.add(frame_idx)
+            relaxed_attempt = " and relaxed" if foot_sticking_fallback_available else ""
             print(
                 "WARNING: Released foot-sticking constraints at "
-                f"frame {frame_idx} after the normal and relaxed problems "
+                f"frame {frame_idx} after the normal{relaxed_attempt} problems "
                 "remained infeasible; all other constraints are preserved.",
                 flush=True,
             )
@@ -1848,14 +2983,80 @@ class InteractionMeshRetargeter:
                 flush=True,
             )
 
-        dqa_star = dqa.value
-        cost = problem.value
+    @staticmethod
+    def _solve_requested_constraint_mode(
+        *,
+        objective,
+        base_constraints: list,
+        object_non_penetration_constraints: list,
+        foot_sticking_constraints: list,
+        foot_sticking_fallback_constraints: list,
+        solver_kwargs: dict,
+        requested_mode: ConstraintMode,
+        remove_soc_on_failure: bool,
+    ) -> tuple[cp.Problem, ConstraintMode]:
+        """Solve one linearization without changing its foot/object mode."""
 
-        q_star = np.copy(q)
-        q_star[self.q_a_indices] = dqa_star + q_a_n_last
-        q_star[3:7] /= np.linalg.norm(q_star[3:7]) + 1e-12
+        if requested_mode.foot_sticking == "normal":
+            if not foot_sticking_constraints:
+                raise ValueError("Normal foot mode requires active foot-sticking constraints")
+            active_foot_constraints = foot_sticking_constraints
+        elif requested_mode.foot_sticking == "relaxed":
+            if not foot_sticking_fallback_constraints:
+                raise ValueError("Relaxed foot mode requires fallback foot-sticking constraints")
+            active_foot_constraints = foot_sticking_fallback_constraints
+        elif requested_mode.foot_sticking == "released":
+            if not foot_sticking_constraints:
+                raise ValueError("Released foot mode requires an active source foot constraint")
+            active_foot_constraints = []
+        else:
+            if foot_sticking_constraints:
+                raise ValueError("Inactive foot mode cannot omit active foot-sticking constraints")
+            active_foot_constraints = []
 
-        return q_star, cost
+        active_base_constraints = list(base_constraints)
+        trust_region_released = bool(requested_mode.trust_region_released)
+        if trust_region_released:
+            active_base_constraints = [
+                constraint
+                for constraint in active_base_constraints
+                if not isinstance(constraint, cp.constraints.second_order.SOC)
+            ]
+
+        def _solve() -> cp.Problem:
+            object_constraints = (
+                [] if requested_mode.object_non_penetration_released else object_non_penetration_constraints
+            )
+            problem = cp.Problem(
+                objective,
+                [
+                    *active_base_constraints,
+                    *object_constraints,
+                    *active_foot_constraints,
+                ],
+            )
+            problem.solve(solver=cp.CLARABEL, **solver_kwargs)
+            return problem
+
+        problem = _solve()
+        if (
+            problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
+            and remove_soc_on_failure
+            and not trust_region_released
+        ):
+            active_base_constraints = [
+                constraint
+                for constraint in active_base_constraints
+                if not isinstance(constraint, cp.constraints.second_order.SOC)
+            ]
+            trust_region_released = True
+            problem = _solve()
+
+        return problem, ConstraintMode(
+            foot_sticking=requested_mode.foot_sticking,
+            object_non_penetration_released=(requested_mode.object_non_penetration_released),
+            trust_region_released=trust_region_released,
+        )
 
     @staticmethod
     def _solve_with_foot_sticking_fallback(
@@ -1868,10 +3069,12 @@ class InteractionMeshRetargeter:
         remove_soc_on_failure: bool,
         release_on_failure: bool,
         release_object_non_penetration_on_failure: bool,
-    ) -> tuple[cp.Problem, str | None, bool]:
-        """Retry replaceable foot and robot-object constraints in a fixed order."""
+    ) -> tuple[cp.Problem, ConstraintMode]:
+        """Preserve the historical linear-infeasibility fallback helper."""
 
         active_base_constraints = list(base_constraints)
+        trust_region_released = False
+        optimal_statuses = (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
 
         def _solve(
             active_foot_constraints: list,
@@ -1890,51 +3093,78 @@ class InteractionMeshRetargeter:
             problem.solve(solver=cp.CLARABEL, **solver_kwargs)
             return problem
 
-        problem = _solve(foot_sticking_constraints)
-        if problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE) and remove_soc_on_failure:
+        foot_modes: list[tuple[str, list]] = [
+            (
+                "normal" if foot_sticking_constraints else "inactive",
+                foot_sticking_constraints,
+            )
+        ]
+        if foot_sticking_constraints and foot_sticking_fallback_constraints:
+            foot_modes.append(("relaxed", foot_sticking_fallback_constraints))
+        if foot_sticking_constraints and release_on_failure:
+            foot_modes.append(("released", []))
+
+        object_release_modes = [False]
+        if release_object_non_penetration_on_failure:
+            object_release_modes.append(True)
+        attempts = [
+            (object_released, foot_mode, active_foot_constraints)
+            for object_released in object_release_modes
+            for foot_mode, active_foot_constraints in foot_modes
+        ]
+
+        def _attempt(
+            object_released: bool,
+            foot_mode: str,
+            active_foot_constraints: list,
+        ) -> tuple[cp.Problem, ConstraintMode, bool]:
+            problem = _solve(
+                active_foot_constraints,
+                include_object_non_penetration=not object_released,
+            )
+            mode = ConstraintMode(
+                foot_sticking=foot_mode,
+                object_non_penetration_released=object_released,
+                trust_region_released=trust_region_released,
+            )
+            accepted = problem.status in optimal_statuses
+            return problem, mode, accepted
+
+        first_object_released, first_foot_mode, first_foot_constraints = attempts[0]
+        problem, mode, accepted = _attempt(
+            first_object_released,
+            first_foot_mode,
+            first_foot_constraints,
+        )
+        if accepted:
+            return problem, mode
+
+        if remove_soc_on_failure:
             active_base_constraints = [
                 constraint
                 for constraint in active_base_constraints
                 if not isinstance(constraint, cp.constraints.second_order.SOC)
             ]
-            problem = _solve(foot_sticking_constraints)
-
-        foot_sticking_resolution = None
-        if (
-            problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
-            and foot_sticking_constraints
-            and foot_sticking_fallback_constraints
-        ):
-            problem = _solve(foot_sticking_fallback_constraints)
-            if problem.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
-                foot_sticking_resolution = "relaxed"
-
-        if (
-            problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
-            and foot_sticking_constraints
-            and release_on_failure
-        ):
-            problem = _solve([])
-            if problem.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
-                foot_sticking_resolution = "released"
-
-        object_non_penetration_released = False
-        if (
-            problem.status not in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE)
-            and object_non_penetration_constraints
-            and release_object_non_penetration_on_failure
-        ):
-            problem = _solve(
-                [],
-                include_object_non_penetration=False,
+            trust_region_released = True
+            problem, mode, accepted = _attempt(
+                first_object_released,
+                first_foot_mode,
+                first_foot_constraints,
             )
-            if problem.status in (cp.OPTIMAL, cp.OPTIMAL_INACCURATE):
-                object_non_penetration_released = True
+            if accepted:
+                return problem, mode
 
-        return (
-            problem,
-            foot_sticking_resolution,
-            object_non_penetration_released,
+        for object_released, foot_mode, active_foot_constraints in attempts[1:]:
+            problem, mode, accepted = _attempt(
+                object_released,
+                foot_mode,
+                active_foot_constraints,
+            )
+            if accepted:
+                return problem, mode
+        return problem, ConstraintMode(
+            foot_sticking=first_foot_mode,
+            trust_region_released=trust_region_released,
         )
 
     def _is_foot_locked_in_window(self, foot_link_key: str, frame_idx: int) -> bool:
@@ -1944,6 +3174,450 @@ class InteractionMeshRetargeter:
             return False
 
         return any(start <= frame_idx <= end for start, end in self._foot_lock_windows.get(side, ()))
+
+    def _foot_sticking_by_side(
+        self,
+        foot_sticking: Mapping[str, bool],
+    ) -> dict[str, bool]:
+        """Normalize one frame's source-foot flags without relying on key order."""
+
+        values: dict[str, bool] = {}
+        for key in foot_sticking:
+            side = self._name_side(key)
+            if side is not None:
+                values[side] = bool(foot_sticking[key])
+        missing = [side for side in ("left", "right") if side not in values]
+        if missing:
+            raise ValueError("foot_sticking must include one left* and one right* key")
+        return values
+
+    def _has_active_foot_sticking_constraints(
+        self,
+        foot_sticking: Mapping[str, bool],
+    ) -> bool:
+        """Return whether this frame actually contributes a foot-sticking constraint."""
+
+        if not self.activate_foot_sticking or self.q_a_init_idx >= 12:
+            return False
+        return any(self._foot_sticking_by_side(foot_sticking).values())
+
+    def _frame_zero_ground_retry_eligible(
+        self,
+        *,
+        q_nominal_list: np.ndarray | None,
+        original: bool,
+    ) -> bool:
+        """Return whether this motion invocation belongs to the narrow policy."""
+
+        return (
+            getattr(self, "retry_frame_zero_ground_on_infeasible", False)
+            and bool(original)
+            and q_nominal_list is None
+            and getattr(self.task_constants, "TASK_TYPE", None) == "robot_only"
+            and self.object_name == "ground"
+            and self.object_model_path is None
+            and 2 in self.q_a_indices
+        )
+
+    @staticmethod
+    def _is_pure_frame_zero_ground_failure(
+        exception: RuntimeError,
+    ) -> bool:
+        """Recognize only a structured, unreleased, pure-ground failure."""
+
+        if not isinstance(exception, SQPNonlinearFeasibilityError):
+            return False
+        residuals = exception.closest_residuals
+        mode = exception.closest_constraint_mode
+        return (
+            exception.frame_idx == 0
+            and exception.total_iterations is not None
+            and exception.total_iterations > 0
+            and residuals is not None
+            and mode is not None
+            and mode.foot_sticking == "inactive"
+            and not mode.object_non_penetration_released
+            and not mode.trust_region_released
+            and residuals.ground_non_penetration > NONLINEAR_FEASIBILITY_ATOL
+            and residuals.object_non_penetration <= NONLINEAR_FEASIBILITY_ATOL
+            and residuals.foot_sticking <= NONLINEAR_FEASIBILITY_ATOL
+            and residuals.foot_lock <= NONLINEAR_FEASIBILITY_ATOL
+            and residuals.self_collision <= NONLINEAR_FEASIBILITY_ATOL
+            and residuals.joint_limits <= NONLINEAR_FEASIBILITY_ATOL
+        )
+
+    @staticmethod
+    def _frame_zero_ground_retry_stop_reason(
+        stop_reason: str,
+        *,
+        triggered: bool,
+    ) -> str:
+        """Carry the retry provenance through a later full-sequence foot retry."""
+
+        prefix = "frame_zero_ground_retry:"
+        if not triggered or stop_reason.startswith(prefix):
+            return stop_reason
+        return f"{prefix}{stop_reason}"
+
+    def _minimum_active_horizontal_ground_distance(
+        self,
+        q: np.ndarray,
+    ) -> float:
+        """Measure active robot-ground pairs and reject non-horizontal terrain."""
+
+        candidate = np.asarray(q, dtype=np.float64)
+        if candidate.shape != self.robot_data.qpos.shape or not np.isfinite(candidate).all():
+            raise ValueError(
+                "Frame-zero ground retry requires one finite full model qpos "
+                f"with shape {self.robot_data.qpos.shape}; got {candidate.shape}",
+            )
+        self.robot_data.qpos[:] = candidate
+        mujoco.mj_forward(self.robot_model, self.robot_data)
+        threshold = max(
+            float(self.collision_detection_threshold),
+            float(self.penetration_tolerance) + NONLINEAR_FEASIBILITY_ATOL,
+        )
+        candidates = self._prefilter_pairs_with_mj_collision(threshold)
+        fromto = np.zeros(6, dtype=np.float64)
+        distances: list[float] = []
+        for geom1, geom2 in candidates:
+            geom1_name = self._geom_names[geom1]
+            geom2_name = self._geom_names[geom2]
+            if not self._environment_collision_pair_is_active(
+                geom1_name,
+                geom2_name,
+            ):
+                continue
+            geom1_is_ground = "ground" in geom1_name.lower()
+            geom2_is_ground = "ground" in geom2_name.lower()
+            if geom1_is_ground == geom2_is_ground:
+                continue
+            ground_geom = geom1 if geom1_is_ground else geom2
+            robot_geom = geom2 if geom1_is_ground else geom1
+            if int(self.robot_model.geom_type[ground_geom]) != int(
+                mujoco.mjtGeom.mjGEOM_PLANE,
+            ):
+                raise RuntimeError(
+                    "The active ground geometry is not a MuJoCo plane",
+                )
+            ground_rotation = self.robot_data.geom_xmat[ground_geom].reshape(
+                3,
+                3,
+            )
+            ground_normal = ground_rotation[:, 2]
+            if not np.allclose(
+                ground_normal,
+                np.asarray([0.0, 0.0, 1.0]),
+                atol=1e-10,
+                rtol=0.0,
+            ):
+                raise RuntimeError(
+                    "The active ground plane is not horizontal with world +Z normal",
+                )
+            if int(self.robot_model.geom_bodyid[robot_geom]) == 0:
+                raise RuntimeError(
+                    "The active ground pair does not contain a robot body geometry",
+                )
+            distance = float(
+                mujoco.mj_geomDistance(
+                    self.robot_model,
+                    self.robot_data,
+                    geom1,
+                    geom2,
+                    threshold,
+                    fromto,
+                )
+            )
+            if not np.isfinite(distance):
+                raise RuntimeError(
+                    "MuJoCo returned a non-finite robot-ground distance",
+                )
+            distances.append(distance)
+        if not distances:
+            raise RuntimeError(
+                "No active robot-ground pair was available for frame-zero correction",
+            )
+        return min(distances)
+
+    def _prepare_frame_zero_ground_retry(
+        self,
+        *,
+        frame_entry_q: np.ndarray,
+        foot_sticking: Mapping[str, bool],
+        exception: RuntimeError,
+        state: FrameZeroGroundRetryState,
+    ) -> FrameZeroGroundRetryState | None:
+        """Create one validated root-Z correction, or return no retry."""
+
+        if not state.eligible or state.attempted or not self._is_pure_frame_zero_ground_failure(exception):
+            return None
+        original_q = np.array(frame_entry_q, dtype=np.float64, copy=True)
+        strict_mode = ConstraintMode("inactive")
+        original_residuals = self._evaluate_nonlinear_constraint_residuals(
+            original_q,
+            q_t_last=original_q,
+            foot_sticking=foot_sticking,
+            frame_idx=0,
+            mode=strict_mode,
+        )
+        if not (
+            original_residuals.ground_non_penetration > NONLINEAR_FEASIBILITY_ATOL
+            and original_residuals.object_non_penetration <= NONLINEAR_FEASIBILITY_ATOL
+            and original_residuals.foot_sticking <= NONLINEAR_FEASIBILITY_ATOL
+            and original_residuals.foot_lock <= NONLINEAR_FEASIBILITY_ATOL
+            and original_residuals.self_collision <= NONLINEAR_FEASIBILITY_ATOL
+            and original_residuals.joint_limits <= NONLINEAR_FEASIBILITY_ATOL
+        ):
+            raise RuntimeError(
+                "The original frame-entry state was not a pure ground violation",
+            )
+        initial_distance = self._minimum_active_horizontal_ground_distance(
+            original_q,
+        )
+        margin = collision_interior_margin_m(self.penetration_tolerance)
+        lift = max(
+            0.0,
+            -initial_distance - self.penetration_tolerance + margin,
+        )
+        if not np.isfinite(lift) or lift <= 0.0:
+            raise RuntimeError(
+                "The strict horizontal-ground correction was not finite and positive",
+            )
+        corrected_q = original_q.copy()
+        corrected_q[2] += lift
+        corrected_distance = self._minimum_active_horizontal_ground_distance(
+            corrected_q,
+        )
+        if not np.isclose(
+            corrected_distance,
+            initial_distance + lift,
+            atol=1e-8,
+            rtol=0.0,
+        ):
+            raise RuntimeError(
+                "The measured ground distance did not follow the one-axis horizontal lift",
+            )
+        corrected_residuals = self._evaluate_nonlinear_constraint_residuals(
+            corrected_q,
+            q_t_last=corrected_q,
+            foot_sticking=foot_sticking,
+            frame_idx=0,
+            mode=strict_mode,
+        )
+        if not corrected_residuals.is_feasible(strict_mode):
+            raise RuntimeError(
+                "The one-axis horizontal-ground correction did not pass true-geometry validation",
+            )
+        corrected_q.setflags(write=False)
+        return FrameZeroGroundRetryState(
+            eligible=True,
+            attempted=True,
+            triggered=True,
+            initial_min_distance_m=initial_distance,
+            corrected_min_distance_m=corrected_distance,
+            lift_m=lift,
+            interior_margin_m=margin,
+            initial_sqp_iterations=int(exception.total_iterations),
+            corrected_q=corrected_q,
+        )
+
+    def _should_retry_without_foot_sticking(
+        self,
+        *,
+        exception: RuntimeError,
+        foot_sticking: Mapping[str, bool],
+        already_retrying: bool,
+    ) -> bool:
+        """Return whether a failed frame justifies a full no-foot retry."""
+
+        message = str(exception)
+        if isinstance(exception, SQPNonlinearFeasibilityError):
+            solve_failed = True
+            foot_related_failure = exception.foot_related_failure
+        else:
+            solve_failed = "CVXPY solve failed" in message
+            foot_related_failure = self._has_active_foot_sticking_constraints(
+                foot_sticking,
+            )
+        return (
+            self.retry_without_foot_sticking_on_infeasible
+            and not already_retrying
+            and solve_failed
+            and foot_related_failure
+            and self._has_active_foot_sticking_constraints(foot_sticking)
+        )
+
+    def _current_foot_positions(self) -> dict[str, np.ndarray]:
+        """Read foot body origins from the current MuJoCo forward state."""
+
+        positions: dict[str, np.ndarray] = {}
+        for key, link_name in self.foot_links.items():
+            body_id = mujoco.mj_name2id(
+                self.robot_model,
+                mujoco.mjtObj.mjOBJ_BODY,
+                link_name,
+            )
+            if body_id < 0:
+                raise ValueError(f"Foot body {link_name!r} not found in MuJoCo model")
+            positions[key] = np.array(
+                self.robot_data.xpos[body_id],
+                dtype=np.float64,
+                copy=True,
+            )
+        return positions
+
+    def _evaluate_nonlinear_constraint_residuals(
+        self,
+        q: np.ndarray,
+        *,
+        q_t_last: np.ndarray,
+        foot_sticking: Mapping[str, bool],
+        frame_idx: int,
+        mode: ConstraintMode,
+    ) -> NonlinearConstraintResiduals:
+        """Evaluate hard constraints on true MuJoCo geometry at ``q``.
+
+        Values are non-negative excesses beyond the configured tolerance. A
+        released constraint remains measured for artifact diagnostics but is
+        omitted by :meth:`NonlinearConstraintResiduals.is_feasible`.
+        """
+
+        candidate = np.asarray(q, dtype=np.float64)
+        if candidate.shape != self.robot_data.qpos.shape or not np.isfinite(candidate).all():
+            raise ValueError(
+                f"SQP candidate must be a finite full qpos vector with shape {self.robot_data.qpos.shape}, "
+                f"got {candidate.shape}",
+            )
+
+        self.robot_data.qpos[:] = candidate
+        mujoco.mj_forward(self.robot_model, self.robot_data)
+        candidate_foot_positions = self._current_foot_positions()
+
+        collision_threshold = max(
+            float(self.collision_detection_threshold),
+            float(self.penetration_tolerance) + NONLINEAR_FEASIBILITY_ATOL,
+        )
+        candidates = self._prefilter_pairs_with_mj_collision(
+            collision_threshold,
+        )
+        ground_violation = 0.0
+        object_violation = 0.0
+        fromto = np.zeros(6, dtype=np.float64)
+        for geom1, geom2 in candidates:
+            geom1_name = self._geom_names[geom1]
+            geom2_name = self._geom_names[geom2]
+            if not self._environment_collision_pair_is_active(
+                geom1_name,
+                geom2_name,
+            ):
+                continue
+            distance = float(
+                mujoco.mj_geomDistance(
+                    self.robot_model,
+                    self.robot_data,
+                    geom1,
+                    geom2,
+                    collision_threshold,
+                    fromto,
+                )
+            )
+            violation = max(
+                0.0,
+                -distance - float(self.penetration_tolerance),
+            )
+            if "ground" in geom1_name.lower() or "ground" in geom2_name.lower():
+                ground_violation = max(ground_violation, violation)
+            else:
+                object_violation = max(object_violation, violation)
+
+        self_collision_violation = 0.0
+        self_collision_active = self._self_collision_enabled and (
+            self._self_collision_windows is None
+            or any(start <= frame_idx <= end for start, end in self._self_collision_windows)
+        )
+        if self_collision_active:
+            self_collision_threshold = max(
+                collision_threshold,
+                float(self._self_collision_tolerance) + NONLINEAR_FEASIBILITY_ATOL,
+            )
+            for geom1, geom2 in self._self_collision_geom_pairs:
+                distance = float(
+                    mujoco.mj_geomDistance(
+                        self.robot_model,
+                        self.robot_data,
+                        geom1,
+                        geom2,
+                        self_collision_threshold,
+                        fromto,
+                    )
+                )
+                self_collision_violation = max(
+                    self_collision_violation,
+                    0.0,
+                    float(self._self_collision_tolerance) - distance,
+                )
+
+        foot_lock_violation = 0.0
+        if self.q_a_init_idx < 12 and self.foot_lock.enable:
+            for key, position in candidate_foot_positions.items():
+                if self._is_foot_locked_in_window(key, frame_idx):
+                    foot_lock_violation = max(
+                        foot_lock_violation,
+                        0.0,
+                        abs(float(position[2]) - float(self.foot_lock.z_floor)) - float(self.foot_lock.tolerance),
+                    )
+
+        foot_sticking_violation = 0.0
+        if self.q_a_init_idx < 12 and self.activate_foot_sticking and mode.foot_sticking != "inactive":
+            side_values = self._foot_sticking_by_side(foot_sticking)
+            previous = np.asarray(q_t_last, dtype=np.float64)
+            self.robot_data.qpos[:] = previous
+            mujoco.mj_forward(self.robot_model, self.robot_data)
+            previous_foot_positions = self._current_foot_positions()
+            if mode.foot_sticking == "normal":
+                tolerance = self.foot_sticking_tolerance
+            elif mode.foot_sticking == "relaxed":
+                tolerance = self.foot_sticking_fallback_tolerance
+            else:
+                fallback_is_effective = (
+                    self.foot_sticking_fallback_tolerance is not None
+                    and self.foot_sticking_fallback_tolerance > self.foot_sticking_tolerance
+                )
+                tolerance = (
+                    self.foot_sticking_fallback_tolerance if fallback_is_effective else self.foot_sticking_tolerance
+                )
+            if tolerance is None:
+                raise RuntimeError("Relaxed foot-sticking mode requires a fallback tolerance")
+            for key, position in candidate_foot_positions.items():
+                side = self._name_side(key)
+                if side is not None and side_values[side]:
+                    xy_error = np.abs(
+                        position[:2] - previous_foot_positions[key][:2],
+                    )
+                    foot_sticking_violation = max(
+                        foot_sticking_violation,
+                        float(np.max(np.maximum(0.0, xy_error - tolerance))),
+                    )
+
+        joint_limit_violation = 0.0
+        if self.activate_joint_limits:
+            active_q = candidate[self.q_a_indices]
+            joint_limit_violation = float(
+                max(
+                    0.0,
+                    float(np.max(self.q_a_lb - active_q)),
+                    float(np.max(active_q - self.q_a_ub)),
+                )
+            )
+
+        return NonlinearConstraintResiduals(
+            ground_non_penetration=ground_violation,
+            object_non_penetration=object_violation,
+            foot_sticking=foot_sticking_violation,
+            foot_lock=foot_lock_violation,
+            self_collision=self_collision_violation,
+            joint_limits=joint_limit_violation,
+        )
 
     def _compute_self_collision_constraints(self, frame_idx: int):
         """Compute Jacobians and distances for self-collision body pairs.
@@ -1999,6 +3673,109 @@ class InteractionMeshRetargeter:
 
         return Js, phis
 
+    @staticmethod
+    def _accept_or_backtrack_candidate(
+        evaluate_alpha: Callable[[float], SQPIterationResult],
+        *,
+        bisection_iterations: int = NONLINEAR_BACKTRACK_BISECTION_ITERATIONS,
+    ) -> SQPIterationResult:
+        """Keep a feasible incumbent or return the largest known feasible step."""
+
+        if bisection_iterations <= 0:
+            raise ValueError("bisection_iterations must be positive")
+
+        incumbent = evaluate_alpha(0.0)
+        proposal = evaluate_alpha(1.0)
+        if proposal.residuals.is_feasible(proposal.constraint_mode):
+            return proposal
+        if not incumbent.residuals.is_feasible(incumbent.constraint_mode):
+            return proposal
+
+        feasible_alpha = 0.0
+        infeasible_alpha = 1.0
+        for _ in range(bisection_iterations):
+            alpha = 0.5 * (feasible_alpha + infeasible_alpha)
+            candidate = evaluate_alpha(alpha)
+            if candidate.residuals.is_feasible(candidate.constraint_mode):
+                feasible_alpha = alpha
+            else:
+                infeasible_alpha = alpha
+        if feasible_alpha == 0.0:
+            return incumbent
+        return evaluate_alpha(feasible_alpha)
+
+    @staticmethod
+    def _select_feasible_candidate(
+        candidates: list[SQPIterationResult],
+        *,
+        atol: float = NONLINEAR_FEASIBILITY_ATOL,
+    ) -> SQPIterationResult | None:
+        """Return the strictest feasible candidate without comparing local costs."""
+
+        feasible = [
+            candidate
+            for candidate in candidates
+            if candidate.residuals.is_feasible(
+                candidate.constraint_mode,
+                atol=atol,
+            )
+        ]
+        if not feasible:
+            return None
+        foot_priority = {
+            "inactive": 0,
+            "normal": 0,
+            "relaxed": 1,
+            "released": 2,
+        }
+
+        def _mode_priority(candidate: SQPIterationResult) -> tuple[bool, int, bool]:
+            mode = candidate.constraint_mode
+            return (
+                mode.object_non_penetration_released,
+                foot_priority[mode.foot_sticking],
+                mode.trust_region_released,
+            )
+
+        best_priority = min(_mode_priority(candidate) for candidate in feasible)
+        return next(candidate for candidate in reversed(feasible) if _mode_priority(candidate) == best_priority)
+
+    def _constraint_mode_schedule(
+        self,
+        foot_sticking: Mapping[str, bool],
+    ) -> tuple[ConstraintMode, ...]:
+        """Return full-SQP modes from strictest to most permissive."""
+
+        if self._has_active_foot_sticking_constraints(foot_sticking):
+            foot_modes = ["normal"]
+            if (
+                self.foot_sticking_fallback_tolerance is not None
+                and self.foot_sticking_fallback_tolerance > self.foot_sticking_tolerance
+            ):
+                foot_modes.append("relaxed")
+            if self.release_foot_sticking_on_infeasible:
+                foot_modes.append("released")
+        else:
+            foot_modes = ["inactive"]
+
+        object_release_modes = [False]
+        if (
+            self.release_object_non_penetration_on_infeasible
+            and self.activate_obj_non_penetration
+            and self.object_name not in {"", "ground"}
+            and bool(self.object_model_path)
+        ):
+            object_release_modes.append(True)
+
+        return tuple(
+            ConstraintMode(
+                foot_sticking=foot_mode,
+                object_non_penetration_released=object_released,
+            )
+            for object_released in object_release_modes
+            for foot_mode in foot_modes
+        )
+
     def iterate(
         self,
         q_locked: np.ndarray,
@@ -2007,7 +3784,7 @@ class InteractionMeshRetargeter:
         target_laplacian: np.ndarray,
         adj_list: list[list[int]],
         obj_pts_local: np.ndarray,
-        foot_sticking: tuple[bool, bool],
+        foot_sticking: Mapping[str, bool],
         w_nominal_tracking: float = 0.0,
         q_a_nominal: np.ndarray | None = None,
         init_t: bool = False,
@@ -2015,67 +3792,171 @@ class InteractionMeshRetargeter:
         frame_idx: int = 0,
         orientation_target_matrices: np.ndarray | None = None,
     ):
-        """Run SQP until its cost stalls, with a maximum-iteration safety cap.
+        """Run a complete SQP solve for each constraint mode in priority order.
 
         ``n_iter`` is retained as an optional per-call safety-cap override for
-        compatibility. Normal retargeting uses ``self.sqp_max_iterations``.
+        compatibility and applies independently to every attempted mode. Each
+        less-strict mode restarts from the frame-entry state.
         """
         max_iterations = self.sqp_max_iterations if n_iter is None else int(n_iter)
         if max_iterations <= 0:
             raise ValueError("n_iter must be positive when provided")
 
         min_iterations = min(self.sqp_min_iterations, max_iterations)
-        best_q = np.copy(q_n)
-        best_cost = np.inf
-        stalled_iterations = 0
-        stop_reason = "max_iterations"
+        all_candidates: list[SQPIterationResult] = []
+        accepted: SQPIterationResult | None = None
+        accepted_stop_reason = "all_modes_exhausted"
+        total_iterations = 0
+        frame_entry_q = np.copy(q_n)
+        step_tolerance = max(
+            NONLINEAR_FEASIBILITY_ATOL,
+            min(1e-3, float(self.step_size) * 1e-2),
+        )
+        mode_schedule = self._constraint_mode_schedule(foot_sticking)
+        for requested_mode in mode_schedule:
+            mode_q = np.copy(frame_entry_q)
+            latest_feasible: SQPIterationResult | None = None
+            previous_consecutive_feasible_q: np.ndarray | None = None
+            stable_feasible_iterations = 0
+            mode_stop_reason = "max_iterations"
 
-        for iteration_idx in range(max_iterations):
-            q_a_n_last = q_n[self.q_a_indices]
-            q_n, cost = self.solve_single_iteration(
-                q_locked=q_locked,
-                q_a_n_last=q_a_n_last,
-                q_t_last=q_t_last,
-                target_laplacian=target_laplacian,
-                adj_list=adj_list,
-                obj_pts_local=obj_pts_local,
-                foot_sticking=foot_sticking,
-                q_a_nominal=q_a_nominal,
-                w_nominal_tracking=w_nominal_tracking,
-                init_t=init_t,
-                frame_idx=frame_idx,
-                orientation_target_matrices=orientation_target_matrices,
-            )
+            for mode_iteration_idx in range(max_iterations):
+                total_iterations += 1
+                try:
+                    result = self.solve_single_iteration(
+                        q_locked=q_locked,
+                        q_a_n_last=mode_q[self.q_a_indices],
+                        q_t_last=q_t_last,
+                        target_laplacian=target_laplacian,
+                        adj_list=adj_list,
+                        obj_pts_local=obj_pts_local,
+                        foot_sticking=foot_sticking,
+                        q_a_nominal=q_a_nominal,
+                        w_nominal_tracking=w_nominal_tracking,
+                        init_t=init_t,
+                        frame_idx=frame_idx,
+                        orientation_target_matrices=orientation_target_matrices,
+                        requested_mode=requested_mode,
+                    )
+                except RuntimeError as exc:
+                    if "CVXPY solve failed" not in str(exc) and "CVXPY solve returned no candidate" not in str(exc):
+                        raise
+                    mode_stop_reason = (
+                        "linear_solve_failed_after_feasible" if latest_feasible is not None else "linear_solve_failed"
+                    )
+                    break
 
-            cost = float(cost)
-            if not np.isfinite(cost):
-                raise RuntimeError(
-                    f"SQP returned a non-finite cost at frame {frame_idx}, iteration {iteration_idx}: {cost}"
+                if not isinstance(result, SQPIterationResult):
+                    raise TypeError(
+                        "solve_single_iteration must return SQPIterationResult",
+                    )
+                if (
+                    result.constraint_mode.foot_sticking != requested_mode.foot_sticking
+                    or result.constraint_mode.object_non_penetration_released
+                    != requested_mode.object_non_penetration_released
+                ):
+                    raise RuntimeError(
+                        "solve_single_iteration changed the requested foot/object constraint mode",
+                    )
+                if not np.isfinite(result.linearized_cost):
+                    raise RuntimeError(
+                        "SQP returned a non-finite local cost at "
+                        f"frame {frame_idx}, mode {requested_mode}, "
+                        f"iteration {mode_iteration_idx}: "
+                        f"{result.linearized_cost}"
+                    )
+
+                mode_q = result.q
+                all_candidates.append(result)
+                current_is_feasible = result.residuals.is_feasible(
+                    result.constraint_mode,
                 )
-
-            if np.isinf(best_cost):
-                best_q = np.copy(q_n)
-                best_cost = cost
-                stalled_iterations = 0
-            else:
-                improvement = best_cost - cost
-                significant_improvement = self.sqp_abs_cost_tolerance + self.sqp_rel_cost_tolerance * abs(best_cost)
-                if improvement > 0:
-                    best_q = np.copy(q_n)
-                    best_cost = cost
-                if improvement > significant_improvement:
-                    stalled_iterations = 0
+                if current_is_feasible:
+                    feasible_step_norm = (
+                        np.inf
+                        if previous_consecutive_feasible_q is None
+                        else float(
+                            np.linalg.norm(
+                                result.q[self.q_a_indices] - previous_consecutive_feasible_q[self.q_a_indices],
+                            )
+                        )
+                    )
+                    latest_feasible = result
+                    if feasible_step_norm <= step_tolerance:
+                        stable_feasible_iterations += 1
+                    else:
+                        stable_feasible_iterations = 0
+                    previous_consecutive_feasible_q = np.copy(result.q)
                 else:
-                    stalled_iterations += 1
+                    stable_feasible_iterations = 0
+                    previous_consecutive_feasible_q = None
 
-            completed_iterations = iteration_idx + 1
-            if completed_iterations >= min_iterations and stalled_iterations >= self.sqp_convergence_patience:
-                stop_reason = "cost_stalled"
+                completed_in_mode = mode_iteration_idx + 1
+                if completed_in_mode >= min_iterations and stable_feasible_iterations >= self.sqp_convergence_patience:
+                    mode_stop_reason = "feasible_step_stable"
+                    break
+
+            if latest_feasible is not None:
+                accepted = latest_feasible
+                accepted_stop_reason = mode_stop_reason
                 break
 
-        self.last_sqp_iteration_count = completed_iterations
-        self.last_sqp_stop_reason = stop_reason
-        return best_q, best_cost
+        if accepted is None:
+            closest_candidate = min(
+                all_candidates,
+                key=lambda candidate: candidate.residuals.hard_max_violation(
+                    candidate.constraint_mode,
+                ),
+                default=None,
+            )
+            maximum_violation = (
+                np.inf
+                if closest_candidate is None
+                else closest_candidate.residuals.hard_max_violation(
+                    closest_candidate.constraint_mode,
+                )
+            )
+            residual_details = "unavailable" if closest_candidate is None else repr(closest_candidate.residuals)
+            active_foot_failure_observed = any(
+                candidate.constraint_mode.foot_sticking in {"normal", "relaxed"}
+                and candidate.residuals.foot_sticking > NONLINEAR_FEASIBILITY_ATOL
+                for candidate in all_candidates
+            )
+            footless_mode_attempted = any(mode.foot_sticking in {"inactive", "released"} for mode in mode_schedule)
+            foot_related_failure = (
+                self._has_active_foot_sticking_constraints(foot_sticking)
+                and active_foot_failure_observed
+                and not footless_mode_attempted
+            )
+            raise SQPNonlinearFeasibilityError(
+                "SQP nonlinear feasibility failed at "
+                f"frame {frame_idx} after {total_iterations} total iterations "
+                f"across {len(mode_schedule)} constraint modes; "
+                "no true-geometry feasible candidate was found; "
+                f"minimum hard-constraint violation={maximum_violation:.9g}; "
+                f"closest residuals={residual_details}",
+                foot_related_failure=foot_related_failure,
+                frame_idx=frame_idx,
+                total_iterations=total_iterations,
+                closest_residuals=(None if closest_candidate is None else closest_candidate.residuals),
+                closest_constraint_mode=(None if closest_candidate is None else closest_candidate.constraint_mode),
+                minimum_hard_constraint_violation=maximum_violation,
+            )
+
+        self.last_sqp_iteration_count = total_iterations
+        self.last_sqp_stop_reason = accepted_stop_reason
+        self.last_constraint_mode = accepted.constraint_mode
+        self.last_nonlinear_constraint_residuals = accepted.residuals
+        self._record_constraint_fallbacks(
+            frame_idx=frame_idx,
+            foot_sticking_resolution=accepted.constraint_mode.foot_sticking,
+            foot_sticking_fallback_available=(
+                self.foot_sticking_fallback_tolerance is not None
+                and self.foot_sticking_fallback_tolerance > self.foot_sticking_tolerance
+            ),
+            object_non_penetration_released=(accepted.constraint_mode.object_non_penetration_released),
+        )
+        return np.copy(accepted.q), float(accepted.linearized_cost)
 
     def _draw_self_collision_geoms(self):
         """Draw collision cylinders for self-collision geom pairs in viser."""
@@ -2457,11 +4338,23 @@ class InteractionMeshRetargeter:
         geom1_id: int,
         geom2_id: int,
     ) -> bool:
-        """Return whether a collision pair contains the task's dynamic object."""
+        """Return whether an active environment pair is object rather than ground.
+
+        The historical name is retained for compatibility, but static climbing
+        terrain is also an object constraint and must participate in the same
+        explicit release mode.
+        """
 
         if self.object_name in {"", "ground"}:
             return False
-        return self.object_name in self._geom_names[geom1_id] or self.object_name in self._geom_names[geom2_id]
+        geom1_name = self._geom_names[geom1_id]
+        geom2_name = self._geom_names[geom2_id]
+        if "ground" in geom1_name.lower() or "ground" in geom2_name.lower():
+            return False
+        return self._environment_collision_pair_is_active(
+            geom1_name,
+            geom2_name,
+        )
 
     def _environment_collision_pair_is_active(self, geom1_name: str, geom2_name: str) -> bool:
         """Select ground pairs and, when enabled, object pairs for hard constraints."""
@@ -2650,8 +4543,8 @@ class InteractionMeshRetargeter:
                 p_XC = pos_world
                 J_XC = J
 
-            # Store reduced Jacobian and position with hard copies to avoid aliasing
-            J_XC_dict[name] = np.array(J_XC[:, self.q_a_indices], dtype=float, copy=True)  # FIX (copy)
+            # Store reduced Jacobian and position with hard copies to avoid aliasing.
+            J_XC_dict[name] = np.array(J_XC[:, self.q_a_indices], dtype=float, copy=True)
             p_XC_dict[name] = np.array(p_XC, dtype=float, copy=True)
 
         P_WO = {"position": obj_pos, "rotation": obj_rot} if obj_frame else None

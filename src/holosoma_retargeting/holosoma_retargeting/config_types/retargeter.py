@@ -1,3 +1,5 @@
+# ruff: noqa: CPY001
+
 """Configuration types for retargeter settings."""
 
 from __future__ import annotations
@@ -52,9 +54,11 @@ class RetargeterConfig:
     """
 
     q_a_init_idx: int = -7
-    """Index in robot's configuration where optimization variables start.
-    -7: starts from floating base, -3: starts from translation of floating base,
-    0: starts from actuated DOF, 12: starts from waist, 15: starts from left shoulder"""
+    """Offset used to select the first optimized qpos address as ``7 + offset``.
+    For example, -7 starts at qpos[0] (the full floating base), -3 starts at
+    qpos[4] (the final three floating-base quaternion components), and 0 starts
+    at qpos[7] (the actuated DOFs). Positive offsets select later actuated
+    joints according to the configured robot topology."""
 
     activate_joint_limits: bool = True
     """Whether to enforce joint limits during retargeting."""
@@ -90,6 +94,13 @@ class RetargeterConfig:
     """Whether to retry an entire sequence without foot sticking when a local
     release still cannot recover a feasible trajectory."""
 
+    retry_frame_zero_ground_on_infeasible: bool = True
+    """Whether an eligible robot-only frame-zero solve may retry once after a
+    pure ground feasibility failure by lifting only the optimized floating-base
+    Z coordinate to the strict collision interior margin. Object interaction,
+    climbing, nominal-trajectory, non-ground, and later-frame failures are
+    never eligible."""
+
     foot_lock: FootLockConfig = field(default_factory=FootLockConfig)
     """Configuration for explicit frame-range based foot locking."""
 
@@ -103,13 +114,7 @@ class RetargeterConfig:
     """Minimum SQP iterations before convergence-based stopping is allowed."""
 
     sqp_convergence_patience: int = 3
-    """Stop after this many consecutive iterations without a significant cost decrease."""
-
-    sqp_abs_cost_tolerance: float = 1e-9
-    """Absolute cost decrease below which an SQP iteration counts as stalled."""
-
-    sqp_rel_cost_tolerance: float = 1e-7
-    """Relative cost decrease below which an SQP iteration counts as stalled."""
+    """Stop after this many consecutive feasible iterations with a stable step."""
 
     visualize: bool = False
     """Whether to visualize the retargeting process."""
@@ -124,7 +129,7 @@ class RetargeterConfig:
     show_interaction_mesh: bool = False
     """Whether to show the solver interaction mesh in the retargeting viewer."""
 
-    save_interaction_mesh: bool = False
+    save_interaction_mesh: bool = True
     """Whether to save interaction mesh vertices and tetrahedra into the output .npz."""
 
     interaction_mesh_mode: Literal["source", "target", "both"] = "both"

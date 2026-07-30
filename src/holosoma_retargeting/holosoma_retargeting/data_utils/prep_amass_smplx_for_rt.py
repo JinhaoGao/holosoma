@@ -39,6 +39,9 @@ class AMASSParameters:
 class ConvertedAMASSMotion:
     global_joint_positions: np.ndarray
     root_quaternions_wxyz: np.ndarray
+    orientation_joint_names: tuple[str, ...]
+    orientation_quaternions_wxyz: np.ndarray
+    orientation_source: str
     height: float
     source_fps: float
     fps: float
@@ -60,6 +63,68 @@ def _resample_indices(num_frames: int, source_fps: float, target_fps: float) -> 
         raise ValueError(f"Target FPS must be in (0, {source_fps}], got {target_fps}")
     sample_times = np.arange(0.0, num_frames / source_fps, 1.0 / target_fps)
     return np.unique(np.minimum(np.rint(sample_times * source_fps).astype(np.int64), num_frames - 1))
+
+
+def _smplx_global_joint_quaternions_wxyz(
+    global_orient: torch.Tensor,
+    body_pose: torch.Tensor,
+    parents: torch.Tensor | np.ndarray,
+) -> np.ndarray:
+    """Compose direct SMPL-X local rotations along the model's kinematic tree."""
+
+    joint_count = len(AMASS_DEMO_JOINTS)
+    root_rotvec = global_orient.detach().cpu().numpy().astype(np.float64, copy=False)
+    body_rotvec = body_pose.detach().cpu().numpy().astype(np.float64, copy=False)
+    if root_rotvec.ndim != 2 or root_rotvec.shape[1] != 3:
+        raise ValueError(f"SMPL-X global_orient must have shape (T, 3), got {root_rotvec.shape}")
+    if body_rotvec.shape != (root_rotvec.shape[0], (joint_count - 1) * 3):
+        raise ValueError(
+            "SMPL-X body_pose must contain one local axis-angle rotation for each "
+            f"non-root joint, got {body_rotvec.shape}"
+        )
+
+    parent_indices = np.asarray(
+        parents.detach().cpu().numpy() if torch.is_tensor(parents) else parents,
+        dtype=np.int64,
+    ).reshape(-1)
+    if parent_indices.size < joint_count:
+        raise ValueError(
+            f"SMPL-X parent hierarchy must contain at least {joint_count} joints, got {parent_indices.size}"
+        )
+    parent_indices = parent_indices[:joint_count]
+    if parent_indices[0] != -1:
+        raise ValueError(f"SMPL-X root parent must be -1, got {parent_indices[0]}")
+
+    local_rotvec = np.concatenate(
+        [root_rotvec[:, None, :], body_rotvec.reshape(root_rotvec.shape[0], joint_count - 1, 3)],
+        axis=1,
+    )
+    local_matrices = (
+        Rotation.from_rotvec(local_rotvec.reshape(-1, 3))
+        .as_matrix()
+        .reshape(
+            root_rotvec.shape[0],
+            joint_count,
+            3,
+            3,
+        )
+    )
+    global_matrices = np.empty_like(local_matrices)
+    global_matrices[:, 0] = local_matrices[:, 0]
+    for joint_idx in range(1, joint_count):
+        parent_idx = int(parent_indices[joint_idx])
+        if parent_idx < 0 or parent_idx >= joint_idx:
+            raise ValueError(
+                f"SMPL-X parent hierarchy must be topologically ordered; joint {joint_idx} has parent {parent_idx}"
+            )
+        global_matrices[:, joint_idx] = global_matrices[:, parent_idx] @ local_matrices[:, joint_idx]
+
+    return (
+        Rotation.from_matrix(global_matrices.reshape(-1, 3, 3))
+        .as_quat(scalar_first=True)
+        .reshape(root_rotvec.shape[0], joint_count, 4)
+        .astype(np.float32)
+    )
 
 
 def load_amass_parameters(input_file: Path | str, fps: float = 30.0) -> AMASSParameters:
@@ -119,12 +184,19 @@ def convert_amass_parameters(
         height = compute_smplx_height(body_model, parameters.betas)
 
     joints = np.concatenate(joint_batches, axis=0).astype(np.float32, copy=False)
-    root_quaternions = Rotation.from_rotvec(parameters.global_orient.numpy()).as_quat(scalar_first=True)
+    orientation_quaternions = _smplx_global_joint_quaternions_wxyz(
+        parameters.global_orient,
+        parameters.body_pose,
+        body_model.parents,
+    )
     if not np.isfinite(height) or height <= 0:
         raise ValueError(f"Computed invalid SMPL-X height: {height}")
     return ConvertedAMASSMotion(
         global_joint_positions=joints,
-        root_quaternions_wxyz=root_quaternions.astype(np.float32),
+        root_quaternions_wxyz=orientation_quaternions[:, 0].copy(),
+        orientation_joint_names=tuple(AMASS_DEMO_JOINTS),
+        orientation_quaternions_wxyz=orientation_quaternions,
+        orientation_source="direct_local_rotation_fk",
         height=height,
         source_fps=parameters.source_fps,
         fps=parameters.fps,
@@ -141,7 +213,7 @@ def save_converted_amass(
     if output_path.exists() and not overwrite:
         raise FileExistsError(f"Output already exists: {output_path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(
+    np.savez_compressed(
         output_path,
         global_joint_positions=motion.global_joint_positions,
         height=np.float32(motion.height),
@@ -149,7 +221,13 @@ def save_converted_amass(
         fps=np.float32(motion.fps),
         joint_names=np.asarray(AMASS_DEMO_JOINTS, dtype=str),
         root_quaternions_wxyz=motion.root_quaternions_wxyz,
+        orientation_joint_names=np.asarray(motion.orientation_joint_names, dtype=str),
+        orientation_quaternions_wxyz=motion.orientation_quaternions_wxyz,
+        orientation_source=np.asarray(motion.orientation_source),
+        quaternion_convention=np.asarray("wxyz"),
+        orientation_coordinate_system=np.asarray("right_handed_z_up"),
         source_format=np.asarray("amass"),
+        source_coordinate_system=np.asarray("right_handed_z_up"),
         coordinate_system=np.asarray("right_handed_z_up"),
         source_file=np.asarray(str(Path(source_file).expanduser().resolve())),
     )

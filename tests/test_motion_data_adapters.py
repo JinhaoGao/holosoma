@@ -1,4 +1,4 @@
-# ruff: noqa: PT009, PT027
+# ruff: noqa: CPY001, PT009, PT027
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
 from holosoma_retargeting.config_types.data_type import (  # noqa: E402
+    DEMO_JOINT_PARENT_INDICES,
     DEMO_JOINTS_REGISTRY,
     MotionDataConfig,
     normalize_data_format,
@@ -24,6 +25,7 @@ from holosoma_retargeting.data_utils.motion_data import (  # noqa: E402
     discover_motion_files,
     load_human_motion,
     resolve_motion_path,
+    validate_motion_skeleton_contract,
     validate_motion_task,
 )
 from holosoma_retargeting.src.utils import extract_foot_sticking_sequence_velocity  # noqa: E402
@@ -43,6 +45,10 @@ def _save_standard_npz(
     fps: float = 30.0,
     root_quaternions: np.ndarray | None = None,
     global_joint_quaternions: np.ndarray | None = None,
+    orientation_joint_names: tuple[str, ...] | None = None,
+    orientation_quaternions: np.ndarray | None = None,
+    orientation_provenance: str | None = None,
+    orientation_source: str | None = None,
 ) -> None:
     joints = _joints(data_format) if joints is None else joints
     payload = {
@@ -50,11 +56,50 @@ def _save_standard_npz(
         "joint_names": np.asarray(DEMO_JOINTS_REGISTRY[data_format]),
         "height": np.float32(height),
         "fps": np.float32(fps),
+        "source_format": np.asarray(data_format),
     }
     if root_quaternions is not None:
         payload["root_quaternions_wxyz"] = root_quaternions
     if global_joint_quaternions is not None:
         payload["global_joint_quaternions_wxyz"] = global_joint_quaternions
+    if orientation_joint_names is not None:
+        payload["orientation_joint_names"] = np.asarray(
+            orientation_joint_names,
+            dtype=str,
+        )
+    if orientation_quaternions is not None:
+        payload["orientation_quaternions_wxyz"] = orientation_quaternions
+    if orientation_provenance is not None:
+        payload["orientation_provenance"] = np.asarray(
+            orientation_provenance,
+        )
+    if orientation_source is not None:
+        payload["orientation_source"] = np.asarray(
+            orientation_source,
+        )
+    if orientation_joint_names is not None or orientation_quaternions is not None:
+        coordinate_system = "right_handed_z_up" if data_format in {"amass", "gvhmr"} else "z_up"
+        payload["quaternion_convention"] = np.asarray("wxyz")
+        payload["coordinate_system"] = np.asarray(coordinate_system)
+        if data_format in {"amass", "gvhmr"}:
+            payload["orientation_coordinate_system"] = np.asarray(
+                coordinate_system,
+            )
+    np.savez(path, **payload)
+
+
+def _tamper_npz(
+    path: Path,
+    *,
+    remove: tuple[str, ...] = (),
+    replace: dict[str, str] | None = None,
+) -> None:
+    with np.load(path, allow_pickle=False) as data:
+        payload = {key: np.array(data[key], copy=True) for key in data.files}
+    for key in remove:
+        payload.pop(key)
+    for key, value in (replace or {}).items():
+        payload[key] = np.asarray(value)
     np.savez(path, **payload)
 
 
@@ -78,6 +123,33 @@ class MotionFormatRegistrationTests(unittest.TestCase):
             validate_motion_task("gvhmr", "object_interaction")
         self.assertEqual(validate_motion_task("omomo", "object_interaction"), "omomo")
 
+    def test_custom_human_topology_must_be_one_rooted_tree(self):
+        valid = MotionDataConfig(
+            data_format="amass",
+            demo_joints=["Root", "Child", "Leaf"],
+            joint_parent_indices=(-1, 0, 1),
+        )
+        self.assertEqual(
+            valid.resolved_joint_parent_indices,
+            (-1, 0, 1),
+        )
+
+        invalid_cases = {
+            "rooted": (-1, -1, 1),
+            "cycles": (-1, 2, 1),
+            "self-parent": (-1, 1, 0),
+            "valid joint indices": (-1, 0, 3),
+        }
+        for message, parents in invalid_cases.items():
+            with self.subTest(parents=parents):
+                invalid = MotionDataConfig(
+                    data_format="amass",
+                    demo_joints=["Root", "Child", "Leaf"],
+                    joint_parent_indices=parents,
+                )
+                with self.assertRaisesRegex(ValueError, message):
+                    _ = invalid.resolved_joint_parent_indices
+
     def test_all_five_formats_have_g1_mappings(self):
         for data_format in ("amass", "lafan", "omomo", "noetix_mocap", "gvhmr"):
             with self.subTest(data_format=data_format):
@@ -97,9 +169,180 @@ class MotionFormatRegistrationTests(unittest.TestCase):
                 )
                 self.assertEqual(list(contacts[0]), config.toe_names)
 
+    def test_every_registered_format_has_one_complete_rooted_topology(self):
+        for data_format, joint_names in DEMO_JOINTS_REGISTRY.items():
+            with self.subTest(data_format=data_format):
+                parents = np.asarray(
+                    DEMO_JOINT_PARENT_INDICES[data_format],
+                    dtype=np.int32,
+                )
+                self.assertEqual(parents.shape, (len(joint_names),))
+                self.assertEqual(np.flatnonzero(parents == -1).size, 1)
+                for joint_index in range(len(joint_names)):
+                    visited = set()
+                    current = joint_index
+                    while current != -1:
+                        self.assertNotIn(current, visited)
+                        visited.add(current)
+                        current = int(parents[current])
+
 
 class MotionAdapterTests(unittest.TestCase):
-    def test_amass_loads_legacy_and_standard_metadata(self):
+    def test_all_registered_direct_orientation_npz_contracts_load(self):
+        orientation_sources = {
+            "amass": "direct_local_rotation_fk",
+            "gvhmr": "direct_local_rotation_fk",
+            "lafan": "bvh_rotation_channels_fk",
+            "mocap": "bone_rotation_channels_fk",
+            "noetix_mocap": "bvh_rotation_channels_fk",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            for data_format, orientation_source in orientation_sources.items():
+                with self.subTest(data_format=data_format):
+                    orientation_name = DEMO_JOINTS_REGISTRY[data_format][0]
+                    quaternions = np.zeros((3, 1, 4), dtype=np.float32)
+                    quaternions[..., 0] = 1.0
+                    _save_standard_npz(
+                        directory / f"{data_format}.npz",
+                        data_format,
+                        orientation_joint_names=(orientation_name,),
+                        orientation_quaternions=quaternions,
+                        orientation_source=orientation_source,
+                    )
+
+                    motion = load_human_motion(
+                        data_format,
+                        directory,
+                        data_format,
+                    )
+
+                    self.assertEqual(
+                        motion.orientation_joint_names,
+                        (orientation_name,),
+                    )
+                    np.testing.assert_array_equal(
+                        motion.orientation_quaternions_wxyz,
+                        quaternions,
+                    )
+
+    def test_direct_orientation_npz_metadata_tampering_fails_loudly(self):
+        cases = (
+            (
+                "missing_source_format",
+                ("source_format",),
+                {},
+                "source_format",
+            ),
+            (
+                "wrong_source_format",
+                (),
+                {"source_format": "gvhmr"},
+                "source_format",
+            ),
+            (
+                "missing_convention",
+                ("quaternion_convention",),
+                {},
+                "quaternion_convention",
+            ),
+            (
+                "xyzw_convention",
+                (),
+                {"quaternion_convention": "xyzw"},
+                "quaternion_convention",
+            ),
+            (
+                "missing_coordinate_system",
+                ("coordinate_system",),
+                {},
+                "coordinate_system",
+            ),
+            (
+                "wrong_coordinate_system",
+                (),
+                {"coordinate_system": "right_handed_y_up"},
+                "coordinate_system",
+            ),
+            (
+                "missing_orientation_coordinate_system",
+                ("orientation_coordinate_system",),
+                {},
+                "orientation_coordinate_system",
+            ),
+            (
+                "wrong_orientation_coordinate_system",
+                (),
+                {"orientation_coordinate_system": "right_handed_y_up"},
+                "orientation_coordinate_system",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            for task_name, remove, replace, message in cases:
+                with self.subTest(task_name=task_name):
+                    quaternions = np.zeros((3, 1, 4), dtype=np.float32)
+                    quaternions[..., 0] = 1.0
+                    path = directory / f"{task_name}.npz"
+                    _save_standard_npz(
+                        path,
+                        "amass",
+                        orientation_joint_names=("Pelvis",),
+                        orientation_quaternions=quaternions,
+                        orientation_source="direct_local_rotation_fk",
+                    )
+                    _tamper_npz(path, remove=remove, replace=replace)
+
+                    with self.assertRaisesRegex(
+                        (KeyError, ValueError),
+                        message,
+                    ):
+                        load_human_motion(
+                            "amass",
+                            directory,
+                            task_name,
+                        )
+
+    def test_optional_orientation_coordinate_system_is_validated_when_present(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            quaternions = np.zeros((3, 1, 4), dtype=np.float32)
+            quaternions[..., 0] = 1.0
+            path = directory / "dance.npz"
+            _save_standard_npz(
+                path,
+                "lafan",
+                orientation_joint_names=("Hips",),
+                orientation_quaternions=quaternions,
+                orientation_source="bvh_rotation_channels_fk",
+            )
+            _tamper_npz(
+                path,
+                replace={"orientation_coordinate_system": "right_handed_y_up"},
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "orientation_coordinate_system",
+            ):
+                load_human_motion("lafan", directory, "dance")
+
+    def test_generic_positional_mocap_climb_has_no_inferred_orientations(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            task_directory = directory / "climb"
+            task_directory.mkdir()
+            joints = _joints("mocap", frames=8)
+            np.save(task_directory / "motion.npy", joints)
+
+            motion = load_human_motion("mocap", directory, "climb")
+
+            np.testing.assert_array_equal(motion.joints, joints[::4])
+            self.assertIsNone(motion.orientation_joint_names)
+            self.assertIsNone(motion.orientation_quaternions_wxyz)
+            self.assertIsNone(motion.orientation_source)
+
+    def test_amass_loads_legacy_and_standard_metadata_without_legacy_orientation_fallbacks(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             directory = Path(tmpdir)
             joints = _joints("amass")
@@ -122,9 +365,10 @@ class MotionAdapterTests(unittest.TestCase):
             standard = load_human_motion("smplx", directory, "standard")
             self.assertEqual(standard.fps, 60.0)
             self.assertAlmostEqual(standard.human_height, 1.9, places=5)
-            np.testing.assert_allclose(standard.root_quaternions_wxyz[:, 0], 1.0)
+            self.assertIsNone(standard.root_quaternions_wxyz)
+            self.assertIsNone(standard.orientation_source)
 
-    def test_gvhmr_requires_and_normalizes_root_quaternions(self):
+    def test_gvhmr_does_not_treat_legacy_root_tensor_as_direct_provenance(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             directory = Path(tmpdir)
             quaternions = np.tile([0.0, 0.0, 0.0, 3.0], (3, 1))
@@ -134,11 +378,16 @@ class MotionAdapterTests(unittest.TestCase):
                 root_quaternions=quaternions,
             )
             motion = load_human_motion("gvhmr", directory, "tennis")
-            np.testing.assert_allclose(np.linalg.norm(motion.root_quaternions_wxyz, axis=1), 1.0)
+            self.assertIsNone(motion.root_quaternions_wxyz)
+            self.assertIsNone(motion.orientation_joint_names)
+            self.assertIsNone(motion.global_joint_quaternions_wxyz)
 
             _save_standard_npz(directory / "missing_root.npz", "gvhmr")
-            with self.assertRaisesRegex(KeyError, "root_quaternions_wxyz"):
-                load_human_motion("gvhmr", directory, "missing_root")
+            missing = load_human_motion("gvhmr", directory, "missing_root")
+            self.assertIsNone(missing.orientation_joint_names)
+            self.assertIsNone(missing.orientation_quaternions_wxyz)
+            self.assertIsNone(missing.root_quaternions_wxyz)
+            self.assertIsNone(missing.global_joint_quaternions_wxyz)
 
     def test_lafan_converts_official_y_up_npy(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -149,6 +398,48 @@ class MotionAdapterTests(unittest.TestCase):
             np.testing.assert_array_equal(motion.joints, joints_y_up[..., [0, 2, 1]])
             self.assertAlmostEqual(motion.human_height, 1.7)
             self.assertEqual(motion.fps, 30.0)
+            self.assertIsNone(motion.orientation_joint_names)
+            self.assertIsNone(motion.orientation_quaternions_wxyz)
+
+    def test_lafan_prefers_canonical_npz_with_direct_orientations(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            legacy_y_up = _joints("lafan")
+            np.save(directory / "dance.npy", legacy_y_up)
+            quaternions = np.zeros((3, 22, 4), dtype=np.float64)
+            quaternions[..., 0] = 1.0
+            _save_standard_npz(
+                directory / "dance.npz",
+                "lafan",
+                joints=np.full((3, 22, 3), 7.0, dtype=np.float32),
+                orientation_joint_names=tuple(DEMO_JOINTS_REGISTRY["lafan"]),
+                orientation_quaternions=quaternions,
+                orientation_source="bvh_rotation_channels_fk",
+            )
+
+            self.assertEqual(
+                resolve_motion_path(directory, "dance", "lafan"),
+                directory / "dance.npz",
+            )
+            motion = load_human_motion("lafan", directory, "dance")
+
+            np.testing.assert_array_equal(motion.joints, 7.0)
+            self.assertEqual(
+                motion.orientation_joint_names,
+                tuple(DEMO_JOINTS_REGISTRY["lafan"]),
+            )
+            self.assertEqual(
+                motion.global_joint_quaternions_wxyz.shape,
+                (3, 22, 4),
+            )
+            self.assertEqual(
+                motion.orientation_source,
+                "bvh_rotation_channels_fk",
+            )
+            np.testing.assert_array_equal(
+                motion.orientation_quaternions_wxyz,
+                quaternions.astype(np.float32),
+            )
 
     def test_noetix_validates_joint_order_and_height(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -168,7 +459,7 @@ class MotionAdapterTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "joint_names"):
                 load_human_motion("noetix_mocap", directory, "bad_names")
 
-    def test_noetix_loads_and_normalizes_global_joint_orientations(self):
+    def test_noetix_does_not_expose_unprovenanced_legacy_dense_orientations(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             directory = Path(tmpdir)
             joint_count = len(DEMO_JOINTS_REGISTRY["noetix_mocap"])
@@ -186,18 +477,35 @@ class MotionAdapterTests(unittest.TestCase):
                 "dance",
             )
 
+            self.assertIsNone(motion.orientation_joint_names)
+            self.assertIsNone(motion.orientation_quaternions_wxyz)
+            self.assertIsNone(motion.orientation_source)
             self.assertIsNone(motion.root_quaternions_wxyz)
-            self.assertEqual(
-                motion.global_joint_quaternions_wxyz.shape,
-                (3, joint_count, 4),
+            self.assertIsNone(motion.global_joint_quaternions_wxyz)
+
+    def test_noetix_does_not_accept_legacy_dense_orientations_even_with_legacy_markers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            joint_count = len(DEMO_JOINTS_REGISTRY["noetix_mocap"])
+            quaternions = np.zeros((3, joint_count, 4), dtype=np.float64)
+            quaternions[..., 0] = 2.0
+            _save_standard_npz(
+                directory / "dance.npz",
+                "noetix_mocap",
+                global_joint_quaternions=quaternions,
+                orientation_provenance="direct_source",
+                orientation_source="legacy_direct_bvh_fk",
             )
-            np.testing.assert_allclose(
-                np.linalg.norm(
-                    motion.global_joint_quaternions_wxyz,
-                    axis=-1,
-                ),
-                1.0,
-            )
+
+            with self.assertRaisesRegex(
+                KeyError,
+                "orientation_joint_names",
+            ):
+                load_human_motion(
+                    "noetix_mocap",
+                    directory,
+                    "dance",
+                )
 
     def test_noetix_rejects_invalid_global_joint_orientations(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -219,12 +527,21 @@ class MotionAdapterTests(unittest.TestCase):
                     np.full((3, joint_count, 4), np.nan),
                     "finite and non-zero",
                 ),
+                (
+                    "non_unit",
+                    np.full((3, joint_count, 4), 0.6),
+                    "must already be unit length",
+                ),
             ):
                 with self.subTest(name=name):
                     _save_standard_npz(
                         directory / f"{name}.npz",
                         "noetix_mocap",
-                        global_joint_quaternions=quaternions,
+                        orientation_joint_names=tuple(
+                            DEMO_JOINTS_REGISTRY["noetix_mocap"],
+                        ),
+                        orientation_quaternions=quaternions,
+                        orientation_source="bvh_rotation_channels_fk",
                     )
                     with self.assertRaisesRegex(ValueError, message):
                         load_human_motion(
@@ -232,6 +549,165 @@ class MotionAdapterTests(unittest.TestCase):
                             directory,
                             name,
                         )
+
+    def test_noetix_partial_orientation_subset_is_not_densified(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            names = ("Hips", "Spine1", "Neck")
+            quaternions = np.zeros((3, len(names), 4), dtype=np.float64)
+            quaternions[..., 0] = 1.0
+            _save_standard_npz(
+                directory / "partial.npz",
+                "noetix_mocap",
+                orientation_joint_names=names,
+                orientation_quaternions=quaternions,
+                orientation_source="bvh_rotation_channels_fk",
+            )
+
+            motion = load_human_motion(
+                "noetix_mocap",
+                directory,
+                "partial",
+            )
+
+            self.assertEqual(motion.orientation_joint_names, names)
+            self.assertEqual(
+                motion.orientation_quaternions_wxyz.shape,
+                (3, 3, 4),
+            )
+            self.assertEqual(motion.root_quaternions_wxyz.shape, (3, 4))
+            self.assertIsNone(motion.global_joint_quaternions_wxyz)
+            self.assertEqual(
+                motion.orientation_source,
+                "bvh_rotation_channels_fk",
+            )
+
+    def test_orientation_names_must_be_unique_canonical_subset(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            quaternions = np.zeros((3, 2, 4), dtype=np.float64)
+            quaternions[..., 0] = 1.0
+            for task_name, names, message in (
+                ("duplicate", ("Hips", "Hips"), "must be unique"),
+                ("unknown", ("Hips", "SyntheticSpine"), "not canonical"),
+            ):
+                with self.subTest(task_name=task_name):
+                    _save_standard_npz(
+                        directory / f"{task_name}.npz",
+                        "noetix_mocap",
+                        orientation_joint_names=names,
+                        orientation_quaternions=quaternions,
+                        orientation_source="bvh_rotation_channels_fk",
+                    )
+                    with self.assertRaisesRegex(ValueError, message):
+                        load_human_motion(
+                            "noetix_mocap",
+                            directory,
+                            task_name,
+                        )
+
+    def test_explicit_orientation_fields_require_approved_direct_source_provenance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            quaternions = np.zeros((3, 1, 4), dtype=np.float64)
+            quaternions[..., 0] = 1.0
+            for task_name, provenance, message in (
+                ("missing", None, "must contain"),
+                ("estimated", "estimated_from_positions", "approved direct-source"),
+                ("wrong_format", "direct_local_rotation_fk", "approved direct-source"),
+            ):
+                with self.subTest(task_name=task_name):
+                    _save_standard_npz(
+                        directory / f"{task_name}.npz",
+                        "noetix_mocap",
+                        orientation_joint_names=("Hips",),
+                        orientation_quaternions=quaternions,
+                        orientation_source=provenance,
+                    )
+                    with self.assertRaisesRegex(
+                        (KeyError, ValueError),
+                        message,
+                    ):
+                        load_human_motion(
+                            "noetix_mocap",
+                            directory,
+                            task_name,
+                        )
+
+    def test_loaded_motion_exposes_complete_registered_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            _save_standard_npz(directory / "walk.npz", "amass")
+
+            motion = load_human_motion("amass", directory, "walk")
+
+            self.assertEqual(
+                motion.joint_parent_indices,
+                DEMO_JOINT_PARENT_INDICES["amass"],
+            )
+            self.assertEqual(
+                motion.canonical_joint_names,
+                tuple(DEMO_JOINTS_REGISTRY["amass"]),
+            )
+
+    def test_pipeline_skeleton_contract_rejects_silent_relabeling(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            _save_standard_npz(directory / "walk.npz", "amass")
+            motion = load_human_motion("amass", directory, "walk")
+            canonical_names = list(DEMO_JOINTS_REGISTRY["amass"])
+            canonical_parents = DEMO_JOINT_PARENT_INDICES["amass"]
+
+            validate_motion_skeleton_contract(
+                motion,
+                canonical_names,
+                canonical_parents,
+                data_format="amass",
+            )
+            validate_motion_skeleton_contract(
+                motion,
+                list(canonical_names),
+                tuple(canonical_parents),
+                data_format="amass",
+            )
+
+            swapped_names = list(canonical_names)
+            swapped_names[0], swapped_names[1] = (
+                swapped_names[1],
+                swapped_names[0],
+            )
+            renamed_names = list(canonical_names)
+            renamed_names[-1] = "RenamedJoint"
+            for invalid_names in (swapped_names, renamed_names):
+                with self.subTest(invalid_names=invalid_names), self.assertRaisesRegex(
+                    ValueError,
+                    "joint names/order must match exactly",
+                ):
+                    validate_motion_skeleton_contract(
+                        motion,
+                        invalid_names,
+                        canonical_parents,
+                        data_format="amass",
+                    )
+
+    def test_pipeline_skeleton_contract_rejects_different_valid_topology(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            _save_standard_npz(directory / "walk.npz", "amass")
+            motion = load_human_motion("amass", directory, "walk")
+            canonical_names = DEMO_JOINTS_REGISTRY["amass"]
+            alternative_parents = (-1, *(0 for _ in canonical_names[1:]))
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "parent topology must match exactly",
+            ):
+                validate_motion_skeleton_contract(
+                    motion,
+                    canonical_names,
+                    alternative_parents,
+                    data_format="amass",
+                )
 
     def test_omomo_extracts_joints_and_wxyz_xyz_object_pose(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -247,6 +723,62 @@ class MotionAdapterTests(unittest.TestCase):
             np.testing.assert_array_equal(motion.joints, joints)
             np.testing.assert_array_equal(motion.object_poses_wxyz_xyz[0], [7, 4, 5, 6, 1, 2, 3])
             self.assertAlmostEqual(motion.human_height, 1.68)
+            self.assertIsNone(motion.orientation_joint_names)
+            self.assertIsNone(motion.orientation_quaternions_wxyz)
+
+    def test_omomo_reads_documented_inter_mimic_global_xyzw_block(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            values = torch.zeros(2, 591)
+            joints = _joints("omomo", frames=2)
+            values[:, 162:318] = torch.from_numpy(joints.reshape(2, -1))
+            values[:, 318:325] = torch.tensor([[1, 2, 3, 4, 5, 6, 7], [8, 9, 10, 11, 12, 13, 14]])
+            orientations_xyzw = torch.zeros(2, 52, 4)
+            orientations_xyzw[..., 3] = 1.0
+            orientations_xyzw[0, 0] = torch.tensor([0.0, 0.6, 0.0, 0.8])
+            values[:, 383:591] = orientations_xyzw.reshape(2, -1)
+            torch.save(values, directory / "sub1_box_002.pt")
+
+            motion = load_human_motion(
+                "omomo",
+                directory,
+                "sub1_box_002",
+                human_height=1.68,
+            )
+
+            self.assertEqual(
+                motion.orientation_joint_names,
+                tuple(DEMO_JOINTS_REGISTRY["omomo"]),
+            )
+            np.testing.assert_array_equal(
+                motion.orientation_quaternions_wxyz[0, 0],
+                np.asarray([0.8, 0.0, 0.6, 0.0], dtype=np.float32),
+            )
+            self.assertEqual(
+                motion.global_joint_quaternions_wxyz.shape,
+                (2, 52, 4),
+            )
+            self.assertEqual(
+                motion.orientation_source,
+                "intermimic_global_orientation_tensor",
+            )
+
+    def test_omomo_width_below_orientation_contract_stays_none(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            values = torch.zeros(1, 590)
+            values[:, 318:325] = torch.tensor([[0, 0, 0, 0, 0, 0, 1]])
+            torch.save(values, directory / "sub1_box_003.pt")
+
+            motion = load_human_motion(
+                "omomo",
+                directory,
+                "sub1_box_003",
+                human_height=1.68,
+            )
+
+            self.assertIsNone(motion.orientation_joint_names)
+            self.assertIsNone(motion.orientation_quaternions_wxyz)
 
     def test_invalid_shapes_do_not_fall_through_to_another_loader(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -287,6 +819,66 @@ class MotionDiscoveryTests(unittest.TestCase):
                 discover_motion_files(directory, "omomo", object_name="box"),
                 [directory / "sub1_box_001.pt"],
             )
+
+    def test_noetix_discovery_is_recursive_and_excludes_scene_cache(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            nested = directory / "session"
+            nested.mkdir()
+            _save_standard_npz(
+                nested / "company_motion.npz",
+                "noetix_mocap",
+            )
+            np.savez(
+                nested / "scene_reconstruction.npz",
+                mocap_joint_positions=np.zeros((1, 53, 3)),
+            )
+
+            self.assertEqual(
+                discover_motion_files(directory, "noetix_mocap"),
+                [nested / "company_motion.npz"],
+            )
+            self.assertEqual(
+                resolve_motion_path(
+                    directory,
+                    "company_motion",
+                    "noetix_mocap",
+                ),
+                nested / "company_motion.npz",
+            )
+
+    def test_recursive_noetix_preserves_same_stem_in_relative_directories(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            directory = Path(tmpdir)
+            for session in ("a", "b"):
+                nested = directory / session
+                nested.mkdir()
+                _save_standard_npz(
+                    nested / "same_name.npz",
+                    "noetix_mocap",
+                )
+
+            self.assertEqual(
+                discover_motion_files(directory, "noetix_mocap"),
+                [
+                    directory / "a" / "same_name.npz",
+                    directory / "b" / "same_name.npz",
+                ],
+            )
+            self.assertEqual(
+                resolve_motion_path(
+                    directory,
+                    "a/same_name",
+                    "noetix_mocap",
+                ),
+                directory / "a" / "same_name.npz",
+            )
+            with self.assertRaisesRegex(ValueError, "ambiguous"):
+                resolve_motion_path(
+                    directory,
+                    "same_name",
+                    "noetix_mocap",
+                )
 
 
 if __name__ == "__main__":

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+# ruff: noqa: CPY001
+
 """Convert the mixed Noetix BVH samples into a canonical retargeting format."""
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from argparse import ArgumentParser
@@ -94,6 +97,60 @@ NOETIX_FULLBODY_REDUCED_SPINE_JOINTS = {
     "RightHand",
 }
 
+# Newer Noetix exports can collapse the torso to a single ``Spine1`` joint.
+# Keep that source joint as the canonical ``Spine1`` retargeting anchor, then
+# synthesize the two non-anchor spine landmarks from the adjacent chain.
+NOETIX_FULLBODY_SINGLE_SPINE_MAPPING = {
+    **NOETIX_FULLBODY_REDUCED_SPINE_MAPPING,
+    "Spine": "Hips",
+    "Spine1": "Spine1",
+    "Spine2": "Neck",
+}
+
+NOETIX_FULLBODY_SINGLE_SPINE_JOINTS = NOETIX_FULLBODY_REDUCED_SPINE_JOINTS - {"Spine"}
+
+SYNTHETIC_ORIENTATION_JOINTS_BY_SOURCE_TYPE = {
+    "fullbody_reduced_spine_zyx": frozenset({"Spine2"}),
+    "fullbody_single_spine_zyx": frozenset({"Spine", "Spine2"}),
+}
+
+NOETIX_CANONICAL_PARENT_NAMES = {
+    "Hips": None,
+    "RightUpLeg": "Hips",
+    "RightLeg": "RightUpLeg",
+    "RightFoot": "RightLeg",
+    "RightToeBase": "RightFoot",
+    "LeftUpLeg": "Hips",
+    "LeftLeg": "LeftUpLeg",
+    "LeftFoot": "LeftLeg",
+    "LeftToeBase": "LeftFoot",
+    "Spine": "Hips",
+    "Spine1": "Spine",
+    "Spine2": "Spine1",
+    "Neck": "Spine2",
+    "Head": "Neck",
+    "RightShoulder": "Spine2",
+    "RightArm": "RightShoulder",
+    "RightForeArm": "RightArm",
+    "RightHand": "RightForeArm",
+    "LeftShoulder": "Spine2",
+    "LeftArm": "LeftShoulder",
+    "LeftForeArm": "LeftArm",
+    "LeftHand": "LeftForeArm",
+}
+
+
+def canonical_parent_indices() -> np.ndarray:
+    canonical_index = {name: index for index, name in enumerate(NOETIX_MOCAP_DEMO_JOINTS)}
+    return np.asarray(
+        [
+            -1 if NOETIX_CANONICAL_PARENT_NAMES[name] is None else canonical_index[NOETIX_CANONICAL_PARENT_NAMES[name]]
+            for name in NOETIX_MOCAP_DEMO_JOINTS
+        ],
+        dtype=np.int32,
+    )
+
+
 NOETIX_RUN23_MAPPING = {
     "Hips": "Hips",
     "RightUpLeg": "LeftHip",
@@ -135,6 +192,9 @@ def classify_bvh(joint_names: list[str]) -> tuple[str, dict[str, str]]:
     if {"LeftHip", "RightHip", "Chest4", "LeftWrist", "RightWrist"} <= names:
         return "run23_yxz", NOETIX_RUN23_MAPPING
 
+    if names >= NOETIX_FULLBODY_SINGLE_SPINE_JOINTS and "Spine" not in names:
+        return "fullbody_single_spine_zyx", NOETIX_FULLBODY_SINGLE_SPINE_MAPPING
+
     if names >= NOETIX_FULLBODY_REDUCED_SPINE_JOINTS and "Spine2" not in names:
         return "fullbody_reduced_spine_zyx", NOETIX_FULLBODY_REDUCED_SPINE_MAPPING
 
@@ -168,6 +228,26 @@ def select_canonical_joints(
     return values[:, indices, :]
 
 
+def select_direct_canonical_orientations(
+    values: np.ndarray,
+    source_joint_names: list[str],
+    mapping: dict[str, str],
+    source_type: str,
+) -> tuple[tuple[str, ...], np.ndarray]:
+    """Select only canonical frames backed by a real source BVH bone."""
+    omitted = SYNTHETIC_ORIENTATION_JOINTS_BY_SOURCE_TYPE.get(
+        source_type,
+        frozenset(),
+    )
+    orientation_names = tuple(name for name in NOETIX_MOCAP_DEMO_JOINTS if name not in omitted)
+    source_idx = {name: idx for idx, name in enumerate(source_joint_names)}
+    missing = [mapping[name] for name in orientation_names if mapping[name] not in source_idx]
+    if missing:
+        raise ValueError(f"Missing source joints for direct orientations: {missing}")
+    indices = [source_idx[mapping[name]] for name in orientation_names]
+    return orientation_names, values[:, indices, :]
+
+
 def synthesize_reduced_spine2(canonical_positions_y_up: np.ndarray) -> np.ndarray:
     """Insert a stable third spine landmark for Noetix's two-spine layout."""
     canonical_positions_y_up = canonical_positions_y_up.copy()
@@ -178,20 +258,17 @@ def synthesize_reduced_spine2(canonical_positions_y_up: np.ndarray) -> np.ndarra
     return canonical_positions_y_up
 
 
-def synthesize_reduced_spine2_orientation(
-    canonical_quaternions_wxyz: np.ndarray,
+def synthesize_single_spine_chain(
+    canonical_positions_y_up: np.ndarray,
 ) -> np.ndarray:
-    """Interpolate the missing global Spine2 frame between Spine1 and Neck."""
-    result = canonical_quaternions_wxyz.copy()
+    """Fill canonical Spine and Spine2 around a retained source Spine1."""
+    result = canonical_positions_y_up.copy()
     joint_idx = {name: idx for idx, name in enumerate(NOETIX_MOCAP_DEMO_JOINTS)}
+    hips = result[:, joint_idx["Hips"]]
     spine1 = result[:, joint_idx["Spine1"]]
-    neck = result[:, joint_idx["Neck"]].copy()
-    neck[np.sum(spine1 * neck, axis=1) < 0.0] *= -1.0
-    midpoint = spine1 + neck
-    norms = np.linalg.norm(midpoint, axis=1)
-    if np.any(norms <= 1e-8):
-        raise ValueError("Cannot interpolate reduced-spine orientation from antipodal quaternions")
-    result[:, joint_idx["Spine2"]] = midpoint / norms[:, None]
+    neck = result[:, joint_idx["Neck"]]
+    result[:, joint_idx["Spine"]] = hips + (spine1 - hips) / 3.0
+    result[:, joint_idx["Spine2"]] = 0.5 * (spine1 + neck)
     return result
 
 
@@ -205,10 +282,7 @@ def transform_orientations_y_up_to_z_up(
     """Change quaternion coordinates using the same reflected basis as positions."""
     quaternions_wxyz = np.asarray(quaternions_wxyz, dtype=np.float64)
     if quaternions_wxyz.ndim != 3 or quaternions_wxyz.shape[-1] != 4:
-        raise ValueError(
-            "global joint quaternions must have shape (T, J, 4), "
-            f"got {quaternions_wxyz.shape}"
-        )
+        raise ValueError(f"global joint quaternions must have shape (T, J, 4), got {quaternions_wxyz.shape}")
     flat_wxyz = quaternions_wxyz.reshape(-1, 4)
     norms = np.linalg.norm(flat_wxyz, axis=1)
     if not np.isfinite(flat_wxyz).all() or np.any(norms <= 1e-8):
@@ -290,15 +364,13 @@ def apply_noetix_root_orientation_hint(
 
 
 def source_height_from_filename(path: Path) -> float | None:
-    # Both ``..._160__...`` and ``..._160_000_...`` occur in Noetix exports.
-    match = re.search(r"(?:^|_)(\d{3})(?=_|$)", path.stem)
-    if match is None:
-        return None
-    height_cm = int(match.group(1))
-    # Avoid treating a sequence ordinal such as ``_001_`` as a human height.
-    if not 120 <= height_cm <= 230:
-        return None
-    return height_cm / 100.0
+    # Height tokens occur as both ``_160_`` and ``_{168}_``.  Accept any
+    # non-digit delimiter while rejecting dates and sequence ordinals by range.
+    for match in re.finditer(r"(?<!\d)(\d{3})(?!\d)", path.stem):
+        height_cm = int(match.group(1))
+        if 120 <= height_cm <= 230:
+            return height_cm / 100.0
+    return None
 
 
 def read_bvh_with_normalized_motion_rows(bvh_path: Path):
@@ -371,6 +443,42 @@ def downsample(positions: np.ndarray, source_fps: float, target_fps: float) -> t
     return positions[::stride], stride, source_fps / stride
 
 
+def _fsync_directory(path: Path) -> None:
+    directory_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _atomic_savez_compressed(
+    output_path: Path,
+    payload: dict[str, object],
+) -> None:
+    """Publish a complete NPZ without exposing a partially written ZIP."""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="wb",
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            dir=output_path.parent,
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            np.savez_compressed(temporary_file, **payload)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.replace(temporary_path, output_path)  # noqa: PTH105
+        _fsync_directory(output_path.parent)
+    except BaseException:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
+
+
 def convert_file(
     bvh_path: Path,
     output_dir: Path,
@@ -387,61 +495,63 @@ def convert_file(
     source_type, mapping = classify_bvh(anim.bones)
 
     canonical_y_up_m = select_canonical_joints(global_positions_cm / 100.0, anim.bones, mapping)
-    canonical_y_up_quaternions_wxyz = select_canonical_joints(
+    orientation_joint_names, direct_y_up_quaternions_wxyz = select_direct_canonical_orientations(
         global_quaternions_wxyz,
         anim.bones,
         mapping,
+        source_type,
     )
-    if source_type == "fullbody_reduced_spine_zyx":
+    if source_type == "fullbody_single_spine_zyx":
+        canonical_y_up_m = synthesize_single_spine_chain(canonical_y_up_m)
+    elif source_type == "fullbody_reduced_spine_zyx":
         canonical_y_up_m = synthesize_reduced_spine2(canonical_y_up_m)
-        canonical_y_up_quaternions_wxyz = synthesize_reduced_spine2_orientation(
-            canonical_y_up_quaternions_wxyz
-        )
     canonical_z_up_m = transform_y_up_to_z_up(canonical_y_up_m)
-    canonical_z_up_quaternions_wxyz = transform_orientations_y_up_to_z_up(
-        canonical_y_up_quaternions_wxyz
-    )
+    direct_z_up_quaternions_wxyz = transform_orientations_y_up_to_z_up(direct_y_up_quaternions_wxyz)
     canonical_z_up_m, dropped_initial_frame = drop_initial_jump(canonical_z_up_m, drop_jump_threshold_m)
     if dropped_initial_frame:
-        canonical_z_up_quaternions_wxyz = canonical_z_up_quaternions_wxyz[1:]
+        direct_z_up_quaternions_wxyz = direct_z_up_quaternions_wxyz[1:]
     canonical_z_up_m = recenter_xy(canonical_z_up_m)
     canonical_z_up_m = apply_noetix_root_orientation_hint(canonical_z_up_m)
 
     source_fps = read_source_fps(bvh_path)
     canonical_z_up_m, stride, output_fps = downsample(canonical_z_up_m, source_fps, target_fps)
-    canonical_z_up_quaternions_wxyz = canonical_z_up_quaternions_wxyz[::stride]
-    if canonical_z_up_quaternions_wxyz.shape[:2] != canonical_z_up_m.shape[:2]:
-        raise RuntimeError(
-            "Position and orientation frame/joint counts diverged during Noetix conversion"
-        )
+    direct_z_up_quaternions_wxyz = direct_z_up_quaternions_wxyz[::stride]
+    if direct_z_up_quaternions_wxyz.shape[0] != canonical_z_up_m.shape[0]:
+        raise RuntimeError("Position and orientation frame counts diverged during Noetix conversion")
 
     height = source_height_from_filename(bvh_path) or estimate_height(canonical_z_up_m)
+    output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{bvh_path.stem}.npz"
     if output_path.exists() and not overwrite:
         print(f"Skipping existing output: {output_path}")
         return
-    np.savez_compressed(
+    _atomic_savez_compressed(
         output_path,
-        global_joint_positions=canonical_z_up_m.astype(np.float32),
-        global_joint_quaternions_wxyz=canonical_z_up_quaternions_wxyz.astype(
-            np.float32
-        ),
-        height=np.float32(height),
-        joint_names=np.asarray(NOETIX_MOCAP_DEMO_JOINTS, dtype=str),
-        raw_joint_names=np.asarray(anim.bones, dtype=str),
-        source_bvh=str(bvh_path),
-        source_format=np.asarray("noetix_mocap"),
-        source_type=source_type,
-        coordinate_system=np.asarray("z_up"),
-        quaternion_convention=np.asarray("wxyz"),
-        orientation_coordinate_transform=np.asarray(
-            "basis_conjugation_xzy_reflection"
-        ),
-        position_root_orientation_hint_applied=np.bool_(True),
-        source_fps=np.float32(source_fps),
-        fps=np.float32(output_fps),
-        downsample_stride=np.int32(stride),
-        dropped_initial_frame=np.bool_(dropped_initial_frame),
+        {
+            "global_joint_positions": canonical_z_up_m.astype(np.float32),
+            "orientation_joint_names": np.asarray(
+                orientation_joint_names,
+                dtype=str,
+            ),
+            "orientation_quaternions_wxyz": direct_z_up_quaternions_wxyz.astype(np.float32),
+            "height": np.float32(height),
+            "joint_names": np.asarray(NOETIX_MOCAP_DEMO_JOINTS, dtype=str),
+            "joint_parents": canonical_parent_indices(),
+            "raw_joint_names": np.asarray(anim.bones, dtype=str),
+            "source_bvh": str(bvh_path),
+            "source_format": np.asarray("noetix_mocap"),
+            "source_type": source_type,
+            "coordinate_system": np.asarray("z_up"),
+            "quaternion_convention": np.asarray("wxyz"),
+            "orientation_provenance": np.asarray("direct_source_bones"),
+            "orientation_source": np.asarray("bvh_rotation_channels_fk"),
+            "orientation_coordinate_transform": np.asarray("basis_conjugation_xzy_reflection"),
+            "position_root_orientation_hint_applied": np.bool_(True),
+            "source_fps": np.float32(source_fps),
+            "fps": np.float32(output_fps),
+            "downsample_stride": np.int32(stride),
+            "dropped_initial_frame": np.bool_(dropped_initial_frame),
+        },
     )
 
     print(
@@ -461,14 +571,15 @@ class Config:
 
 def main(cfg: Config) -> None:
     cfg.output_dir.mkdir(parents=True, exist_ok=True)
-    bvh_files = sorted(cfg.input_dir.glob("*.bvh"))
+    bvh_files = sorted(cfg.input_dir.rglob("*.bvh"))
     if not bvh_files:
         raise FileNotFoundError(f"No BVH files found in {cfg.input_dir}")
 
     for bvh_path in bvh_files:
+        relative_parent = bvh_path.parent.relative_to(cfg.input_dir)
         convert_file(
             bvh_path,
-            cfg.output_dir,
+            cfg.output_dir / relative_parent,
             cfg.target_fps,
             cfg.drop_jump_threshold_m,
             overwrite=cfg.overwrite,

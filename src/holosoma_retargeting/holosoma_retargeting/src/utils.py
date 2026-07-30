@@ -1,3 +1,5 @@
+# ruff: noqa: CPY001, PLR0917
+
 """
 Utility functions for the kinematic retargeting system.
 """
@@ -7,6 +9,8 @@ from __future__ import annotations
 import os
 import pickle
 import re
+import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
@@ -261,10 +265,36 @@ def preprocess_motion_data(
 
 
 def extract_object_first_moving_frame(object_poses, vel_threshold=0.0025):
-    """Extract the first frame where the object starts moving."""
-    object_vel = np.diff(object_poses, axis=0)
-    object_vel_norm = np.linalg.norm(object_vel, axis=1)
-    return np.argmax(object_vel_norm > vel_threshold)
+    """Extract the first pose-difference index where the object starts moving.
+
+    Object poses use ``[qw, qx, qy, qz, x, y, z]``. Quaternion signs do not
+    encode different rotations, so measure the shorter of the ``q_next-q_prev``
+    and ``q_next+q_prev`` chords before combining it with translation motion.
+    The historical no-motion result of zero is preserved.
+    """
+
+    poses = np.asarray(object_poses, dtype=np.float64)
+    if poses.ndim != 2 or poses.shape[1] != 7:
+        raise ValueError(
+            f"object_poses must have shape (frames, 7), got {poses.shape}",
+        )
+    if poses.shape[0] < 2:
+        return 0
+    if not np.isfinite(poses).all():
+        raise ValueError("object_poses must contain only finite values")
+    quaternion_norms = np.linalg.norm(poses[:, :4], axis=1, keepdims=True)
+    if np.any(quaternion_norms <= 1e-8):
+        raise ValueError("object_poses must contain non-zero quaternions")
+    quaternions = poses[:, :4] / quaternion_norms
+    position_delta = np.diff(poses[:, 4:], axis=0)
+    quaternion_delta = np.minimum(
+        np.linalg.norm(quaternions[1:] - quaternions[:-1], axis=1),
+        np.linalg.norm(quaternions[1:] + quaternions[:-1], axis=1),
+    )
+    pose_delta_norm = np.sqrt(
+        np.sum(np.square(position_delta), axis=1) + np.square(quaternion_delta),
+    )
+    return np.argmax(pose_delta_norm > vel_threshold)
 
 
 def extract_foot_sticking_sequence(smpl_joints, demo_joints, foot_names, smpl_contact_threshold_relative=0.01):
@@ -317,8 +347,12 @@ def augment_object_poses(
         np.ndarray: Augmented object poses.
     """
 
+    object_poses = np.asarray(object_poses, dtype=np.float64)
+    human_initial_root = np.asarray(human_initial_root, dtype=np.float64)
     if local_translation is None:
-        local_translation = np.array([0, 0, 0])
+        local_translation = np.zeros(3, dtype=np.float64)
+    else:
+        local_translation = np.asarray(local_translation, dtype=np.float64)
 
     N = len(object_poses)
     object_poses_augmented = object_poses.copy()
@@ -681,77 +715,186 @@ def create_scaled_object_scene_xml(
     return output_path
 
 
+def _generated_scale_text(scale: tuple) -> str:
+    values = np.asarray(scale, dtype=float)
+    if values.shape != (3,) or not np.isfinite(values).all() or np.any(values <= 0):
+        raise ValueError(f"Scale must contain three positive finite values, got {scale}")
+    encoded_values = []
+    for value in values:
+        text = repr(float(value))
+        encoded_values.append(text[:-2] if text.endswith(".0") else text)
+    return " ".join(encoded_values)
+
+
+def _generated_scale_filename_token(scale: tuple) -> str:
+    return "_".join(_generated_scale_text(scale).split())
+
+
+def _atomic_write_generated_xml(tree: ET.ElementTree, destination: Path) -> None:
+    """Idempotently publish generated XML without exposing partial contents."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = ET.tostring(
+        tree.getroot(),
+        encoding="utf-8",
+        xml_declaration=True,
+    )
+    try:
+        if destination.read_bytes() == payload:
+            return
+    except FileNotFoundError:
+        pass
+
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            temporary_file.write(payload)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        try:
+            if destination.read_bytes() == payload:
+                return
+        except FileNotFoundError:
+            pass
+        temporary_path.replace(destination)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
 def create_scaled_multi_boxes_urdf(
     urdf_path: str,
     new_scale: tuple,
+    *,
+    output_dir: str | Path | None = None,
     output_path: str | None = None,
 ):
-    """Read multi_boxes.urdf and generate scaled version."""
+    """Generate a relocatable scaled terrain URDF with an atomic write."""
+
+    source_path = Path(urdf_path).expanduser().resolve()
+    if not source_path.is_file():
+        raise FileNotFoundError(f"Multi-boxes URDF not found: {source_path}")
     if output_path is None:
+        if output_dir is None:
+            raise ValueError("output_dir is required when output_path is not provided")
         sx, sy, sz = new_scale
-        output_path = urdf_path.replace(".urdf", f"_scaled_{sx:.2f}_{sy:.2f}_{sz:.2f}.urdf")
+        scale_token = _generated_scale_filename_token((sx, sy, sz))
+        output_path = str(
+            Path(output_dir).expanduser().resolve() / f"{source_path.stem}_scaled_{scale_token}{source_path.suffix}"
+        )
 
-    if Path(output_path).exists():
-        return output_path
-
-    with open(urdf_path) as f:
-        content = f.read()
-
-    pattern = r'scale="[^"]*"'
-    replacement = f'scale="{new_scale[0]} {new_scale[1]} {new_scale[2]}"'
-    content = re.sub(pattern, replacement, content)
-
-    with open(output_path, "w") as f:
-        f.write(content)
-
-    return output_path
+    destination = Path(output_path).expanduser().resolve()
+    tree = ET.parse(source_path)  # noqa: S314
+    scale_value = _generated_scale_text(new_scale)
+    mesh_elements = tree.getroot().findall(".//mesh")
+    if not mesh_elements:
+        raise ValueError(f"Multi-boxes URDF contains no mesh elements: {source_path}")
+    for mesh in mesh_elements:
+        filename = mesh.get("filename")
+        if not filename:
+            raise ValueError(f"Multi-boxes URDF mesh has no filename: {source_path}")
+        mesh_path = Path(filename).expanduser()
+        if not mesh_path.is_absolute():
+            mesh_path = (source_path.parent / mesh_path).resolve()
+        mesh.set("filename", mesh_path.as_posix())
+        mesh.set("scale", scale_value)
+    _atomic_write_generated_xml(tree, destination)
+    return str(destination)
 
 
 def create_scaled_multi_boxes_xml(
     xml_path: str,
     new_scale: tuple,
+    *,
+    output_dir: str | Path | None = None,
     output_path: str | None = None,
 ):
-    """Read multi_boxes.urdf and generate scaled version."""
+    """Generate the scaled MuJoCo terrain asset include atomically."""
+
+    source_path = Path(xml_path).expanduser().resolve()
+    if not source_path.is_file():
+        raise FileNotFoundError(f"Multi-boxes asset XML not found: {source_path}")
     if output_path is None:
+        if output_dir is None:
+            raise ValueError("output_dir is required when output_path is not provided")
         sx, sy, sz = new_scale
-        output_path = xml_path.replace(".xml", f"_scaled_{sx:.2f}_{sy:.2f}_{sz:.2f}.xml")
+        scale_token = _generated_scale_filename_token((sx, sy, sz))
+        output_path = str(
+            Path(output_dir).expanduser().resolve() / f"{source_path.stem}_scaled_{scale_token}{source_path.suffix}"
+        )
 
-    with open(xml_path) as f:
-        content = f.read()
-
-    pattern = r'scale="[^"]*"'
-    replacement = f'scale="{new_scale[0]} {new_scale[1]} {new_scale[2]}"'
-    content = re.sub(pattern, replacement, content)
-
-    with open(output_path, "w") as f:
-        f.write(content)
-
-    return output_path
+    destination = Path(output_path).expanduser().resolve()
+    tree = ET.parse(source_path)  # noqa: S314
+    scale_value = _generated_scale_text(new_scale)
+    mesh_elements = tree.getroot().findall(".//mesh")
+    if not mesh_elements:
+        raise ValueError(f"Multi-boxes asset XML contains no mesh elements: {source_path}")
+    for mesh in mesh_elements:
+        mesh.set("scale", scale_value)
+    _atomic_write_generated_xml(tree, destination)
+    return str(destination)
 
 
 def create_new_scene_xml_file(
     ori_scene_xml_path: str,
     new_scale: tuple,
     new_object_asset_xml_path: str,
+    *,
+    output_dir: str | Path | None = None,
     output_path: str | None = None,
 ):
+    """Relocate a robot-terrain scene and bind it to one generated asset include."""
+
+    source_path = Path(ori_scene_xml_path).expanduser().resolve()
+    if not source_path.is_file():
+        raise FileNotFoundError(f"Robot-terrain scene XML not found: {source_path}")
+    object_asset_path = Path(new_object_asset_xml_path).expanduser().resolve()
+    if not object_asset_path.is_file():
+        raise FileNotFoundError(f"Generated terrain asset XML not found: {object_asset_path}")
     if output_path is None:
+        if output_dir is None:
+            raise ValueError("output_dir is required when output_path is not provided")
         sx, sy, sz = new_scale
-        output_path = ori_scene_xml_path.replace(".xml", f"_scaled_{sx:.2f}_{sy:.2f}_{sz:.2f}.xml")
+        scale_token = _generated_scale_filename_token((sx, sy, sz))
+        output_path = str(
+            Path(output_dir).expanduser().resolve() / f"{source_path.stem}_scaled_{scale_token}{source_path.suffix}"
+        )
 
-    with open(ori_scene_xml_path) as f:
-        content = f.read()
+    destination = Path(output_path).expanduser().resolve()
+    tree = ET.parse(source_path)  # noqa: S314
+    root = tree.getroot()
+    compiler = root.find("compiler")
+    if compiler is not None and compiler.get("meshdir"):
+        mesh_dir = Path(compiler.get("meshdir", "")).expanduser()
+        if not mesh_dir.is_absolute():
+            mesh_dir = (source_path.parent / mesh_dir).resolve()
+        compiler.set("meshdir", mesh_dir.as_posix())
 
-    new_asset = new_object_asset_xml_path.rsplit("/", maxsplit=1)[-1]
-    pattern = r'file="box_assets\.xml"'
-    replacement = f'file="{new_asset}"'
-    content = re.sub(pattern, replacement, content)
+    replaced_asset = False
+    for include in root.findall(".//include"):
+        include_file = include.get("file")
+        if not include_file:
+            continue
+        if Path(include_file).name == "box_assets.xml":
+            include.set("file", object_asset_path.as_posix())
+            replaced_asset = True
+            continue
+        include_path = Path(include_file).expanduser()
+        if not include_path.is_absolute():
+            include_path = (source_path.parent / include_path).resolve()
+        include.set("file", include_path.as_posix())
+    if not replaced_asset:
+        raise ValueError(f"Could not find box_assets.xml include in {source_path}")
 
-    with open(output_path, "w") as f:
-        f.write(content)
-
-    return output_path
+    _atomic_write_generated_xml(tree, destination)
+    return str(destination)
 
 
 def extract_foot_sticking_sequence_velocity(smpl_joints, demo_joints, foot_names, velocity_threshold=0.01):
