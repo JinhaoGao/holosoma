@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001
 """Canonical visualization-layer names and shared Viser GUI controls."""
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ class LayerId(StrEnum):
     ROBOT_SKELETON = "robot_skeleton"
     HUMAN_HANDS = "human_hands"
     OBJECT_KEYPOINTS = "object_keypoints"
+    RETARGETING_POINT_CLOUDS = "retargeting_point_clouds"
     INTERACTION_MESH = "interaction_mesh"
     FOOT_STICKING = "foot_sticking"
     SOURCE_ORIENTATION = "source_orientation"
@@ -80,6 +82,13 @@ LAYER_SPECS: tuple[LayerSpec, ...] = (
         "Object keypoints",
         "Saved demonstration-scale and target-scale object samples.",
         "k",
+    ),
+    LayerSpec(
+        LayerId.RETARGETING_POINT_CLOUDS,
+        "Interaction",
+        "Retargeting point clouds",
+        "Compact human, robot, terrain, and object points used by retargeting.",
+        "p",
     ),
     LayerSpec(
         LayerId.INTERACTION_MESH,

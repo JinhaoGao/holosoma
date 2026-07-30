@@ -21,7 +21,6 @@ from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.viser import ViserConfig
 from holosoma_retargeting.multi_viser_player import (
     MultiViserConfig,
-    make_multi_player,
     make_multi_result_player,
     resolve_multi_config,
 )
@@ -38,20 +37,16 @@ from holosoma_retargeting.viser_player import (
     _build_mapped_skeleton_overlay,
     _build_orientation_overlay,
     _build_qpos_to_viser_joint_indices,
+    _build_retargeting_point_cloud_overlay,
     load_npz,
 )
 from holosoma_retargeting.viser_player import (
     main as single_viewer_main,
 )
 from holosoma_retargeting.visualization.multi_scene import (
-    AblationViserConfig,
     MultiResultViserConfig,
     load_comparison_results,
-    make_ablation_player,
     resolve_comparison_object_urdfs,
-)
-from holosoma_retargeting.visualization.multi_scene import (
-    make_multi_result_player as make_scene_multi_result_player,
 )
 from holosoma_retargeting.visualization.result_loader import (
     AugmentationViserConfig,
@@ -248,23 +243,72 @@ def _result_payload(
 class _FakeScene:
     def __init__(self) -> None:
         self.arrows: dict[str, SimpleNamespace] = {}
+        self.point_clouds: dict[str, SimpleNamespace] = {}
 
     def add_arrows(self, name: str, **kwargs) -> SimpleNamespace:
         handle = SimpleNamespace(**kwargs)
         self.arrows[name] = handle
         return handle
 
+    def add_point_cloud(self, name: str, **kwargs) -> SimpleNamespace:
+        handle = SimpleNamespace(**kwargs)
+        self.point_clouds[name] = handle
+        return handle
+
 
 class UnifiedResultVisualizationTests(unittest.TestCase):
-    def test_multi_result_player_names_keep_minimal_compatibility_aliases(self):
-        self.assertIs(AblationViserConfig, MultiResultViserConfig)
-        self.assertIs(make_ablation_player, make_scene_multi_result_player)
-        self.assertIs(make_multi_player, make_multi_result_player)
-
     def test_standard_package_assets_resolve_from_visualization_loader(self):
         resolved = _resolve_asset_path("models/g1/g1_29dof.urdf")
 
         self.assertTrue(resolved.is_file())
+
+    def test_compact_retargeting_point_clouds_are_directly_renderable(self):
+        trajectories = {
+            "human_points_world": np.asarray(
+                [[[0.0, 0.0, 1.0]], [[0.2, 0.0, 1.0]]],
+                dtype=np.float32,
+            ),
+            "robot_points_world": np.asarray(
+                [[[0.0, 0.0, 0.9]], [[0.2, 0.0, 0.9]]],
+                dtype=np.float32,
+            ),
+            "terrain_points_world": np.asarray(
+                [[[0.0, 0.0, 0.0]], [[0.0, 0.0, 0.0]]],
+                dtype=np.float32,
+            ),
+            "object_keypoints": {
+                "demo_world": np.asarray(
+                    [[[0.0, 0.4, 0.5]], [[0.1, 0.4, 0.5]]],
+                    dtype=np.float32,
+                ),
+                "target_world": np.asarray(
+                    [[[0.0, 0.5, 0.5]], [[0.1, 0.5, 0.5]]],
+                    dtype=np.float32,
+                ),
+            },
+        }
+        server = SimpleNamespace(scene=_FakeScene())
+
+        overlay = _build_retargeting_point_cloud_overlay(
+            ViserConfig(show_point_clouds=True),
+            server,
+            trajectories,
+        )
+
+        self.assertIsNotNone(overlay)
+        self.assertEqual(
+            tuple(overlay.trajectories),
+            ("human", "robot", "terrain", "object_demo", "object_target"),
+        )
+        overlay.draw(0.5)
+        np.testing.assert_allclose(
+            server.scene.point_clouds["/overlays/retargeting_points/human"].points,
+            np.asarray([[0.1, 0.0, 1.0]], dtype=np.float32),
+        )
+        overlay.set_visible(False)
+        self.assertTrue(
+            all(not handle.visible for handle in server.scene.point_clouds.values()),
+        )
 
     def test_canonical_directory_and_legacy_flat_families_are_discovered(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -429,7 +473,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
 
         self.assertEqual([result.variant for result in results], ["identity"])
 
-    def test_v1_fields_flow_through_single_and_multi_viewers(self):
+    def test_production_fields_flow_through_single_and_multi_viewers(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "identity.npz"
             payload = _result_payload()
@@ -483,15 +527,24 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
         )
         np.testing.assert_array_equal(
             result.human_joint_parent_indices,
-            np.asarray((-1, 0, 1), dtype=np.int32),
+            np.asarray((-1, 0), dtype=np.int32),
         )
-        self.assertEqual(result.robot_link_names, ("base", "torso", "left_hand"))
+        self.assertEqual(result.robot_link_names, ("base", "left_hand"))
         np.testing.assert_array_equal(
             result.robot_link_parent_indices,
-            np.asarray((-1, 0, 1), dtype=np.int32),
+            np.asarray((-1, 0), dtype=np.int32),
         )
-        self.assertEqual(result.robot_link_positions.shape, (2, 3, 3))
-        self.assertEqual(result.robot_link_quaternions_wxyz.shape, (2, 3, 4))
+        self.assertEqual(result.robot_link_positions.shape, (2, 2, 3))
+        self.assertEqual(result.robot_link_quaternions_wxyz.shape, (2, 2, 4))
+        np.testing.assert_array_equal(
+            result.human_points_world,
+            result.human_points,
+        )
+        np.testing.assert_array_equal(
+            result.robot_points_world,
+            result.robot_points,
+        )
+        self.assertEqual(result.terrain_points_world.shape, (2, 0, 3))
         self.assertIsNotNone(result.interaction_mesh)
         self.assertEqual(result.interaction_mesh_edges_default, "all")
         np.testing.assert_array_equal(
@@ -545,7 +598,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             },
         )
         self.assertEqual(qpos.shape, (2, 7))
-        self.assertEqual(human_joints.shape, (2, 3, 3))
+        self.assertEqual(human_joints.shape, (2, 2, 3))
         self.assertEqual(fps, 30.0)
         self.assertEqual(metadata["schema_version"], RESULT_SCHEMA_VERSION)
         self.assertEqual(metadata["source_sha256"], "a" * 64)
@@ -559,9 +612,18 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
         self.assertEqual(metadata["robot_actuated_joint_names"], [])
         np.testing.assert_array_equal(
             metadata["human_joint_parent_indices"],
-            np.asarray((-1, 0, 1), dtype=np.int32),
+            np.asarray((-1, 0), dtype=np.int32),
         )
-        self.assertEqual(metadata["robot_link_names"], ["base", "torso", "left_hand"])
+        self.assertEqual(metadata["robot_link_names"], ["base", "left_hand"])
+        np.testing.assert_array_equal(
+            metadata["human_points_world"],
+            result.human_points,
+        )
+        np.testing.assert_array_equal(
+            metadata["robot_points_world"],
+            result.robot_points,
+        )
+        self.assertEqual(metadata["terrain_points_world"].shape, (2, 0, 3))
         self.assertEqual(metadata["interaction_mesh_edges_default"], "all")
         np.testing.assert_array_equal(
             metadata["constraint_mode_foot_sticking"],
@@ -797,16 +859,10 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
     def test_strict_family_and_comparison_reject_identity_mismatches(self):
         def change_human_names(payload: dict[str, object]) -> None:
             human_joints = np.asarray(payload["human_joints"]).copy()
-            payload["human_joints"] = human_joints[:, (0, 2, 1)]
-            payload["human_joint_names"] = np.asarray(("Hips", "LeftHand", "Spine"))
+            payload["human_joints"] = human_joints[:, (2, 0, 1)]
+            payload["human_joint_names"] = np.asarray(("LeftHand", "Hips", "Spine"))
             payload["human_joint_parent_indices"] = np.asarray(
-                (-1, 2, 0),
-                dtype=np.int32,
-            )
-
-        def change_human_parent_tree(payload: dict[str, object]) -> None:
-            payload["human_joint_parent_indices"] = np.asarray(
-                (-1, 0, 0),
+                (-1, 0, 1),
                 dtype=np.int32,
             )
 
@@ -824,11 +880,15 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             _refresh_human_orientation_identity(payload)
 
         def change_robot_topology_names(payload: dict[str, object]) -> None:
-            payload["robot_link_names"] = np.asarray(("base", "chest", "left_hand"))
-
-        def change_robot_parent_tree(payload: dict[str, object]) -> None:
+            positions = np.asarray(payload["robot_link_positions"]).copy()
+            quaternions = np.asarray(
+                payload["robot_link_quaternions_wxyz"],
+            ).copy()
+            payload["robot_link_positions"] = positions[:, (2, 0, 1)]
+            payload["robot_link_quaternions_wxyz"] = quaternions[:, (2, 0, 1)]
+            payload["robot_link_names"] = np.asarray(("left_hand", "base", "torso"))
             payload["robot_link_parent_indices"] = np.asarray(
-                (-1, 0, 0),
+                (-1, 0, 1),
                 dtype=np.int32,
             )
 
@@ -855,7 +915,6 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                 ),
             ),
             ("human_joint_names", change_human_names),
-            ("human_joint_parent_indices", change_human_parent_tree),
             (
                 "human_orientation_joint_names",
                 change_orientation_names,
@@ -865,7 +924,6 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                 change_orientation_tensor,
             ),
             ("robot_link_names", change_robot_topology_names),
-            ("robot_link_parent_indices", change_robot_parent_tree),
             (
                 "source_data_format",
                 lambda payload: payload.__setitem__(
@@ -1152,7 +1210,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             (2, 2, 4),
         )
 
-    def test_explicit_source_subset_and_full_robot_axes_are_rendered(self):
+    def test_explicit_source_subset_and_compact_robot_axes_are_rendered(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "identity.npz"
             write_result_artifact(path, _result_payload())
@@ -1171,7 +1229,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
         )
 
         self.assertEqual(overlays.source.names, ("Hips", "LeftHand"))
-        self.assertEqual(overlays.robot.names, ("base", "torso", "left_hand"))
+        self.assertEqual(overlays.robot.names, ("base", "left_hand"))
         np.testing.assert_array_equal(
             overlays.robot.positions,
             result.robot_link_positions,

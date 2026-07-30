@@ -716,6 +716,62 @@ class ObjectKeypointOverlay:
         )
 
 
+class RetargetingPointCloudOverlay:
+    """Draw the compact solver points retained for result inspection."""
+
+    _COLORS = {
+        "human": np.asarray((50, 100, 255), dtype=np.uint8),
+        "robot": np.asarray((40, 220, 80), dtype=np.uint8),
+        "terrain": np.asarray((135, 135, 135), dtype=np.uint8),
+        "object_demo": np.asarray((255, 80, 40), dtype=np.uint8),
+        "object_target": np.asarray((30, 220, 235), dtype=np.uint8),
+    }
+
+    def __init__(
+        self,
+        server: viser.ViserServer,
+        trajectories: dict[str, np.ndarray],
+        point_size: float,
+        namespace: str = "/overlays/retargeting_points",
+        loop: bool = False,
+    ) -> None:
+        self.trajectories = {
+            name: np.asarray(points, dtype=np.float32)
+            for name, points in trajectories.items()
+            if np.asarray(points).ndim == 3 and np.asarray(points).shape[1] > 0
+        }
+        self.loop = bool(loop)
+        self.visible = True
+        self.handles: dict[str, object] = {}
+        namespace = namespace.rstrip("/")
+        for name, points in self.trajectories.items():
+            colors = np.tile(self._COLORS[name], (points.shape[1], 1))
+            self.handles[name] = server.scene.add_point_cloud(
+                f"{namespace}/{name}",
+                points=points[0],
+                colors=colors,
+                point_size=float(point_size),
+                point_shape="circle",
+                precision="float32",
+                point_shading="flat",
+                visible=True,
+            )
+
+    def set_visible(self, visible: bool) -> None:
+        self.visible = bool(visible)
+        for handle in self.handles.values():
+            handle.visible = self.visible
+
+    def draw(self, frame_float: float) -> None:
+        if not self.visible:
+            return
+        for name, points in self.trajectories.items():
+            self.handles[name].points = np.asarray(
+                _interpolate_sequence(points, frame_float, loop=self.loop),
+                dtype=np.float32,
+            )
+
+
 class InteractionMeshOverlay:
     def __init__(
         self,
@@ -1381,6 +1437,45 @@ def _build_object_keypoint_overlay(
     return overlay
 
 
+def _build_retargeting_point_cloud_overlay(
+    config: ViserConfig,
+    server: viser.ViserServer,
+    npz_metadata: dict[str, object],
+) -> RetargetingPointCloudOverlay | None:
+    trajectories: dict[str, np.ndarray] = {}
+    for layer_name, field_name in (
+        ("human", "human_points_world"),
+        ("robot", "robot_points_world"),
+        ("terrain", "terrain_points_world"),
+    ):
+        value = npz_metadata.get(field_name)
+        if isinstance(value, np.ndarray):
+            trajectories[layer_name] = value
+    object_keypoints = npz_metadata.get("object_keypoints")
+    if isinstance(object_keypoints, dict):
+        for layer_name, field_name in (
+            ("object_demo", "demo_world"),
+            ("object_target", "target_world"),
+        ):
+            value = object_keypoints.get(field_name)
+            if isinstance(value, np.ndarray):
+                trajectories[layer_name] = value
+    if not trajectories:
+        print("[viser_player] Retargeting point clouds unavailable in this result.")
+        return None
+    overlay = RetargetingPointCloudOverlay(
+        server,
+        trajectories,
+        config.point_cloud_point_size,
+        loop=config.loop,
+    )
+    print(
+        "[viser_player] Retargeting point-cloud layer enabled | "
+        f"content={','.join(overlay.trajectories)}"
+    )
+    return overlay
+
+
 def make_player(
     config: ViserConfig,
     qpos: np.ndarray,
@@ -1436,6 +1531,11 @@ def make_player(
 
     mapped_skeleton_overlay = _build_mapped_skeleton_overlay(config, server, human_joints, npz_metadata or {})
     object_keypoint_overlay = _build_object_keypoint_overlay(config, server, npz_metadata or {})
+    point_cloud_overlay = _build_retargeting_point_cloud_overlay(
+        config,
+        server,
+        npz_metadata or {},
+    )
     interaction_mesh_overlay = _build_interaction_mesh_overlay(config, server, interaction_mesh)
     orientation_overlay = _build_orientation_overlay(
         config,
@@ -1527,6 +1627,13 @@ def make_player(
         if visible and last_rendered_frame["frame"] is not None:
             interaction_mesh_overlay.draw(float(last_rendered_frame["frame"]))
 
+    def _set_point_cloud_visibility(visible: bool) -> None:
+        if point_cloud_overlay is None:
+            return
+        point_cloud_overlay.set_visible(visible)
+        if visible and last_rendered_frame["frame"] is not None:
+            point_cloud_overlay.draw(float(last_rendered_frame["frame"]))
+
     def _set_foot_sticking_visibility(visible: bool) -> None:
         if foot_sticking_status_handle is not None:
             foot_sticking_status_handle.visible = bool(visible)
@@ -1577,6 +1684,13 @@ def make_player(
         visible=config.show_object_keypoints,
         callback=_set_object_keypoints_visibility,
         unavailable_reason="Saved demonstration/target object samples are absent.",
+    )
+    layer_controller.register(
+        LayerId.RETARGETING_POINT_CLOUDS,
+        available=point_cloud_overlay is not None,
+        visible=config.show_point_clouds,
+        callback=_set_point_cloud_visibility,
+        unavailable_reason="Compact retargeting point-cloud fields are absent.",
     )
     layer_controller.register(
         LayerId.INTERACTION_MESH,
@@ -1734,6 +1848,8 @@ def make_player(
             mapped_skeleton_overlay.draw(q, frame_float)
         if object_keypoint_overlay is not None:
             object_keypoint_overlay.draw(frame_float)
+        if point_cloud_overlay is not None:
+            point_cloud_overlay.draw(frame_float)
         if interaction_mesh_overlay is not None:
             interaction_mesh_overlay.draw(frame_float)
         orientation_overlay.draw(frame_float)

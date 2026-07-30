@@ -116,6 +116,9 @@ class VariantResult:
     human_joint_parent_indices: np.ndarray | None
     human_points: np.ndarray | None
     robot_points: np.ndarray | None
+    human_points_world: np.ndarray | None
+    robot_points_world: np.ndarray | None
+    terrain_points_world: np.ndarray | None
     mapped_joint_names: tuple[str, ...]
     mapped_robot_link_names: tuple[str, ...]
     human_orientation_joint_names: tuple[str, ...]
@@ -669,6 +672,21 @@ def load_variant_result(
         robot_points = (
             np.asarray(data["mapped_robot_joints"], dtype=np.float32) if "mapped_robot_joints" in data else None
         )
+        human_points_world = _optional_npz_array(
+            data,
+            "human_points_world",
+            dtype=np.float32,
+        )
+        robot_points_world = _optional_npz_array(
+            data,
+            "robot_points_world",
+            dtype=np.float32,
+        )
+        terrain_points_world = _optional_npz_array(
+            data,
+            "terrain_points_world",
+            dtype=np.float32,
+        )
         human_joint_names = _optional_npz_string_list(data, "human_joint_names")
         human_joint_parent_indices = (
             np.asarray(data["human_joint_parent_indices"], dtype=np.int32)
@@ -855,6 +873,21 @@ def load_variant_result(
             f"{result_path} mapped_robot_joints must have shape "
             f"({qpos.shape[0]}, {len(mapped_joint_names)}, 3), got {robot_points.shape}"
         )
+    for field_name, points in (
+        ("human_points_world", human_points_world),
+        ("robot_points_world", robot_points_world),
+        ("terrain_points_world", terrain_points_world),
+    ):
+        if points is not None and (
+            points.ndim != 3
+            or points.shape[0] != qpos.shape[0]
+            or points.shape[-1] != 3
+            or not np.isfinite(points).all()
+        ):
+            raise ValueError(
+                f"{result_path} {field_name} must have shape (frames, points, 3) "
+                f"matching qpos, got {points.shape}"
+            )
     if len(mapped_robot_link_names) != len(mapped_joint_names):
         raise ValueError(
             f"{result_path} mapped_robot_link_names has {len(mapped_robot_link_names)} entries "
@@ -953,6 +986,9 @@ def load_variant_result(
         human_joint_parent_indices=human_joint_parent_indices,
         human_points=human_points,
         robot_points=robot_points,
+        human_points_world=human_points_world,
+        robot_points_world=robot_points_world,
+        terrain_points_world=terrain_points_world,
         mapped_joint_names=mapped_joint_names,
         mapped_robot_link_names=mapped_robot_link_names,
         human_orientation_joint_names=human_orientation_joint_names,
@@ -1179,6 +1215,9 @@ def variant_result_metadata(result: VariantResult) -> dict[str, object]:
         "mapped_human_joint_names": list(result.mapped_joint_names) or None,
         "mapped_robot_joints": result.robot_points,
         "mapped_robot_link_names": list(result.mapped_robot_link_names) or None,
+        "human_points_world": result.human_points_world,
+        "robot_points_world": result.robot_points_world,
+        "terrain_points_world": result.terrain_points_world,
         "human_orientation_joint_names": list(result.human_orientation_joint_names) or None,
         "human_orientation_quaternions_wxyz": (result.human_orientation_quaternions_wxyz),
         "human_orientation_sha256": result.human_orientation_sha256,

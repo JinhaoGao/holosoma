@@ -1705,8 +1705,3 @@ def make_multi_result_player(
     )
     print("Open the viewer URL printed above. Close the process (Ctrl+C) to exit.")
     return server
-
-
-# Deprecated compatibility aliases; use the unified multi-result names.
-AblationViserConfig = MultiResultViserConfig
-make_ablation_player = make_multi_result_player

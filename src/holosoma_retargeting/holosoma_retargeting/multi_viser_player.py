@@ -73,10 +73,6 @@ def make_multi_result_player(config: MultiViserConfig):
     return _make_multi_result_player(resolved, labels, results)
 
 
-# Deprecated compatibility alias; use ``make_multi_result_player``.
-make_multi_player = make_multi_result_player
-
-
 def main(config: MultiViserConfig) -> None:
     """Run the unified multi-motion viewer until interrupted."""
 

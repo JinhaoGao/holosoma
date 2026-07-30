@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001
 """Configuration types for viser visualization."""
 
 from __future__ import annotations
@@ -111,6 +112,9 @@ class ViserConfig:
     show_object_keypoints: bool = False
     """Whether to show saved demo/target object keypoints."""
 
+    show_point_clouds: bool = False
+    """Whether to show the compact human, robot, terrain, and object point clouds."""
+
     show_interaction_mesh: bool = False
     """Whether to show saved source/target interaction mesh overlays."""
 
@@ -185,6 +189,9 @@ class ViserConfig:
 
     object_keypoint_radius: float = 0.02
     """Radius for saved demo/target object keypoint spheres."""
+
+    point_cloud_point_size: float = 0.012
+    """Point size for the compact retargeting point-cloud layer."""
 
     skeleton_line_width: float = 2.0
     """Line width for mapped skeleton edges."""
