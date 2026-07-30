@@ -13,6 +13,82 @@ from holosoma_retargeting.config_types.retargeter import RetargeterConfig
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.task import TaskConfig
 
+TaskType = Literal["robot_only", "object_interaction", "climbing"]
+DatasetName = Literal[
+    "climbing",
+    "gvhmr",
+    "lafan",
+    "noetix_csv_climb",
+    "noetix_mocap",
+    "OMOMO_new",
+]
+
+DATASET_DATA_FORMATS: dict[str, str] = {
+    "climbing": "mocap",
+    "gvhmr": "gvhmr",
+    "lafan": "lafan",
+    "noetix_csv_climb": "mocap",
+    "noetix_mocap": "noetix_mocap",
+    "OMOMO_new": "omomo",
+}
+
+_DEMO_DATA_ROOT = Path(__file__).resolve().parents[1] / "demo_data"
+DATASET_DEFAULT_PATHS: dict[str, Path] = {
+    "climbing": _DEMO_DATA_ROOT / "climb",
+    "gvhmr": _DEMO_DATA_ROOT / "gvhmr",
+    "lafan": _DEMO_DATA_ROOT / "lafan",
+    "noetix_csv_climb": _DEMO_DATA_ROOT / "noetix_csv_climb",
+    "noetix_mocap": _DEMO_DATA_ROOT / "noetix_mocap",
+    "OMOMO_new": _DEMO_DATA_ROOT / "OMOMO_new",
+}
+
+
+@dataclass(frozen=True)
+class RetargetingCommand:
+    """Small user-facing command shared by both retargeting entry points."""
+
+    task: TaskType = "object_interaction"
+    """Retargeting task."""
+
+    robot: Literal["g1", "e1", "e2"] = "g1"
+    """Target robot."""
+
+    dataset: DatasetName = "OMOMO_new"
+    """Human motion dataset preset."""
+
+    motion: str = "sub3_largebox_003"
+    """One motion name, or its path relative to the dataset directory."""
+
+    data_path: Path | None = None
+    """Optional dataset directory override."""
+
+    save_dir: Path | None = None
+    """Optional result-root override."""
+
+    overwrite: bool = False
+    """Replace an existing result for the exact same motion and configuration."""
+
+
+def internal_config_from_command(command: RetargetingCommand) -> RetargetingConfig:
+    """Resolve the compact public command into the internal solver config."""
+
+    dataset = str(command.dataset)
+    try:
+        data_format = DATASET_DATA_FORMATS[dataset]
+        default_data_path = DATASET_DEFAULT_PATHS[dataset]
+    except KeyError as exc:
+        choices = ", ".join(DATASET_DATA_FORMATS)
+        raise ValueError(f"Unknown dataset preset {dataset!r}; choose one of: {choices}") from exc
+    return RetargetingConfig(
+        task_type=command.task,
+        robot=command.robot,
+        data_format=data_format,
+        task_name=command.motion,
+        data_path=command.data_path or default_data_path,
+        save_dir=command.save_dir,
+        overwrite_existing=command.overwrite,
+    )
+
 
 @dataclass
 class RetargetingConfig:
@@ -22,7 +98,7 @@ class RetargetingConfig:
     """
 
     # --- Task type selection ---
-    task_type: Literal["robot_only", "object_interaction", "climbing"] = "object_interaction"
+    task_type: TaskType = "object_interaction"
     """Type of retargeting task."""
 
     # --- top-level run knobs ---
@@ -69,40 +145,3 @@ class RetargetingConfig:
     retargeter: RetargeterConfig = field(default_factory=RetargeterConfig)
     """Retargeter configuration (nested - can override q_a_init_idx, activate_joint_limits, etc.
     via --retargeter.q-a-init-idx)."""
-
-
-@dataclass
-class ParallelRetargetingConfig(RetargetingConfig):
-    """Extended retargeting config for parallel processing.
-
-    Adds parallel-specific fields while inheriting all retargeting config fields.
-    This config is used for processing multiple files in parallel.
-    """
-
-    # Parallel processing specific fields
-    data_dir: Path = Path("demo_data/OMOMO_new")
-    """Primary batch input directory. The inherited ``data_path`` is a
-    compatibility alias; explicitly setting both to different directories is
-    rejected instead of silently choosing one."""
-
-    max_workers: int | None = None
-    """Maximum number of parallel workers. Defaults to a safe bound of four."""
-
-    object_names: tuple[str, ...] | None = None
-    """Optional OMOMO object categories to process. None processes every category."""
-
-    preflight: bool = True
-    """Validate OMOMO motion data and all object assets before launching workers."""
-
-    validate_input_tensors: bool = True
-    """Load and validate every selected OMOMO tensor during preflight."""
-
-    dry_run: bool = False
-    """Write the batch manifest and report without running retargeting."""
-
-    report_path: Path | None = None
-    """Optional JSON report path. Defaults to
-    <save_dir>/runs/<run_id>/report.json."""
-
-    run_id: str | None = None
-    """Stable run identifier used under <results_root>/runs."""

@@ -10,7 +10,11 @@ from pathlib import Path
 
 import tyro
 
-from holosoma_retargeting.config_types.retargeting import RetargetingConfig
+from holosoma_retargeting.config_types.retargeting import (
+    RetargetingCommand,
+    RetargetingConfig,
+    internal_config_from_command,
+)
 from holosoma_retargeting.retargeting_pipeline import (
     DEFAULT_DATA_FORMATS,
     IDENTITY_VARIANT,
@@ -58,8 +62,8 @@ __all__ = [
 DEFAULT_RESULTS_ROOT = Path(__file__).resolve().parents[1] / "demo_results"
 
 
-def main(cfg: RetargetingConfig) -> RetargetFamilyResult:
-    """Run the identity variant for exactly one explicitly selected motion."""
+def run_config(cfg: RetargetingConfig) -> RetargetFamilyResult:
+    """Run an internal solver config through the single-motion interface."""
 
     normalized = deepcopy(cfg)
     normalized.augmentation = False
@@ -68,5 +72,11 @@ def main(cfg: RetargetingConfig) -> RetargetFamilyResult:
     return run_retargeting_family(normalized)
 
 
+def main(command: RetargetingCommand) -> RetargetFamilyResult:
+    """Resolve and retarget exactly one user-selected motion."""
+
+    return run_config(internal_config_from_command(command))
+
+
 if __name__ == "__main__":
-    main(tyro.cli(RetargetingConfig))
+    main(tyro.cli(RetargetingCommand))

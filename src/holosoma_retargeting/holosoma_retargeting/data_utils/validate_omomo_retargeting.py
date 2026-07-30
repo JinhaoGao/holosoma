@@ -22,7 +22,7 @@ from holosoma_retargeting.data_utils.omomo import (
     preflight_omomo_dataset,
     select_omomo_files,
 )
-from holosoma_retargeting.examples.robot_retarget import main as run_retargeting
+from holosoma_retargeting.examples.robot_retarget import run_config as run_retargeting
 from holosoma_retargeting.result_artifact import (
     validate_result_artifact,
     validate_result_external_assets,

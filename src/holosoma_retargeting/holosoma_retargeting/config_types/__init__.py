@@ -6,7 +6,7 @@ from holosoma_retargeting.config_types.data_conversion import DataConversionConf
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.config_types.retargeter import RetargeterConfig
 from holosoma_retargeting.config_types.retargeting import (
-    ParallelRetargetingConfig,
+    RetargetingCommand,
     RetargetingConfig,
 )
 from holosoma_retargeting.config_types.robot import RobotConfig
@@ -16,7 +16,7 @@ from holosoma_retargeting.config_types.viser import ViserConfig
 __all__ = [
     "DataConversionConfig",
     "MotionDataConfig",
-    "ParallelRetargetingConfig",
+    "RetargetingCommand",
     "RetargeterConfig",
     "RetargetingConfig",
     "RobotConfig",

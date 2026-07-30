@@ -18,7 +18,11 @@ from pathlib import Path
 
 import tyro
 
-from holosoma_retargeting.config_types.retargeting import RetargetingConfig
+from holosoma_retargeting.config_types.retargeting import (
+    RetargetingCommand,
+    RetargetingConfig,
+    internal_config_from_command,
+)
 from holosoma_retargeting.retargeting_pipeline import (
     RetargetFamilyResult,
     main as run_retargeting_family,
@@ -27,8 +31,8 @@ from holosoma_retargeting.retargeting_pipeline import (
 DEFAULT_RESULTS_ROOT = Path(__file__).resolve().parents[1] / "demo_results_parallel"
 
 
-def main(cfg: RetargetingConfig) -> RetargetFamilyResult:
-    """Run identity plus configured augmentations for one selected motion."""
+def run_config(cfg: RetargetingConfig) -> RetargetFamilyResult:
+    """Run an internal solver config through the augmentation interface."""
 
     normalized = deepcopy(cfg)
     normalized.augmentation = True
@@ -37,5 +41,11 @@ def main(cfg: RetargetingConfig) -> RetargetFamilyResult:
     return run_retargeting_family(normalized)
 
 
+def main(command: RetargetingCommand) -> RetargetFamilyResult:
+    """Resolve one motion and run its identity and augmentation variants."""
+
+    return run_config(internal_config_from_command(command))
+
+
 if __name__ == "__main__":
-    main(tyro.cli(RetargetingConfig))
+    main(tyro.cli(RetargetingCommand))
