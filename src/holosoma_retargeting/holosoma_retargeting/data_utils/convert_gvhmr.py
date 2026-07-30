@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001, PLR0917
 """Convert GVHMR world-frame SMPL-X predictions to Holosoma joint data."""
 
 from __future__ import annotations

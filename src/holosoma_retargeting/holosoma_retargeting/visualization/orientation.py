@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001
 """Shared loading and interpolation for saved orientation diagnostics."""
 
 from __future__ import annotations

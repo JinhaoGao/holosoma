@@ -885,8 +885,7 @@ def load_variant_result(
             or not np.isfinite(points).all()
         ):
             raise ValueError(
-                f"{result_path} {field_name} must have shape (frames, points, 3) "
-                f"matching qpos, got {points.shape}"
+                f"{result_path} {field_name} must have shape (frames, points, 3) matching qpos, got {points.shape}"
             )
     if len(mapped_robot_link_names) != len(mapped_joint_names):
         raise ValueError(

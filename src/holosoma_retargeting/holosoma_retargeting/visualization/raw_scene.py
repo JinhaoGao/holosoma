@@ -528,10 +528,7 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
     ]
     source_orientation_names = scene.motion.orientation_joint_names or ()
     source_orientations = scene.motion.orientation_quaternions_wxyz
-    full_joint_index = {
-        name: index
-        for index, name in enumerate(scene.joint_names)
-    }
+    full_joint_index = {name: index for index, name in enumerate(scene.joint_names)}
     source_orientation_point_indices = np.asarray(
         [full_joint_index[name] for name in source_orientation_names],
         dtype=np.int32,
@@ -601,9 +598,7 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
                 label.position = frame_points[index]
             if source_orientations is not None:
                 for index, orientation_frame in enumerate(orientation_frames):
-                    orientation_frame.position = frame_points[
-                        source_orientation_point_indices[index]
-                    ]
+                    orientation_frame.position = frame_points[source_orientation_point_indices[index]]
                     orientation_frame.wxyz = source_orientations[
                         frame_index,
                         index,

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: CPY001
 """Convert LAFAN BVH motions into the canonical retargeting NPZ schema."""
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ if str(src_root) not in sys.path:
 
 from holosoma_retargeting.config_types.data_type import LAFAN_DEMO_JOINTS  # noqa: E402
 from holosoma_retargeting.data_utils.lafan1 import extract, utils  # noqa: E402
-
 
 LAFAN_CANONICAL_TO_SOURCE = {
     name: ("LeftToe" if name == "LeftToeBase" else "RightToe" if name == "RightToeBase" else name)

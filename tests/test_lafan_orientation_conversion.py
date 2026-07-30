@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001, PT009
 from __future__ import annotations
 
 import sys
@@ -22,7 +23,6 @@ from holosoma_retargeting.data_utils.extract_global_positions import (  # noqa: 
     convert_file,
     transform_orientations_y_up_to_z_up,
 )
-
 
 LAFAN_BVH = PACKAGE_ROOT / "holosoma_retargeting" / "demo_data" / "lafan_ori" / "fallAndGetUp3_subject1.bvh"
 LEGACY_LAFAN_NPY = PACKAGE_ROOT / "holosoma_retargeting" / "demo_data" / "lafan" / "fallAndGetUp3_subject1.npy"

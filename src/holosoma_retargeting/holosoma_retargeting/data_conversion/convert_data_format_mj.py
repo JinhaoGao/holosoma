@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001, PLR0917
 from __future__ import annotations
 
 import os

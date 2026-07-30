@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001, PLR0917
 """Convert raw AMASS SMPL-X sequences to the unified retargeting NPZ format."""
 
 from __future__ import annotations

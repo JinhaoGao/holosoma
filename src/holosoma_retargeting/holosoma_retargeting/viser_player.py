@@ -1469,10 +1469,7 @@ def _build_retargeting_point_cloud_overlay(
         config.point_cloud_point_size,
         loop=config.loop,
     )
-    print(
-        "[viser_player] Retargeting point-cloud layer enabled | "
-        f"content={','.join(overlay.trajectories)}"
-    )
+    print(f"[viser_player] Retargeting point-cloud layer enabled | content={','.join(overlay.trajectories)}")
     return overlay
 
 

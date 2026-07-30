@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001
 # Examples package
 """Production retargeting command modules."""
 

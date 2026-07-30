@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: CPY001, PLR0917
 """Convert Noetix CSV box-climb captures into retargeting-ready scenes."""
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
 from holosoma_retargeting.config_types.data_type import MOCAP_DEMO_JOINTS  # noqa: E402
-
 
 Y_UP_TO_SCENE_BASIS = np.asarray(
     [
@@ -190,9 +190,7 @@ def _build_column_index(rows: list[list[str]]) -> ColumnIndex:
     entities: dict[str, set[tuple[str, str]]] = defaultdict(set)
 
     for col in range(ncols):
-        values = []
-        for row in header_rows:
-            values.append(row[col].strip() if col < len(row) else "")
+        values = [row[col].strip() if col < len(row) else "" for row in header_rows]
         entity_type, name, entity_id, prop, axis = values
         if not entity_type and not name and not prop:
             continue
@@ -564,7 +562,7 @@ def load_noetix_csv(csv_path: Path) -> NoetixCsvMotion:
 def _downsample(array: np.ndarray, source_fps: float, target_fps: float | None) -> tuple[np.ndarray, int, float]:
     if target_fps is None:
         return array, 1, float(source_fps)
-    stride = max(1, int(round(float(source_fps) / float(target_fps))))
+    stride = max(1, round(float(source_fps) / float(target_fps)))
     return array[::stride], stride, float(source_fps) / stride
 
 
@@ -680,7 +678,8 @@ def _write_obj(
     with path.open("w", encoding="utf-8") as f:
         f.write(f"# Reconstructed from {source_csv.name} frame 1 box markers.\n")
         f.write(
-            "# Scene-local frame: Noetix Y-up mm -> MuJoCo Z-up m with right-handed [x, -z, y], then subtract box XY center.\n"
+            "# Scene-local frame: Noetix Y-up mm -> MuJoCo Z-up m with "
+            "right-handed [x, -z, y], then subtract box XY center.\n"
         )
         f.write(f"# scene_origin_xy_m {origin_xy[0]:.9f} {origin_xy[1]:.9f}\n")
         f.write(f"# box_min_m {bbox_min[0]:.9f} {bbox_min[1]:.9f} {bbox_min[2]:.9f}\n")
@@ -779,7 +778,9 @@ def _write_mujoco_box_includes(output_dir: Path, asset_scale: float) -> None:
     (output_dir / "box_body.xml").write_text(
         """<mujocoinclude>
     <body name="multi_boxes_box1_link" pos="0 0 0" quat="1 0 0 0">
-        <geom name="multi_boxes_link_1" type="mesh" mesh="box1" pos="0 0 0" quat="1 0 0 0" material="box1_material" contype="1" conaffinity="1"/>
+        <geom name="multi_boxes_link_1" type="mesh" mesh="box1"
+            pos="0 0 0" quat="1 0 0 0" material="box1_material"
+            contype="1" conaffinity="1"/>
     </body>
 </mujocoinclude>
 """,
@@ -835,15 +836,9 @@ def export_mocap_climb(
             ),
             None,
         )
-        human_height = (
-            float(actor_match.group(1)) / 100.0
-            if actor_match is not None
-            else 1.78
-        )
+        human_height = float(actor_match.group(1)) / 100.0 if actor_match is not None else 1.78
     if not np.isfinite(human_height) or human_height <= 0.0:
-        raise ValueError(
-            f"Noetix CSV human height must be positive and finite, got {human_height}"
-        )
+        raise ValueError(f"Noetix CSV human height must be positive and finite, got {human_height}")
     npy_path = seq_dir / f"{task_name}_joint_positions.npy"
     np.save(npy_path, mocap_positions.astype(np.float32))
     npz_path = seq_dir / f"{task_name}.npz"

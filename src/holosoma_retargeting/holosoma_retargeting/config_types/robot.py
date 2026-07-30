@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001
 """Configuration types for robot retargeting."""
 
 from __future__ import annotations

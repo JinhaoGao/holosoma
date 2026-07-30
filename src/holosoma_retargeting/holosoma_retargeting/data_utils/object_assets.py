@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001
 """Catalog and generated MuJoCo scenes for OMOMO object assets."""
 
 from __future__ import annotations

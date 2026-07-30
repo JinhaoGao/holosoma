@@ -158,10 +158,7 @@ def _add_mjcf_inertial(body: ET.Element, link: ET.Element) -> None:
         "inertial",
         pos=_numbers(origin, "xyz", "0 0 0"),
         mass=mass.get("value", "0.001"),
-        fullinertia=" ".join(
-            inertia.get(name, "0")
-            for name in ("ixx", "iyy", "izz", "ixy", "ixz", "iyz")
-        ),
+        fullinertia=" ".join(inertia.get(name, "0") for name in ("ixx", "iyy", "izz", "ixy", "ixz", "iyz")),
     )
 
 
@@ -209,11 +206,7 @@ def _add_mjcf_geom(body: ET.Element, link: ET.Element) -> str | None:
 
 
 def _mjcf_root(robot: ET.Element) -> ET.Element:
-    links = {
-        str(link.get("name")): link
-        for link in robot.findall("link")
-        if link.get("name") is not None
-    }
+    links = {str(link.get("name")): link for link in robot.findall("link") if link.get("name") is not None}
     joints_by_child: dict[str, ET.Element] = {}
     children_by_parent: dict[str, list[ET.Element]] = defaultdict(list)
     for joint in robot.findall("joint"):
@@ -320,8 +313,7 @@ def _mjcf_root(robot: ET.Element) -> ET.Element:
                 type="hinge",
                 axis=_numbers(axis, "xyz", "0 0 1"),
                 range=(
-                    f"{limit.get('lower', '-3.141592653589793')} "
-                    f"{limit.get('upper', '3.141592653589793')}"
+                    f"{limit.get('lower', '-3.141592653589793')} {limit.get('upper', '3.141592653589793')}"
                     if limit is not None
                     else f"{-math.pi:.17g} {math.pi:.17g}"
                 ),

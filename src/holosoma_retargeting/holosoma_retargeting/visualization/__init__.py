@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001
 """Shared motion-visualization data, layers, controls, and renderers."""
 
 from holosoma_retargeting.visualization.layers import (

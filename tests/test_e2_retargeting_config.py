@@ -30,12 +30,7 @@ class E2RetargetingConfigTest(unittest.TestCase):
 
     @staticmethod
     def _model() -> mujoco.MjModel:
-        package_root = (
-            Path(__file__).resolve().parents[1]
-            / "src"
-            / "holosoma_retargeting"
-            / "holosoma_retargeting"
-        )
+        package_root = Path(__file__).resolve().parents[1] / "src" / "holosoma_retargeting" / "holosoma_retargeting"
         return mujoco.MjModel.from_xml_path(
             str(package_root / "models" / "e2" / "e2_23dof.xml"),
         )
@@ -43,8 +38,7 @@ class E2RetargetingConfigTest(unittest.TestCase):
     def test_all_human_formats_have_complete_e2_mappings(self) -> None:
         model = self._model()
         body_names = {
-            str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id))
-            for body_id in range(1, model.nbody)
+            str(mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id)) for body_id in range(1, model.nbody)
         }
 
         for data_format in self.DATA_FORMATS:
@@ -188,8 +182,7 @@ class E2RetargetingConfigTest(unittest.TestCase):
             robot="e2",
         ).JOINT_NAMES
         model_names = [
-            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
-            for joint_id in range(1, model.njnt)
+            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, joint_id) for joint_id in range(1, model.njnt)
         ]
 
         self.assertEqual(model.nq, 30)

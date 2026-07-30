@@ -27,7 +27,6 @@ from holosoma_retargeting.retargeting_pipeline import (
     create_ground_points,
     create_task_constants,
     initialize_robot_pose,
-    main as run_retargeting_family,
     normalize_retargeting_config,
     planned_variants,
     resolve_task_object_name,
@@ -35,6 +34,9 @@ from holosoma_retargeting.retargeting_pipeline import (
     run_retargeting_job,
     setup_object_data,
     validate_config,
+)
+from holosoma_retargeting.retargeting_pipeline import (
+    main as run_retargeting_family,
 )
 
 __all__ = [

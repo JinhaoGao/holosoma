@@ -16,8 +16,8 @@ from holosoma_retargeting.config_types.viser import ViserConfig
 __all__ = [
     "DataConversionConfig",
     "MotionDataConfig",
-    "RetargetingCommand",
     "RetargeterConfig",
+    "RetargetingCommand",
     "RetargetingConfig",
     "RobotConfig",
     "TaskConfig",

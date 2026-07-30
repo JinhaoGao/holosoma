@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001, PT009, PT027
 from __future__ import annotations
 
 import sys
@@ -18,8 +19,8 @@ from holosoma_retargeting.config_types.data_type import (  # noqa: E402
 )
 from holosoma_retargeting.data_utils.convert_noetix_csv import (  # noqa: E402
     MOCAP_SOURCE_BONES,
-    NoetixCsvMotion,
     Y_UP_TO_SCENE_BASIS,
+    NoetixCsvMotion,
     export_mocap_climb,
     mocap_parent_indices,
     transform_global_rotations_y_up_to_scene_wxyz,

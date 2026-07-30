@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001, S314
 # viser_utils.py
 from __future__ import annotations
 
@@ -53,10 +54,7 @@ def build_joint_order_indices(source_joint_names: Sequence[str], target_joint_na
     source_index = {name: idx for idx, name in enumerate(source_joint_names)}
     missing = [name for name in target_joint_names if name not in source_index]
     if missing:
-        raise ValueError(
-            "Cannot build joint order mapping; missing joints in source order: "
-            + ", ".join(missing)
-        )
+        raise ValueError("Cannot build joint order mapping; missing joints in source order: " + ", ".join(missing))
     return np.asarray([source_index[name] for name in target_joint_names], dtype=int)
 
 
@@ -165,8 +163,7 @@ def create_motion_control_sliders(
         joint_order_indices = np.asarray(qpos_to_viser_joint_indices, dtype=int)
         if joint_order_indices.shape != (robot_dof,):
             raise ValueError(
-                "qpos_to_viser_joint_indices must have shape "
-                f"({robot_dof},), got {joint_order_indices.shape}"
+                f"qpos_to_viser_joint_indices must have shape ({robot_dof},), got {joint_order_indices.shape}"
             )
 
     has_object_input = (

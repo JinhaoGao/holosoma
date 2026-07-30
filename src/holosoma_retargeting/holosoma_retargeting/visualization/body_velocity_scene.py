@@ -1,3 +1,4 @@
+# ruff: noqa: CPY001
 """Load and render converted robot body-position and velocity trajectories."""
 
 from __future__ import annotations
