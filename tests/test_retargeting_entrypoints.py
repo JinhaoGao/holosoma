@@ -1,9 +1,12 @@
-# ruff: noqa: CPY001, PT009
+# ruff: noqa: CPY001, PT009, PT027
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
+from dataclasses import fields
 from pathlib import Path
 from unittest import mock
 
@@ -18,8 +21,11 @@ from holosoma_retargeting.config_types.retargeting import (  # noqa: E402
     RetargetingConfig,
     internal_config_from_command,
 )
-from holosoma_retargeting.examples import PUBLIC_RETARGETING_COMMANDS  # noqa: E402
-from holosoma_retargeting.examples import parallel_robot_retarget, robot_retarget  # noqa: E402
+from holosoma_retargeting.examples import (  # noqa: E402
+    PUBLIC_RETARGETING_COMMANDS,
+    parallel_robot_retarget,
+    robot_retarget,
+)
 
 
 class RetargetingEntrypointTests(unittest.TestCase):
@@ -89,6 +95,126 @@ class RetargetingEntrypointTests(unittest.TestCase):
         self.assertEqual(config.task_name, "walk/clip")
         self.assertEqual(config.data_path, DATASET_DEFAULT_PATHS["noetix_mocap"])
 
+    def test_orientation_tracking_is_off_by_default(self):
+        config = internal_config_from_command(
+            RetargetingCommand(
+                task="robot_only",
+                robot="g1",
+                dataset="noetix_mocap",
+            ),
+        )
+        self.assertEqual(config.retargeter.orientation_weights, {})
+
+    def test_orientation_switch_enables_all_mapped_links_with_equal_weights(self):
+        config = internal_config_from_command(
+            RetargetingCommand(
+                task="robot_only",
+                robot="e2",
+                dataset="gvhmr",
+                orientation=True,
+            ),
+        )
+        self.assertEqual(len(config.retargeter.orientation_weights), 15)
+        self.assertEqual(set(config.retargeter.orientation_weights.values()), {1.0})
+
+    def test_orientation_profile_accepts_keypoint_and_link_weight_names(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            profile_path = Path(temporary_dir) / "shoulders.json"
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "weights": {
+                            "LeftArm": 2.5,
+                            "r_arm_shoulder_yaw_link": 0.25,
+                        },
+                    },
+                ),
+                encoding="utf-8",
+            )
+            config = internal_config_from_command(
+                RetargetingCommand(
+                    task="robot_only",
+                    robot="e1",
+                    dataset="noetix_mocap",
+                    orientation_config=profile_path,
+                ),
+            )
+
+        self.assertEqual(
+            config.retargeter.orientation_weights,
+            {
+                "LeftArm": 2.5,
+                "RightArm": 0.25,
+            },
+        )
+
+    def test_disabled_orientation_profile_preserves_position_only_path(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            profile_path = Path(temporary_dir) / "disabled.json"
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "enabled": False,
+                        "weights": {"LeftArm": 2.5},
+                    },
+                ),
+                encoding="utf-8",
+            )
+            config = internal_config_from_command(
+                RetargetingCommand(
+                    task="robot_only",
+                    robot="g1",
+                    dataset="noetix_mocap",
+                    orientation_config=profile_path,
+                ),
+            )
+
+        self.assertEqual(config.retargeter.orientation_weights, {})
+
+    def test_orientation_profile_rejects_unknown_or_duplicate_names(self):
+        for payload in (
+            {"weights": {"unknown_link": 1.0}},
+            {
+                "weights": {
+                    "LeftArm": 1.0,
+                    "left_shoulder_yaw_link": 1.0,
+                },
+            },
+            {"weights": {"LeftArm": -1.0}},
+            {"weights": {"LeftArm": 0.0}},
+        ):
+            with self.subTest(payload=payload), tempfile.TemporaryDirectory() as temporary_dir:
+                profile_path = Path(temporary_dir) / "invalid.json"
+                profile_path.write_text(
+                    json.dumps(payload),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(ValueError):
+                    internal_config_from_command(
+                        RetargetingCommand(
+                            task="robot_only",
+                            robot="g1",
+                            dataset="noetix_mocap",
+                            orientation_config=profile_path,
+                        ),
+                    )
+
+    def test_public_command_has_only_compact_production_options(self):
+        self.assertEqual(
+            tuple(field.name for field in fields(RetargetingCommand)),
+            (
+                "task",
+                "robot",
+                "dataset",
+                "motion",
+                "data_path",
+                "save_dir",
+                "overwrite",
+                "orientation",
+                "orientation_config",
+            ),
+        )
+
     def test_public_main_accepts_only_compact_command(self):
         command = RetargetingCommand(motion="sub3_tripod_001")
         with mock.patch.object(robot_retarget, "run_config") as runner:
@@ -153,9 +279,8 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 dataset="lafan",
             ),
         ):
-            with self.subTest(command=command):
-                with self.assertRaises(ValueError):
-                    internal_config_from_command(command)
+            with self.subTest(command=command), self.assertRaises(ValueError):
+                internal_config_from_command(command)
 
 
 if __name__ == "__main__":

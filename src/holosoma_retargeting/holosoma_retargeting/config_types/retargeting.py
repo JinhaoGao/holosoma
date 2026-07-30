@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -92,6 +94,88 @@ class RetargetingCommand:
     overwrite: bool = False
     """Replace an existing result for the exact same motion and configuration."""
 
+    orientation: bool = False
+    """Enable T-pose-calibrated link orientation tracking with equal weights."""
+
+    orientation_config: Path | None = None
+    """Optional JSON file containing per-human-keypoint or per-robot-link weights."""
+
+
+def _orientation_weights_from_command(
+    command: RetargetingCommand,
+    *,
+    data_format: str,
+) -> dict[str, float]:
+    """Resolve the compact orientation switch/profile into solver weights."""
+
+    motion = MotionDataConfig(
+        data_format=data_format,
+        robot_type=command.robot,
+    )
+    mapping = motion.resolved_orientation_joints_mapping
+    if not mapping:
+        raise ValueError(
+            f"dataset={command.dataset!r} has no orientation mapping for robot={command.robot!r}",
+        )
+
+    profile_enabled = False
+    configured_weights: object = None
+    if command.orientation_config is not None:
+        profile_path = command.orientation_config.expanduser()
+        if profile_path.suffix.lower() != ".json":
+            raise ValueError("orientation_config must be a JSON file")
+        try:
+            with profile_path.open(encoding="utf-8") as profile_file:
+                profile = json.load(profile_file)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Cannot read orientation_config {profile_path}: {exc}") from exc
+        if not isinstance(profile, dict):
+            raise ValueError("orientation_config must contain one JSON object")
+        unknown_fields = sorted(set(profile).difference({"enabled", "weights"}))
+        if unknown_fields:
+            raise ValueError(f"orientation_config contains unknown fields: {unknown_fields}")
+        profile_enabled = profile.get("enabled", True)
+        if not isinstance(profile_enabled, bool):
+            raise ValueError("orientation_config field 'enabled' must be a boolean")
+        configured_weights = profile.get("weights")
+
+    enabled = command.orientation or profile_enabled
+    if not enabled:
+        return {}
+    if configured_weights is None:
+        return dict.fromkeys(mapping, 1.0)
+    if not isinstance(configured_weights, dict):
+        raise ValueError("orientation_config field 'weights' must be an object")
+
+    link_to_human = {robot_link: human_joint for human_joint, robot_link in mapping.items()}
+    weights: dict[str, float] = {}
+    for configured_name, raw_weight in configured_weights.items():
+        if not isinstance(configured_name, str):
+            raise ValueError("orientation_config weight names must be strings")
+        if configured_name in mapping:
+            human_joint = configured_name
+        elif configured_name in link_to_human:
+            human_joint = link_to_human[configured_name]
+        else:
+            raise ValueError(
+                f"orientation_config weight {configured_name!r} is neither a mapped human keypoint nor robot link",
+            )
+        if human_joint in weights:
+            raise ValueError(
+                f"orientation_config defines {human_joint!r} more than once through keypoint/link aliases",
+            )
+        if isinstance(raw_weight, bool) or not isinstance(raw_weight, (int, float)):
+            raise ValueError(f"orientation weight for {configured_name!r} must be a number")
+        weight = float(raw_weight)
+        if not math.isfinite(weight) or weight < 0.0:
+            raise ValueError(
+                f"orientation weight for {configured_name!r} must be finite and non-negative",
+            )
+        weights[human_joint] = weight
+    if not weights or not any(weight > 0.0 for weight in weights.values()):
+        raise ValueError("enabled orientation tracking requires at least one positive weight")
+    return weights
+
 
 def internal_config_from_command(command: RetargetingCommand) -> RetargetingConfig:
     """Resolve the compact public command into the internal solver config."""
@@ -117,6 +201,12 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         data_path=command.data_path or default_data_path,
         save_dir=command.save_dir,
         overwrite_existing=command.overwrite,
+        retargeter=RetargeterConfig(
+            orientation_weights=_orientation_weights_from_command(
+                command,
+                data_format=data_format,
+            ),
+        ),
     )
 
 
