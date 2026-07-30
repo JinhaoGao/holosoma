@@ -72,6 +72,15 @@ class RetargetingEntrypointTests(unittest.TestCase):
         self.assertFalse(cfg.augmentation)
         self.assertIsNone(cfg.save_dir)
 
+    def test_augmented_entry_rejects_robot_only(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "only object_interaction and climbing",
+        ):
+            parallel_robot_retarget.run_config(
+                RetargetingConfig(task_type="robot_only"),
+            )
+
     def test_explicit_result_root_is_preserved(self):
         custom_root = Path("/tmp/retargeting-results")
         for module in (robot_retarget, parallel_robot_retarget):

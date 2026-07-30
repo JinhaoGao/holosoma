@@ -208,8 +208,12 @@ def planned_variants(
     """Return the canonical variant family for one task type."""
 
     variants = [IDENTITY_VARIANT]
-    if not augmentation or task_type == "robot_only":
+    if not augmentation:
         return tuple(variants)
+    if task_type == "robot_only":
+        raise ValueError(
+            "The augmentation interface supports only object_interaction and climbing tasks",
+        )
     if task_type == "object_interaction":
         variants.extend(
             (
@@ -1536,11 +1540,7 @@ def _cleanup_stale_solve_candidates(output_path: Path) -> None:
         f"..{output_path.name}.solve.*.tmp.npz.*.tmp.npz",
     )
     removed = False
-    candidates = {
-        candidate
-        for pattern in patterns
-        for candidate in parent.glob(pattern)
-    }
+    candidates = {candidate for pattern in patterns for candidate in parent.glob(pattern)}
     for candidate in sorted(candidates):
         candidate.unlink(missing_ok=True)
         removed = True

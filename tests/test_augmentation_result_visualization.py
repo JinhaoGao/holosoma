@@ -191,14 +191,15 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
         self.assertTrue(all(job.run_kind == "augmentation" for job in jobs[1:]))
         self.assertTrue(all(job.baseline_config_sha256 == jobs[0].config_sha256 for job in jobs[1:]))
 
-    def test_robot_only_family_never_adds_augmentation_variants(self):
-        variants = planned_variants(
-            "robot_only",
-            augmentation=True,
-        )
-
-        self.assertEqual(len(variants), 1)
-        self.assertTrue(variants[0].is_identity)
+    def test_robot_only_is_rejected_by_augmentation_family(self):
+        with self.assertRaisesRegex(
+            ValueError,
+            "only object_interaction and climbing",
+        ):
+            planned_variants(
+                "robot_only",
+                augmentation=True,
+            )
 
     def test_batched_single_axis_rotation_supports_current_scipy(self):
         object_poses = np.zeros((4, 7), dtype=np.float64)

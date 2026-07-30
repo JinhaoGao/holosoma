@@ -25,6 +25,8 @@ from holosoma_retargeting.config_types.retargeting import (
 )
 from holosoma_retargeting.retargeting_pipeline import (
     RetargetFamilyResult,
+)
+from holosoma_retargeting.retargeting_pipeline import (
     main as run_retargeting_family,
 )
 
@@ -34,6 +36,10 @@ DEFAULT_RESULTS_ROOT = Path(__file__).resolve().parents[1] / "demo_results_paral
 def run_config(cfg: RetargetingConfig) -> RetargetFamilyResult:
     """Run an internal solver config through the augmentation interface."""
 
+    if cfg.task_type not in {"object_interaction", "climbing"}:
+        raise ValueError(
+            "The augmentation interface supports only object_interaction and climbing tasks",
+        )
     normalized = deepcopy(cfg)
     normalized.augmentation = True
     if normalized.save_dir is None:
