@@ -105,8 +105,6 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 name="translated",
                 translation=(0.2, 0.0, 0.0),
             ),
-            run_kind="augmentation",
-            experiment_name=None,
         )
 
         self.assertEqual(

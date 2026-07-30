@@ -53,10 +53,6 @@ from holosoma_retargeting.result_artifact import (
     validate_result_artifact,
     validate_result_external_assets,
 )
-from holosoma_retargeting.retargeting_fingerprint import (
-    solver_dependency_fingerprint,
-    solver_implementation_fingerprint,
-)
 from holosoma_retargeting.src.interaction_mesh_retargeter import (
     InteractionMeshRetargeter,  # type: ignore[import-not-found]
 )
@@ -96,7 +92,7 @@ _AUGMENTATION_TRANSLATION = np.array([0.2, 0.0, 0.0])
 
 # Type aliases
 TaskType = Literal["robot_only", "object_interaction", "climbing"]
-RunKind = Literal["single", "augmentation", "ablation"]
+RunKind = Literal["single", "augmentation"]
 
 
 @dataclass(frozen=True)
@@ -148,7 +144,6 @@ class RetargetJob:
     source_path: Path
     output_path: Path
     baseline_path: Path
-    state_lock_path: Path
     output_lock_path: Path
     baseline_lock_path: Path
     generated_assets_dir: Path
@@ -156,13 +151,9 @@ class RetargetJob:
     dataset_partition: str
     run_kind: RunKind
     variant: RetargetVariant
-    experiment_name: str | None
     source_sha256: str
-    source_size: int
-    source_mtime_ns: int
     config_json: str
     config_sha256: str
-    baseline_source_sha256: str
     baseline_config_json: str
     baseline_config_sha256: str
 
@@ -267,58 +258,13 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _solver_dependency_paths(
-    normalized: RetargetingConfig,
-) -> dict[str, Path]:
-    """Resolve static inputs that can change a solve without changing config."""
-
-    robot_urdf = Path(normalized.robot_config.ROBOT_URDF_FILE).expanduser()
-    if not robot_urdf.is_absolute():
-        robot_urdf = Path(__file__).resolve().parent / robot_urdf
-    robot_urdf = robot_urdf.resolve(strict=True)
-    dependencies = {
-        "robot_model_tree": robot_urdf.parent,
-    }
-
-    if normalized.data_format == "omomo" and normalized.motion_data_config.human_height is None:
-        logical_data_path = Path(normalized.data_path).expanduser().absolute()
-        dependencies["omomo_height_table"] = logical_data_path.parent / "height_dict.pkl"
-
-    if normalized.task_type == "object_interaction":
-        object_name = normalized.task_config.object_name
-        if object_name is None:
-            raise ValueError("Normalized object-interaction jobs require an object name")
-        object_asset = get_omomo_object_asset(object_name)
-        dependencies["object_model_tree"] = object_asset.mesh_path.parent
-    elif normalized.task_type == "climbing":
-        object_dir = normalized.task_config.object_dir
-        if object_dir is None:
-            raise ValueError("Normalized climbing jobs require object_dir")
-        dependencies["climbing_scene_tree"] = object_dir
-
-    return dependencies
-
-
-def _solver_identity(
-    normalized: RetargetingConfig,
-) -> dict[str, object]:
-    """Bind a job to solver code, runtime, and static dependency bytes."""
-
-    return {
-        **solver_implementation_fingerprint(),
-        "dependencies": solver_dependency_fingerprint(_solver_dependency_paths(normalized)),
-    }
-
-
 def _normalized_job_payload(
     normalized: RetargetingConfig,
     *,
     run_kind: RunKind,
     variant: RetargetVariant,
-    experiment_name: str | None,
     dataset_partition: str,
     sequence_key: str,
-    solver_identity: dict[str, object],
 ) -> tuple[str, str]:
     solver_config = asdict(normalized)
     solver_config["augmentation"] = False
@@ -328,10 +274,9 @@ def _normalized_job_payload(
         "config": solver_config,
         "run_kind": run_kind,
         "variant": asdict(variant),
-        "experiment_name": experiment_name,
+        "experiment_name": None,
         "dataset_partition": dataset_partition,
         "sequence_key": sequence_key,
-        "solver_identity": solver_identity,
     }
     config_json = json.dumps(
         _json_ready(payload),
@@ -369,7 +314,6 @@ def result_artifact_matches_job(
         return False
     expected_variant = IDENTITY_VARIANT.name if identity_baseline else job.variant.name
     expected_run_kind = "single" if identity_baseline else job.run_kind
-    expected_source_sha256 = job.baseline_source_sha256 if identity_baseline else job.source_sha256
     expected_config_json = job.baseline_config_json if identity_baseline else job.config_json
     expected_config_sha256 = job.baseline_config_sha256 if identity_baseline else job.config_sha256
     try:
@@ -378,7 +322,7 @@ def result_artifact_matches_job(
             matches = (
                 int(np.asarray(data["schema_version"]).item()) == RESULT_SCHEMA_VERSION
                 and _artifact_scalar_text(data, "source_path") == str(job.source_path)
-                and _artifact_scalar_text(data, "source_sha256") == expected_source_sha256
+                and _artifact_scalar_text(data, "source_sha256") == job.source_sha256
                 and _artifact_scalar_text(data, "config_json") == expected_config_json
                 and _artifact_scalar_text(data, "config_sha256") == expected_config_sha256
                 and _artifact_scalar_text(data, "variant") == expected_variant
@@ -461,8 +405,6 @@ def _canonical_result_path(
     dataset_partition: str,
     sequence_key: str,
     variant: RetargetVariant,
-    run_kind: RunKind,
-    experiment_name: str | None,
 ) -> Path:
     sequence_path = Path(sequence_key)
     if sequence_path.is_absolute():
@@ -477,62 +419,19 @@ def _canonical_result_path(
         / _encode_path_component(dataset_partition, "dataset_partition")
         / Path(*sequence_parts)
     )
-    if run_kind == "ablation":
-        if not experiment_name:
-            raise ValueError("Ablation jobs require experiment_name")
-        return (
-            results_root
-            / "ablations"
-            / _encode_path_component(experiment_name, "experiment_name")
-            / variant.name
-            / common
-            / "identity.npz"
-        )
     return results_root / common / f"{variant.name}.npz"
 
 
-def _persistent_results_state_root(results_root: Path) -> Path:
-    resolved_root = Path(results_root).expanduser().resolve()
-    parts = resolved_root.parts
-    if ".staging" in parts:
-        staging_index = parts.index(".staging")
-        return Path(*parts[:staging_index])
-    if re.fullmatch(r"v[0-9]+", resolved_root.name):
-        return resolved_root.parent
-    return resolved_root
+def _job_lock_path(output_path: Path) -> Path:
+    """Keep the only runtime lock beside the selected motion family."""
+
+    return output_path.parent / ".locks" / f"{output_path.stem}.lock"
 
 
-def generated_assets_root(results_root: Path) -> Path:
-    """Resolve a promotion-safe generated-asset root for a result tree."""
+def _generated_assets_dir_for_job(output_path: Path, variant: RetargetVariant) -> Path:
+    """Place generated scenes with the selected motion instead of in a global cache."""
 
-    return _persistent_results_state_root(results_root) / ".generated-assets" / "jobs"
-
-
-def results_state_lock_path(results_root: Path) -> Path:
-    """Return the promotion/job lifecycle lock shared by staging and formal roots."""
-
-    return _persistent_results_state_root(results_root) / ".locks" / "results-state.lock"
-
-
-def _job_lock_path(
-    results_root: Path,
-    logical_output_path: Path,
-) -> Path:
-    logical_name = logical_output_path.as_posix()
-    digest = hashlib.sha256(logical_name.encode("utf-8")).hexdigest()
-    return _persistent_results_state_root(results_root) / ".locks" / "retargeting" / digest[:2] / f"{digest}.lock"
-
-
-def _generated_assets_dir_for_job(
-    results_root: Path,
-    *,
-    config_sha256: str,
-    source_sha256: str,
-) -> Path:
-    """Return the deterministic cache directory for one exact job identity."""
-
-    fingerprint = hashlib.sha256(f"{config_sha256}:{source_sha256}".encode("ascii")).hexdigest()
-    return generated_assets_root(results_root) / fingerprint[:2] / fingerprint
+    return output_path.parent / ".assets" / variant.name
 
 
 def _default_sequence_key(
@@ -571,7 +470,6 @@ def build_retarget_job(
     *,
     variant: RetargetVariant = IDENTITY_VARIANT,
     run_kind: RunKind = "single",
-    experiment_name: str | None = None,
     results_root: Path | None = None,
     dataset_partition: str | None = None,
     sequence_key: str | None = None,
@@ -584,7 +482,6 @@ def build_retarget_job(
     _validate_job_semantics(
         variant=variant,
         run_kind=run_kind,
-        experiment_name=experiment_name,
     )
     normalized = normalize_retargeting_config(cfg)
     # Augmentation is an orchestration request. The variant is the complete,
@@ -624,8 +521,6 @@ def build_retarget_job(
         dataset_partition=partition,
         sequence_key=key,
         variant=variant,
-        run_kind=run_kind,
-        experiment_name=experiment_name,
     )
     baseline_path = _canonical_result_path(
         results_root=root,
@@ -634,50 +529,30 @@ def build_retarget_job(
         dataset_partition=partition,
         sequence_key=key,
         variant=IDENTITY_VARIANT,
-        run_kind="single",
-        experiment_name=None,
     )
-    output_lock_path = _job_lock_path(
-        root,
-        output_path.relative_to(root),
-    )
-    baseline_lock_path = _job_lock_path(
-        root,
-        baseline_path.relative_to(root),
-    )
-    state_lock_path = results_state_lock_path(root)
-    source_stat = resolved_source_path.stat()
+    output_lock_path = _job_lock_path(output_path)
+    baseline_lock_path = _job_lock_path(baseline_path)
     resolved_source_sha256 = source_sha256 or _sha256_file(resolved_source_path)
-    solver_identity = _solver_identity(normalized)
     config_json, config_sha256 = _normalized_job_payload(
         normalized,
         run_kind=run_kind,
         variant=variant,
-        experiment_name=experiment_name,
         dataset_partition=partition,
         sequence_key=key,
-        solver_identity=solver_identity,
     )
     baseline_config_json, baseline_config_sha256 = _normalized_job_payload(
         normalized,
         run_kind="single",
         variant=IDENTITY_VARIANT,
-        experiment_name=None,
         dataset_partition=partition,
         sequence_key=key,
-        solver_identity=solver_identity,
     )
-    generated_assets_dir = _generated_assets_dir_for_job(
-        root,
-        config_sha256=config_sha256,
-        source_sha256=resolved_source_sha256,
-    )
+    generated_assets_dir = _generated_assets_dir_for_job(output_path, variant)
     return RetargetJob(
         config=normalized,
         source_path=resolved_source_path,
         output_path=output_path,
         baseline_path=baseline_path,
-        state_lock_path=state_lock_path,
         output_lock_path=output_lock_path,
         baseline_lock_path=baseline_lock_path,
         generated_assets_dir=generated_assets_dir,
@@ -685,13 +560,9 @@ def build_retarget_job(
         dataset_partition=partition,
         run_kind=run_kind,
         variant=variant,
-        experiment_name=experiment_name,
         source_sha256=resolved_source_sha256,
-        source_size=source_stat.st_size,
-        source_mtime_ns=source_stat.st_mtime_ns,
         config_json=config_json,
         config_sha256=config_sha256,
-        baseline_source_sha256=resolved_source_sha256,
         baseline_config_json=baseline_config_json,
         baseline_config_sha256=baseline_config_sha256,
     )
@@ -704,32 +575,19 @@ def _validate_job_semantics(
     *,
     variant: RetargetVariant,
     run_kind: RunKind,
-    experiment_name: str | None,
 ) -> None:
     """Reject ambiguous combinations before they can share an output path."""
 
-    if run_kind not in {"single", "augmentation", "ablation"}:
-        raise ValueError(
-            "run_kind must be 'single', 'augmentation', or 'ablation'",
-        )
+    if run_kind not in {"single", "augmentation"}:
+        raise ValueError("run_kind must be 'single' or 'augmentation'")
     if run_kind == "single":
         if not variant.is_identity:
             raise ValueError("single jobs require the exact identity variant")
-        if experiment_name is not None:
-            raise ValueError("single jobs must not set experiment_name")
         return
-    if run_kind == "augmentation":
-        if not variant.changes_motion:
-            raise ValueError(
-                "augmentation jobs require a non-identity motion transformation",
-            )
-        if experiment_name is not None:
-            raise ValueError("augmentation jobs must not set experiment_name")
-        return
-    if variant.changes_motion:
-        raise ValueError("ablation jobs must not transform motion")
-    if not experiment_name:
-        raise ValueError("ablation jobs require experiment_name")
+    if not variant.changes_motion:
+        raise ValueError(
+            "augmentation jobs require a non-identity motion transformation",
+        )
 
 
 def resolve_task_object_name(
@@ -855,10 +713,6 @@ def validate_config(cfg: RetargetingConfig) -> None:
         )
     data_format = cfg.data_format or DEFAULT_DATA_FORMATS[cfg.task_type]
     validate_motion_task(data_format, cfg.task_type)
-    if not cfg.retargeter.save_interaction_mesh:
-        raise ValueError(
-            "Canonical retargeting artifacts require Interaction Mesh data; save_interaction_mesh must remain enabled"
-        )
 
 
 def create_ground_points(x_range: tuple[float, float], y_range: tuple[float, float], size: int) -> np.ndarray:
@@ -1298,14 +1152,14 @@ def build_retargeter_kwargs_from_config(
         "sqp_max_iterations": retargeter_config.sqp_max_iterations,
         "sqp_min_iterations": retargeter_config.sqp_min_iterations,
         "sqp_convergence_patience": retargeter_config.sqp_convergence_patience,
-        "visualize": retargeter_config.visualize,
-        "mesh_opacity": retargeter_config.mesh_opacity,
-        "debug": retargeter_config.debug,
-        "show_interaction_mesh": retargeter_config.show_interaction_mesh,
-        "save_interaction_mesh": retargeter_config.save_interaction_mesh,
-        "interaction_mesh_mode": retargeter_config.interaction_mesh_mode,
-        "interaction_mesh_edges": retargeter_config.interaction_mesh_edges,
-        "interaction_mesh_line_width": retargeter_config.interaction_mesh_line_width,
+        "visualize": False,
+        "mesh_opacity": 1.0,
+        "debug": False,
+        "show_interaction_mesh": False,
+        "save_interaction_mesh": True,
+        "interaction_mesh_mode": "both",
+        "interaction_mesh_edges": "cross",
+        "interaction_mesh_line_width": 1.0,
         "w_nominal_tracking_init": retargeter_config.w_nominal_tracking_init,
         "nominal_tracking_tau": retargeter_config.nominal_tracking_tau,
         "orientation_joints_mapping": constants.ORIENTATION_JOINTS_MAPPING,
@@ -1432,57 +1286,27 @@ def _direct_motion_orientations(
     )
 
 
-def _source_stat_signature(
-    path: Path,
-) -> tuple[int, int, int, int, int]:
-    source_stat = path.stat()
-    return (
-        source_stat.st_dev,
-        source_stat.st_ino,
-        source_stat.st_size,
-        source_stat.st_mtime_ns,
-        source_stat.st_ctime_ns,
-    )
+def _verify_job_source(job: RetargetJob) -> None:
+    """Ensure the selected motion still has the bytes planned for this job."""
 
-
-def _verify_job_source(
-    job: RetargetJob,
-) -> tuple[int, int, int, int, int]:
-    before = _source_stat_signature(job.source_path)
     observed_sha256 = _sha256_file(job.source_path)
-    after = _source_stat_signature(job.source_path)
-    if before != after:
-        raise RuntimeError(f"Retargeting source changed while hashing: {job.source_path}")
     if observed_sha256 != job.source_sha256:
         raise RuntimeError(
             "Retargeting source bytes changed after job planning: "
             f"{job.source_path}; expected {job.source_sha256}, "
             f"observed {observed_sha256}"
         )
-    return after
 
 
-def _verify_job_solver_identity(job: RetargetJob) -> None:
-    """Reject config, code, runtime, or static assets changed after planning."""
+def _verify_job_config(job: RetargetJob) -> None:
+    """Ensure callers did not mutate the normalized config after planning."""
 
-    try:
-        planned_payload = json.loads(job.config_json)
-        planned_solver_identity = planned_payload["solver_identity"]
-    except (KeyError, TypeError, json.JSONDecodeError) as exc:
-        raise RuntimeError("Retargeting job contains an invalid planned solver identity") from exc
-    observed_solver_identity = _solver_identity(job.config)
-    if observed_solver_identity != planned_solver_identity:
-        raise RuntimeError(
-            "Retargeting solver implementation, runtime, or static dependency bytes changed after job planning",
-        )
     observed_config_json, observed_config_sha256 = _normalized_job_payload(
         job.config,
         run_kind=job.run_kind,
         variant=job.variant,
-        experiment_name=job.experiment_name,
         dataset_partition=job.dataset_partition,
         sequence_key=job.sequence_key,
-        solver_identity=observed_solver_identity,
     )
     if observed_config_json != job.config_json or observed_config_sha256 != job.config_sha256:
         raise RuntimeError(
@@ -1490,26 +1314,9 @@ def _verify_job_solver_identity(job: RetargetJob) -> None:
         )
 
 
-def _revalidate_mutable_job_inputs(
-    job: RetargetJob,
-    *,
-    source_signature: tuple[int, int, int, int, int],
-) -> None:
-    """Recheck every path-based job input at one commit boundary.
-
-    The full source hash and the complete planned solver identity are both
-    recomputed. Calling this immediately after a potentially long validation
-    closes that validation's mutation window. It deliberately does not claim
-    filesystem snapshot isolation: without making private input snapshots, a
-    non-cooperating writer could still swap a path after this check or
-    transiently replace and restore the original inode between checks.
-    """
-
-    if _verify_job_source(job) != source_signature:
-        raise RuntimeError(
-            f"Retargeting source changed during job validation: {job.source_path}",
-        )
-    _verify_job_solver_identity(job)
+def _revalidate_job_inputs(job: RetargetJob) -> None:
+    _verify_job_source(job)
+    _verify_job_config(job)
 
 
 def _fsync_directory(path: Path) -> None:
@@ -1547,22 +1354,9 @@ def _cleanup_stale_solve_candidates(output_path: Path) -> None:
 def _publish_solved_artifact(
     job: RetargetJob,
     temporary_output_path: Path,
-    *,
-    source_signature: tuple[int, int, int, int, int],
 ) -> None:
-    """Atomically publish after double-checking each path-based mutable input.
+    """Validate and atomically replace the selected result."""
 
-    Candidate validation can be expensive, so the source bytes and solver
-    identity are checked both before and after it. The final check is the
-    strongest path-based guarantee available without private immutable input
-    snapshots; it is not advertised as protection from a non-cooperating
-    writer in the final instructions between revalidation and ``replace``.
-    """
-
-    _revalidate_mutable_job_inputs(
-        job,
-        source_signature=source_signature,
-    )
     if not result_artifact_matches_job(
         temporary_output_path,
         job,
@@ -1570,10 +1364,7 @@ def _publish_solved_artifact(
         raise RuntimeError(
             "Solver output failed the exact schema, source, config, or external-asset contract before publication",
         )
-    _revalidate_mutable_job_inputs(
-        job,
-        source_signature=source_signature,
-    )
+    _revalidate_job_inputs(job)
     temporary_output_path.replace(job.output_path)
     _fsync_directory(job.output_path.parent)
 
@@ -1613,28 +1404,14 @@ def _resumed_job_result(job: RetargetJob) -> RetargetJobResult:
 
 
 def run_retargeting_job(job: RetargetJob) -> RetargetJobResult:
-    """Execute or exactly resume one job under baseline and output locks.
-
-    Source bytes and solver identity are fully rechecked after an existing
-    artifact is validated and immediately before it is reported as resumed.
-    These are path-based checks rather than filesystem snapshots, so
-    non-cooperating writers must still avoid transient replace-and-restore
-    operations during the final instruction window.
-    """
+    """Execute or exactly resume one job under baseline and output locks."""
 
     _validate_job_semantics(
         variant=job.variant,
         run_kind=job.run_kind,
-        experiment_name=job.experiment_name,
     )
     is_augmented = job.run_kind == "augmentation"
     with ExitStack() as locks:
-        locks.enter_context(
-            _job_file_lock(
-                job.state_lock_path,
-                shared=True,
-            )
-        )
         if is_augmented:
             locks.enter_context(
                 _job_file_lock(
@@ -1649,15 +1426,11 @@ def run_retargeting_job(job: RetargetJob) -> RetargetJobResult:
             )
         )
         _cleanup_stale_solve_candidates(job.output_path)
-        source_signature = _verify_job_source(job)
-        _verify_job_solver_identity(job)
+        _revalidate_job_inputs(job)
         if job.output_path.exists():
             if result_artifact_matches_job(job.output_path, job):
                 if not job.config.overwrite_existing:
-                    _revalidate_mutable_job_inputs(
-                        job,
-                        source_signature=source_signature,
-                    )
+                    _revalidate_job_inputs(job)
                     return _resumed_job_result(job)
             elif not job.config.overwrite_existing:
                 raise FileExistsError(
@@ -1665,27 +1438,16 @@ def run_retargeting_job(job: RetargetJob) -> RetargetJobResult:
                     "this exact source/config job. Pass --overwrite-existing "
                     f"to replace it explicitly: {job.output_path}"
                 )
-            _revalidate_mutable_job_inputs(
-                job,
-                source_signature=source_signature,
-            )
-        return _run_retargeting_job_unlocked(
-            job,
-            source_signature=source_signature,
-        )
+            _revalidate_job_inputs(job)
+        return _run_retargeting_job_unlocked(job)
 
 
-def _run_retargeting_job_unlocked(
-    job: RetargetJob,
-    *,
-    source_signature: tuple[int, int, int, int, int],
-) -> RetargetJobResult:
+def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
     """Execute the sole load/preprocess/solve/save lifecycle."""
 
     _validate_job_semantics(
         variant=job.variant,
         run_kind=job.run_kind,
-        experiment_name=job.experiment_name,
     )
     is_augmented = job.run_kind == "augmentation"
     if is_augmented and not result_artifact_matches_job(
@@ -1699,10 +1461,7 @@ def _run_retargeting_job_unlocked(
             f"{job.baseline_path}"
         )
     if is_augmented:
-        _revalidate_mutable_job_inputs(
-            job,
-            source_signature=source_signature,
-        )
+        _revalidate_job_inputs(job)
 
     cfg = job.config
     task_name = cfg.task_name
@@ -1714,8 +1473,7 @@ def _run_retargeting_job_unlocked(
         task_name,
         human_height=cfg.motion_data_config.human_height,
     )
-    if _verify_job_source(job) != source_signature:
-        raise RuntimeError(f"Retargeting source changed while loading: {job.source_path}")
+    _verify_job_source(job)
     if motion.source_path.resolve() != job.source_path:
         raise ValueError(
             "Normalized job source does not match the motion adapter: "
@@ -1850,7 +1608,7 @@ def _run_retargeting_job_unlocked(
     result_metadata = {
         "run_kind": job.run_kind,
         "variant": job.variant.name,
-        "experiment_name": job.experiment_name or "",
+        "experiment_name": "",
         "dataset_partition": job.dataset_partition,
         "sequence_key": job.sequence_key,
         "source_path": str(job.source_path),
@@ -1901,12 +1659,9 @@ def _run_retargeting_job_unlocked(
         _publish_solved_artifact(
             job,
             temporary_output_path,
-            source_signature=source_signature,
         )
     finally:
         temporary_output_path.unlink(missing_ok=True)
-    if cfg.retargeter.debug:
-        input("Press Enter to exit ...")
     return RetargetJobResult(
         output_path=job.output_path,
         source_path=job.source_path,

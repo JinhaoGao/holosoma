@@ -88,14 +88,13 @@ def _write_strict_evaluation_result(
     payload["sequence_key"] = np.asarray(sequence_key)
     payload["robot_type"] = np.asarray(robot_type)
     payload["source_data_format"] = np.asarray(data_format)
-    experiment_name = "test_ablation" if run_kind == "ablation" else ""
-    payload["experiment_name"] = np.asarray(experiment_name)
+    payload["experiment_name"] = np.asarray("")
     if object_name is not None:
         payload["object_name"] = np.asarray(object_name)
 
     config = json.loads(str(np.asarray(payload["config_json"]).item()))
     config["run_kind"] = run_kind
-    config["experiment_name"] = experiment_name or None
+    config["experiment_name"] = None
     config["variant"]["name"] = variant
     config["dataset_partition"] = dataset_partition
     config["sequence_key"] = sequence_key
@@ -256,11 +255,6 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
                 sequence_dir / "trans_0.npz",
                 schema_version=np.int32(RESULT_SCHEMA_VERSION),
                 sequence_key=np.asarray("nested/sub1_suitcase_001"),
-            )
-            self._write_canonical_result(
-                root / "ablations" / "experiment" / "identity.npz",
-                sequence_key="must_not_include_ablation",
-                run_kind="ablation",
             )
             self._write_canonical_result(
                 root / "canonical" / "g1" / "robot_only" / "sequence" / "identity.npz",

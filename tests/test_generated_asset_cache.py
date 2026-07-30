@@ -31,7 +31,6 @@ from holosoma_retargeting.retargeting_pipeline import (  # noqa: E402
     RetargetVariant,
     build_retarget_job,
     create_task_constants,
-    generated_assets_root,
     setup_object_data,
 )
 
@@ -44,8 +43,8 @@ def _tree_snapshot(root: Path) -> dict[str, str]:
     }
 
 
-class JobAssetCachePathTests(unittest.TestCase):
-    def test_staging_and_formal_jobs_share_a_promotion_safe_cache_identity(self):
+class JobAssetPathTests(unittest.TestCase):
+    def test_generated_assets_and_locks_stay_with_the_motion_family(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             source_dir = workspace / "motions"
@@ -67,27 +66,25 @@ class JobAssetCachePathTests(unittest.TestCase):
                 task_config=TaskConfig(),
             )
             results_root = workspace / "demo_results"
-            staging_job = build_retarget_job(
+            identity_job = build_retarget_job(
                 config,
-                results_root=results_root / ".staging" / "run-a" / "v1",
+                results_root=results_root,
                 source_path=source,
             )
-            formal_job = build_retarget_job(
-                config,
-                results_root=results_root / "v1",
-                source_path=source,
-            )
-
             self.assertEqual(
-                staging_job.generated_assets_dir,
-                formal_job.generated_assets_dir,
+                identity_job.generated_assets_dir,
+                identity_job.output_path.parent / ".assets" / "identity",
             )
             self.assertEqual(
-                generated_assets_root(results_root / ".staging" / "run-a" / "v1"),
-                results_root / ".generated-assets" / "jobs",
+                identity_job.output_lock_path,
+                identity_job.output_path.parent / ".locks" / "identity.lock",
             )
-            self.assertNotIn(".staging", staging_job.generated_assets_dir.parts)
-            self.assertFalse(staging_job.generated_assets_dir.is_relative_to(source_dir))
+            self.assertEqual(
+                identity_job.baseline_lock_path,
+                identity_job.output_lock_path,
+            )
+            self.assertTrue(identity_job.generated_assets_dir.is_relative_to(results_root))
+            self.assertFalse(identity_job.generated_assets_dir.is_relative_to(source_dir))
 
             augmented_job = build_retarget_job(
                 config,
@@ -96,47 +93,12 @@ class JobAssetCachePathTests(unittest.TestCase):
                     translation=(0.2, 0.0, 0.0),
                 ),
                 run_kind="augmentation",
-                results_root=results_root / ".staging" / "run-a" / "v1",
+                results_root=results_root,
                 source_path=source,
             )
-            self.assertNotEqual(
-                staging_job.generated_assets_dir,
+            self.assertEqual(
                 augmented_job.generated_assets_dir,
-            )
-
-    def test_source_byte_change_changes_job_asset_fingerprint(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            workspace = Path(tmpdir)
-            source = workspace / "sub1_tripod_001.pt"
-            source.write_bytes(b"version one")
-            config = RetargetingConfig(
-                task_type="object_interaction",
-                robot="g1",
-                data_format="omomo",
-                task_name=source.stem,
-                data_path=workspace,
-                robot_config=RobotConfig(robot_type="g1"),
-                motion_data_config=MotionDataConfig(
-                    data_format="omomo",
-                    robot_type="g1",
-                    human_height=1.75,
-                ),
-                task_config=TaskConfig(),
-            )
-            first = build_retarget_job(
-                config,
-                results_root=workspace / "results" / "v1",
-                source_path=source,
-            )
-            source.write_bytes(b"version two")
-            second = build_retarget_job(
-                config,
-                results_root=workspace / "results" / "v1",
-                source_path=source,
-            )
-            self.assertNotEqual(
-                first.generated_assets_dir,
-                second.generated_assets_dir,
+                augmented_job.output_path.parent / ".assets" / "trans_0",
             )
 
 

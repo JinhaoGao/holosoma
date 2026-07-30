@@ -775,16 +775,16 @@ class ResultArtifactTests(unittest.TestCase):
         ):
             validate_result_artifact(variant_mismatch)
 
-        ablation_without_experiment = _valid_payload()
-        ablation_without_experiment["run_kind"] = np.asarray("ablation")
-        config = json.loads(str(np.asarray(ablation_without_experiment["config_json"]).item()))
+        unsupported_run_kind = _valid_payload()
+        unsupported_run_kind["run_kind"] = np.asarray("ablation")
+        config = json.loads(str(np.asarray(unsupported_run_kind["config_json"]).item()))
         config["run_kind"] = "ablation"
-        _replace_config(ablation_without_experiment, config)
+        _replace_config(unsupported_run_kind, config)
         with self.assertRaisesRegex(
             ResultArtifactValidationError,
-            "experiment_name.*ablation",
+            "run_kind.*single.*augmentation",
         ):
-            validate_result_artifact(ablation_without_experiment)
+            validate_result_artifact(unsupported_run_kind)
 
         invalid_partition = _valid_payload()
         invalid_partition["dataset_partition"] = np.asarray("bad/path")

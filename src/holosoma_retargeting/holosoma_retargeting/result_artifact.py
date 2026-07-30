@@ -230,9 +230,7 @@ def _compact_parent_indices(
 def _is_hand_keypoint(name: str) -> bool:
     fingers = ("Thumb", "Index", "Middle", "Ring", "Pinky")
     if name.startswith(("L_", "R_")):
-        return name.endswith("_Wrist") or any(
-            finger in name for finger in fingers
-        )
+        return name.endswith("_Wrist") or any(finger in name for finger in fingers)
     if name in {"LeftHand", "RightHand"}:
         return True
     return name.startswith(("LeftHand", "RightHand")) and any(finger in name for finger in fingers)
@@ -296,15 +294,10 @@ def compact_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         return result
 
     human_names = [str(value) for value in np.asarray(result["human_joint_names"]).tolist()]
-    mapped_human_names = [
-        str(value)
-        for value in np.asarray(result["mapped_human_joint_names"]).tolist()
-    ]
+    mapped_human_names = [str(value) for value in np.asarray(result["mapped_human_joint_names"]).tolist()]
     kept_human_names = set(mapped_human_names)
     kept_human_names.update(name for name in human_names if _is_hand_keypoint(name))
-    kept_human_indices = [
-        index for index, name in enumerate(human_names) if name in kept_human_names
-    ]
+    kept_human_indices = [index for index, name in enumerate(human_names) if name in kept_human_names]
     human_joints = np.asarray(result["human_joints"])
     result["human_joints"] = human_joints[:, kept_human_indices]
     result["human_joint_names"] = np.asarray(
@@ -317,15 +310,8 @@ def compact_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     )
 
     if HUMAN_ORIENTATION_KEYS.issubset(result):
-        orientation_names = [
-            str(value)
-            for value in np.asarray(result["human_orientation_joint_names"]).tolist()
-        ]
-        orientation_indices = [
-            index
-            for index, name in enumerate(orientation_names)
-            if name in set(mapped_human_names)
-        ]
+        orientation_names = [str(value) for value in np.asarray(result["human_orientation_joint_names"]).tolist()]
+        orientation_indices = [index for index, name in enumerate(orientation_names) if name in set(mapped_human_names)]
         orientation_names_array = np.asarray(
             [orientation_names[index] for index in orientation_indices],
             dtype=str,
@@ -346,13 +332,8 @@ def compact_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
             for key in HUMAN_ORIENTATION_KEYS:
                 result.pop(key, None)
 
-    robot_names = [
-        str(value) for value in np.asarray(result["robot_link_names"]).tolist()
-    ]
-    mapped_robot_names = [
-        str(value)
-        for value in np.asarray(result["mapped_robot_link_names"]).tolist()
-    ]
+    robot_names = [str(value) for value in np.asarray(result["robot_link_names"]).tolist()]
+    mapped_robot_names = [str(value) for value in np.asarray(result["mapped_robot_link_names"]).tolist()]
     kept_robot_names = set(mapped_robot_names)
     if bool(np.asarray(result.get("orientation_tracking_enabled", False)).item()):
         kept_robot_names.update(
@@ -361,9 +342,7 @@ def compact_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
                 result.get("orientation_robot_link_names", np.empty(0, dtype=str)),
             ).tolist()
         )
-    kept_robot_indices = [
-        index for index, name in enumerate(robot_names) if name in kept_robot_names
-    ]
+    kept_robot_indices = [index for index, name in enumerate(robot_names) if name in kept_robot_names]
     robot_positions = np.asarray(result["robot_link_positions"])
     robot_quaternions = np.asarray(result["robot_link_quaternions_wxyz"])
     result["robot_link_positions"] = robot_positions[:, kept_robot_indices]
@@ -1202,10 +1181,8 @@ def _validate_job_identity(
         allow_empty=True,
     )
 
-    if run_kind == "ablation" and not experiment_name:
-        _fail("'experiment_name' must be non-empty for ablation results")
-    if run_kind != "ablation" and experiment_name:
-        _fail("'experiment_name' must be empty for single and augmentation results")
+    if experiment_name:
+        _fail("'experiment_name' must be empty for production results")
     if "/" in dataset_partition or "\\" in dataset_partition:
         _fail("'dataset_partition' must be one path component")
     if dataset_partition in {".", ".."}:
@@ -1256,8 +1233,6 @@ def _validate_job_identity(
         _fail("single results require the exact identity variant")
     if run_kind == "augmentation" and not changes_motion:
         _fail("augmentation results require a non-identity motion transformation")
-    if run_kind == "ablation" and changes_motion:
-        _fail("ablation results must not transform motion")
     solver_config = decoded_config.get("config")
     if not isinstance(solver_config, Mapping):
         _fail("'config_json' must contain a 'config' JSON object")
@@ -1506,8 +1481,7 @@ def _validate_point_cloud_group(
     missing = POINT_CLOUD_KEYS.difference(payload)
     if missing:
         _fail(
-            "point-cloud fields must be stored as one complete group; "
-            f"missing {', '.join(sorted(missing))}",
+            f"point-cloud fields must be stored as one complete group; missing {', '.join(sorted(missing))}",
         )
     human_points = _require_float_array(
         payload,
@@ -1526,14 +1500,9 @@ def _validate_point_cloud_group(
         "terrain_points_world",
         dtype=np.float32,
     )
-    if (
-        terrain_points.ndim != 3
-        or terrain_points.shape[0] != num_frames
-        or terrain_points.shape[2] != 3
-    ):
+    if terrain_points.ndim != 3 or terrain_points.shape[0] != num_frames or terrain_points.shape[2] != 3:
         _fail(
-            "'terrain_points_world' must have shape "
-            f"({num_frames}, points, 3), got {terrain_points.shape}",
+            f"'terrain_points_world' must have shape ({num_frames}, points, 3), got {terrain_points.shape}",
         )
     if not np.array_equal(human_points, mapped_human_joints):
         _fail("'human_points_world' must equal the mapped human solver anchors")
@@ -1927,9 +1896,7 @@ def _validate_frame_zero_ground_retry(
             "config_json['config']['retargeter']['penetration_tolerance'] must be finite and non-negative",
         ) from exc
 
-    expected_eligible = (
-        retry_enabled and task_type == "robot_only" and run_kind in {"single", "ablation"} and 7 + q_a_init_idx <= 2
-    )
+    expected_eligible = retry_enabled and task_type == "robot_only" and run_kind == "single" and 7 + q_a_init_idx <= 2
     if eligible != expected_eligible:
         _fail(
             "'frame_zero_ground_retry_eligible' must match the normalized "
@@ -2298,8 +2265,8 @@ def validate_result_artifact(payload: Mapping[str, Any]) -> None:
     if schema_version != RESULT_SCHEMA_VERSION:
         _fail(f"unsupported schema_version {schema_version}; this writer supports version {RESULT_SCHEMA_VERSION}")
     run_kind = _require_scalar_text(payload, "run_kind")
-    if run_kind not in {"single", "augmentation", "ablation"}:
-        _fail("'run_kind' must be 'single', 'augmentation', or 'ablation'")
+    if run_kind not in {"single", "augmentation"}:
+        _fail("'run_kind' must be 'single' or 'augmentation'")
     variant = _require_scalar_text(payload, "variant")
     _require_scalar_text(payload, "source_path")
     robot_type = _require_scalar_text(payload, "robot_type")
