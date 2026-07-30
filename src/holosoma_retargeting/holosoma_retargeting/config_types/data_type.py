@@ -443,118 +443,179 @@ JOINTS_MAPPINGS = {
     },
 }
 
-ORIENTATION_JOINTS_MAPPINGS: dict[tuple[str, str], dict[str, str]] = {
-    ("noetix_mocap", "g1"): {
-        "Hips": "pelvis",
-        "LeftUpLeg": "left_hip_pitch_link",
-        "RightUpLeg": "right_hip_pitch_link",
-        "LeftLeg": "left_knee_link",
-        "RightLeg": "right_knee_link",
-        "LeftFoot": "left_ankle_roll_link",
-        "RightFoot": "right_ankle_roll_link",
-        "LeftToeBase": "left_ankle_roll_sphere_5_link",
-        "RightToeBase": "right_ankle_roll_sphere_5_link",
-        "LeftArm": "left_shoulder_yaw_link",
-        "RightArm": "right_shoulder_yaw_link",
-        "LeftForeArm": "left_elbow_link",
-        "RightForeArm": "right_elbow_link",
-        "LeftHand": "left_rubber_hand_link",
-        "RightHand": "right_rubber_hand_link",
+# Noetix is a separate company-collected dataset and has its own loader and
+# converter. Its normalized skeleton reuses only the LAFAN joint-name topology
+# and robot mapping. AMASS and GVHMR both use the first 22 SMPL-X body joints.
+for _robot_type in ("g1", "e1", "e2"):
+    JOINTS_MAPPINGS[("noetix_mocap", _robot_type)] = JOINTS_MAPPINGS[("lafan", _robot_type)].copy()
+    JOINTS_MAPPINGS[("gvhmr", _robot_type)] = JOINTS_MAPPINGS[("amass", _robot_type)].copy()
+
+# GMR applies a fixed frame offset after each source joint orientation. Here the
+# same offset is derived from a source T-pose frame and robot FK, which keeps the
+# relation explicit while avoiding assumptions that link frames are identical.
+_DIRECT_ORIENTATION_FORMATS = (
+    "gvhmr",
+    "lafan",
+    "mocap",
+    "noetix_mocap",
+    "omomo",
+)
+_ORIENTATION_HUMAN_JOINTS_BY_FORMAT: dict[str, dict[str, str]] = {
+    "gvhmr": {
+        "root": "Pelvis",
+        "left_hip": "L_Hip",
+        "right_hip": "R_Hip",
+        "left_knee": "L_Knee",
+        "right_knee": "R_Knee",
+        "left_ankle": "L_Ankle",
+        "right_ankle": "R_Ankle",
+        "left_toe": "L_Foot",
+        "right_toe": "R_Foot",
+        "left_shoulder": "L_Shoulder",
+        "right_shoulder": "R_Shoulder",
+        "left_elbow": "L_Elbow",
+        "right_elbow": "R_Elbow",
+        "left_hand": "L_Wrist",
+        "right_hand": "R_Wrist",
     },
-    ("noetix_mocap", "e1"): {
-        "Hips": "base_link",
-        "LeftUpLeg": "l_leg_hip_pitch_link",
-        "RightUpLeg": "r_leg_hip_pitch_link",
-        "LeftLeg": "l_leg_knee_link",
-        "RightLeg": "r_leg_knee_link",
-        "LeftFoot": "l_leg_ankle_roll_link",
-        "RightFoot": "r_leg_ankle_roll_link",
-        "LeftToeBase": "l_foot_sphere_5_link",
-        "RightToeBase": "r_foot_sphere_5_link",
-        "LeftArm": "l_arm_shoulder_yaw_link",
-        "RightArm": "r_arm_shoulder_yaw_link",
-        "LeftForeArm": "l_arm_elbow_pitch_link",
-        "RightForeArm": "r_arm_elbow_pitch_link",
-        "LeftHand": "l_hand_sphere_link",
-        "RightHand": "r_hand_sphere_link",
-    },
-    ("noetix_mocap", "e2"): {
-        "Hips": "base_link",
-        "LeftUpLeg": "l_leg_hip_pitch_link",
-        "RightUpLeg": "r_leg_hip_pitch_link",
-        "LeftLeg": "l_leg_knee_link",
-        "RightLeg": "r_leg_knee_link",
-        "LeftFoot": "l_leg_ankle_roll_link",
-        "RightFoot": "r_leg_ankle_roll_link",
-        "LeftToeBase": "l_foot_sphere_5_link",
-        "RightToeBase": "r_foot_sphere_5_link",
-        "LeftArm": "l_arm_shoulder_yaw_link",
-        "RightArm": "r_arm_shoulder_yaw_link",
-        "LeftForeArm": "l_arm_elbow_link",
-        "RightForeArm": "r_arm_elbow_link",
-        "LeftHand": "l_hand_sphere_link",
-        "RightHand": "r_hand_sphere_link",
+    "omomo": {
+        "root": "Pelvis",
+        "left_hip": "L_Hip",
+        "right_hip": "R_Hip",
+        "left_knee": "L_Knee",
+        "right_knee": "R_Knee",
+        "left_ankle": "L_Ankle",
+        "right_ankle": "R_Ankle",
+        "left_toe": "L_Toe",
+        "right_toe": "R_Toe",
+        "left_shoulder": "L_Shoulder",
+        "right_shoulder": "R_Shoulder",
+        "left_elbow": "L_Elbow",
+        "right_elbow": "R_Elbow",
+        "left_hand": "L_Wrist",
+        "right_hand": "R_Wrist",
     },
 }
+for _bvh_format in ("lafan", "mocap", "noetix_mocap"):
+    _ORIENTATION_HUMAN_JOINTS_BY_FORMAT[_bvh_format] = {
+        "root": "Hips",
+        "left_hip": "LeftUpLeg",
+        "right_hip": "RightUpLeg",
+        "left_knee": "LeftLeg",
+        "right_knee": "RightLeg",
+        "left_ankle": "LeftFoot",
+        "right_ankle": "RightFoot",
+        "left_toe": "LeftToeBase",
+        "right_toe": "RightToeBase",
+        "left_shoulder": "LeftArm",
+        "right_shoulder": "RightArm",
+        "left_elbow": "LeftForeArm",
+        "right_elbow": "RightForeArm",
+        "left_hand": "LeftHand",
+        "right_hand": "RightHand",
+    }
 
-# BVH joints have identity global frames when every rotation channel is zero.
-# The Noetix converter changes coordinates by basis conjugation, which preserves
-# that identity T-pose frame.  Keeping this reference table separate from the
-# motion itself prevents the first animation frame from being mistaken for a
-# calibration pose.
+_ORIENTATION_ROBOT_LINKS: dict[str, dict[str, str]] = {
+    "g1": {
+        "root": "pelvis",
+        "left_hip": "left_hip_pitch_link",
+        "right_hip": "right_hip_pitch_link",
+        "left_knee": "left_knee_link",
+        "right_knee": "right_knee_link",
+        "left_ankle": "left_ankle_roll_link",
+        "right_ankle": "right_ankle_roll_link",
+        "left_toe": "left_ankle_roll_sphere_5_link",
+        "right_toe": "right_ankle_roll_sphere_5_link",
+        "left_shoulder": "left_shoulder_yaw_link",
+        "right_shoulder": "right_shoulder_yaw_link",
+        "left_elbow": "left_elbow_link",
+        "right_elbow": "right_elbow_link",
+        "left_hand": "left_rubber_hand_link",
+        "right_hand": "right_rubber_hand_link",
+    },
+    "e1": {
+        "root": "base_link",
+        "left_hip": "l_leg_hip_pitch_link",
+        "right_hip": "r_leg_hip_pitch_link",
+        "left_knee": "l_leg_knee_link",
+        "right_knee": "r_leg_knee_link",
+        "left_ankle": "l_leg_ankle_roll_link",
+        "right_ankle": "r_leg_ankle_roll_link",
+        "left_toe": "l_foot_sphere_5_link",
+        "right_toe": "r_foot_sphere_5_link",
+        "left_shoulder": "l_arm_shoulder_yaw_link",
+        "right_shoulder": "r_arm_shoulder_yaw_link",
+        "left_elbow": "l_arm_elbow_pitch_link",
+        "right_elbow": "r_arm_elbow_pitch_link",
+        "left_hand": "l_hand_sphere_link",
+        "right_hand": "r_hand_sphere_link",
+    },
+    "e2": {
+        "root": "base_link",
+        "left_hip": "l_leg_hip_pitch_link",
+        "right_hip": "r_leg_hip_pitch_link",
+        "left_knee": "l_leg_knee_link",
+        "right_knee": "r_leg_knee_link",
+        "left_ankle": "l_leg_ankle_roll_link",
+        "right_ankle": "r_leg_ankle_roll_link",
+        "left_toe": "l_foot_sphere_5_link",
+        "right_toe": "r_foot_sphere_5_link",
+        "left_shoulder": "l_arm_shoulder_yaw_link",
+        "right_shoulder": "r_arm_shoulder_yaw_link",
+        "left_elbow": "l_arm_elbow_link",
+        "right_elbow": "r_arm_elbow_link",
+        "left_hand": "l_hand_sphere_link",
+        "right_hand": "r_hand_sphere_link",
+    },
+}
+ORIENTATION_JOINTS_MAPPINGS: dict[tuple[str, str], dict[str, str]] = {
+    (data_format, robot_type): {
+        human_joints[semantic_name]: _ORIENTATION_ROBOT_LINKS[robot_type][semantic_name]
+        for semantic_name in human_joints
+    }
+    for data_format in _DIRECT_ORIENTATION_FORMATS
+    for robot_type in ("g1", "e1", "e2")
+    for human_joints in (_ORIENTATION_HUMAN_JOINTS_BY_FORMAT[data_format],)
+}
+
+_IDENTITY_WXYZ = (1.0, 0.0, 0.0, 0.0)
+_GVHMR_Z_UP_T_POSE_WXYZ = (
+    0.7071067811865476,
+    0.7071067811865475,
+    0.0,
+    0.0,
+)
 ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ: dict[
     tuple[str, str],
     dict[str, tuple[float, float, float, float]],
 ] = {
-    ("noetix_mocap", "g1"): dict.fromkeys(
-        ORIENTATION_JOINTS_MAPPINGS[("noetix_mocap", "g1")],
-        (1.0, 0.0, 0.0, 0.0),
-    ),
-    ("noetix_mocap", "e1"): dict.fromkeys(
-        ORIENTATION_JOINTS_MAPPINGS[("noetix_mocap", "e1")],
-        (1.0, 0.0, 0.0, 0.0),
-    ),
-    ("noetix_mocap", "e2"): dict.fromkeys(
-        ORIENTATION_JOINTS_MAPPINGS[("noetix_mocap", "e2")],
-        (1.0, 0.0, 0.0, 0.0),
-    ),
+    (data_format, robot_type): dict.fromkeys(
+        ORIENTATION_JOINTS_MAPPINGS[(data_format, robot_type)],
+        _GVHMR_Z_UP_T_POSE_WXYZ if data_format == "gvhmr" else _IDENTITY_WXYZ,
+    )
+    for data_format in _DIRECT_ORIENTATION_FORMATS
+    for robot_type in ("g1", "e1", "e2")
 }
 
+_Y_FACING_ROBOT_BASE_WXYZ = (
+    0.7071067811865476,
+    0.0,
+    0.0,
+    0.7071067811865475,
+)
 ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ: dict[
     tuple[str, str],
     tuple[float, float, float, float],
 ] = {
-    # Canonical Noetix T-pose faces +Y; G1/E1 qpos0 face +X.
-    ("noetix_mocap", "g1"): (
-        0.7071067811865476,
-        0.0,
-        0.0,
-        0.7071067811865475,
-    ),
-    ("noetix_mocap", "e1"): (
-        0.7071067811865476,
-        0.0,
-        0.0,
-        0.7071067811865475,
-    ),
-    ("noetix_mocap", "e2"): (
-        0.7071067811865476,
-        0.0,
-        0.0,
-        0.7071067811865475,
-    ),
+    (data_format, robot_type): (
+        _Y_FACING_ROBOT_BASE_WXYZ if data_format in {"lafan", "mocap", "noetix_mocap"} else _IDENTITY_WXYZ
+    )
+    for data_format in _DIRECT_ORIENTATION_FORMATS
+    for robot_type in ("g1", "e1", "e2")
 }
 
-ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS: dict[
-    tuple[str, str],
-    dict[str, float],
-] = {
-    # G1's zero-pose arms are not a T-pose.  These symmetric shoulder/elbow
-    # values make both mapped segments (shoulder-roll -> elbow and elbow ->
-    # rubber-hand) exactly horizontal and collinear in the Noetix-facing frame.
-    # MuJoCo FK then supplies each mapped link's own fixed T-pose frame offset;
-    # the offsets are deliberately not shared or assumed to be identity.
-    ("noetix_mocap", "g1"): {
+_ROBOT_T_POSE_JOINT_POSITIONS: dict[str, dict[str, float]] = {
+    "g1": {
         "left_shoulder_pitch_joint": 0.2006477150487628,
         "left_shoulder_roll_joint": 1.476490678407796,
         "left_shoulder_yaw_joint": 0.8742948427729365,
@@ -564,24 +625,25 @@ ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS: dict[
         "right_shoulder_yaw_joint": -0.8742948427729365,
         "right_elbow_joint": 1.414980653432781,
     },
-    ("noetix_mocap", "e1"): {
+    "e1": {
         "l_arm_shoulder_roll_joint": 1.5707963267948966,
         "r_arm_shoulder_roll_joint": -1.5707963267948966,
     },
-    ("noetix_mocap", "e2"): {
+    "e2": {
         "l_arm_shoulder_roll_joint": 1.5707963267948966,
         "l_arm_elbow_joint": 1.0025094781323536,
         "r_arm_shoulder_roll_joint": -1.5707963267948966,
         "r_arm_elbow_joint": 1.0043259754318,
     },
 }
-
-# Noetix is a separate company-collected dataset and has its own loader and
-# converter. Its normalized skeleton reuses only the LAFAN joint-name topology
-# and robot mapping. AMASS and GVHMR both use the first 22 SMPL-X body joints.
-for _robot_type in ("g1", "e1", "e2"):
-    JOINTS_MAPPINGS[("noetix_mocap", _robot_type)] = JOINTS_MAPPINGS[("lafan", _robot_type)].copy()
-    JOINTS_MAPPINGS[("gvhmr", _robot_type)] = JOINTS_MAPPINGS[("amass", _robot_type)].copy()
+ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS: dict[
+    tuple[str, str],
+    dict[str, float],
+] = {
+    (data_format, robot_type): _ROBOT_T_POSE_JOINT_POSITIONS[robot_type].copy()
+    for data_format in _DIRECT_ORIENTATION_FORMATS
+    for robot_type in ("g1", "e1", "e2")
+}
 
 # Data format specific constants
 TOE_NAMES_BY_FORMAT = {
@@ -804,37 +866,23 @@ class MotionDataConfig:
                 raise ValueError("joint_parent_indices must have one entry per demo joint")
             joint_count = len(parents)
             if any(parent < -1 or parent >= joint_count for parent in parents):
-                raise ValueError(
-                    "joint_parent_indices must contain -1 or valid joint indices"
-                )
+                raise ValueError("joint_parent_indices must contain -1 or valid joint indices")
             if any(parent == index for index, parent in enumerate(parents)):
-                raise ValueError(
-                    "joint_parent_indices must not contain self-parent joints"
-                )
-            roots = tuple(
-                index
-                for index, parent in enumerate(parents)
-                if parent == -1
-            )
+                raise ValueError("joint_parent_indices must not contain self-parent joints")
+            roots = tuple(index for index, parent in enumerate(parents) if parent == -1)
             if len(roots) != 1:
-                raise ValueError(
-                    "joint_parent_indices must describe exactly one rooted tree"
-                )
+                raise ValueError("joint_parent_indices must describe exactly one rooted tree")
             root = roots[0]
             for start in range(joint_count):
                 current = start
                 visited: set[int] = set()
                 while current != -1:
                     if current in visited:
-                        raise ValueError(
-                            "joint_parent_indices must not contain cycles"
-                        )
+                        raise ValueError("joint_parent_indices must not contain cycles")
                     visited.add(current)
                     current = parents[current]
                 if root not in visited:
-                    raise ValueError(
-                        "every joint_parent_indices entry must connect to the root"
-                    )
+                    raise ValueError("every joint_parent_indices entry must connect to the root")
             return parents
         if self.demo_joints is not None and self.demo_joints != DEMO_JOINTS_REGISTRY[self.data_format]:
             raise ValueError("Custom demo_joints require explicit joint_parent_indices")
