@@ -22,7 +22,7 @@ from holosoma_retargeting.config_types.data_type import (
     APPROVED_DIRECT_ORIENTATION_SOURCES,
 )
 
-RESULT_SCHEMA_VERSION = 2
+RESULT_SCHEMA_VERSION = 3
 QUATERNION_NORM_ATOL = 1e-3
 POSITION_MATCH_ATOL = 1e-5
 OBJECT_TRANSFORM_MATCH_ATOL = 1e-4
@@ -172,7 +172,15 @@ OBJECT_POINT_KEYS = frozenset(
     }
 )
 
-ALLOWED_RESULT_KEYS = REQUIRED_RESULT_KEYS | HUMAN_ORIENTATION_KEYS | OBJECT_POINT_KEYS
+POINT_CLOUD_KEYS = frozenset(
+    {
+        "human_points_world",
+        "robot_points_world",
+        "terrain_points_world",
+    }
+)
+
+ALLOWED_RESULT_KEYS = REQUIRED_RESULT_KEYS | HUMAN_ORIENTATION_KEYS | OBJECT_POINT_KEYS | POINT_CLOUD_KEYS
 
 _LEGACY_HUMAN_ORIENTATION_KEYS = frozenset(
     {
@@ -189,6 +197,205 @@ class ResultArtifactValidationError(ValueError):
 
 def _fail(message: str) -> None:
     raise ResultArtifactValidationError(message)
+
+
+def _compact_parent_indices(
+    parent_indices: np.ndarray,
+    kept_indices: list[int],
+) -> np.ndarray:
+    """Connect a retained visualization subset through its nearest kept parent."""
+
+    if not kept_indices:
+        return np.empty(0, dtype=np.int32)
+    parents = np.asarray(parent_indices, dtype=np.int64)
+    old_to_new = {old: new for new, old in enumerate(kept_indices)}
+    root_old = kept_indices[0]
+    compact: list[int] = []
+    for old_index in kept_indices:
+        if old_index == root_old:
+            compact.append(-1)
+            continue
+        parent = int(parents[old_index])
+        visited: set[int] = set()
+        while parent >= 0 and parent not in old_to_new:
+            if parent in visited:
+                parent = -1
+                break
+            visited.add(parent)
+            parent = int(parents[parent])
+        compact.append(old_to_new.get(parent, 0))
+    return np.asarray(compact, dtype=np.int32)
+
+
+def _is_hand_keypoint(name: str) -> bool:
+    fingers = ("Thumb", "Index", "Middle", "Ring", "Pinky")
+    if name.startswith(("L_", "R_")):
+        return name.endswith("_Wrist") or any(
+            finger in name for finger in fingers
+        )
+    if name in {"LeftHand", "RightHand"}:
+        return True
+    return name.startswith(("LeftHand", "RightHand")) and any(finger in name for finger in fingers)
+
+
+def _terrain_points_from_payload(
+    payload: Mapping[str, Any],
+    *,
+    num_frames: int,
+    interaction_target_vertices: np.ndarray,
+    interaction_num_human_vertices: int,
+) -> np.ndarray:
+    task_type = str(np.asarray(payload["task_type"]).item())
+    if task_type in {"robot_only", "climbing"}:
+        return np.asarray(
+            interaction_target_vertices[:, interaction_num_human_vertices:],
+            dtype=np.float32,
+        )
+
+    try:
+        config_document = json.loads(str(np.asarray(payload["config_json"]).item()))
+        task_config = config_document["config"]["task_config"]
+        ground_range = tuple(float(value) for value in task_config["ground_range"])
+        ground_size = int(task_config["ground_size"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        ground_range = (-1.0, 1.0)
+        ground_size = 15
+    axis = np.linspace(ground_range[0], ground_range[1], ground_size)
+    x_values, y_values = np.meshgrid(axis, axis)
+    points = np.stack(
+        (
+            x_values.ravel(),
+            y_values.ravel(),
+            np.zeros(x_values.size),
+        ),
+        axis=1,
+    ).astype(np.float32)
+    return np.repeat(points[None, :, :], num_frames, axis=0)
+
+
+def compact_result_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep only solver anchors, available hands, and effective point clouds."""
+
+    result = dict(payload)
+    required = {
+        "human_joints",
+        "human_joint_names",
+        "human_joint_parent_indices",
+        "mapped_human_joint_names",
+        "mapped_human_joints",
+        "robot_link_positions",
+        "robot_link_quaternions_wxyz",
+        "robot_link_names",
+        "robot_link_parent_indices",
+        "mapped_robot_link_names",
+        "mapped_robot_joints",
+        "interaction_target_vertices_w",
+        "interaction_num_human_vertices",
+    }
+    if not required.issubset(result):
+        return result
+
+    human_names = [str(value) for value in np.asarray(result["human_joint_names"]).tolist()]
+    mapped_human_names = [
+        str(value)
+        for value in np.asarray(result["mapped_human_joint_names"]).tolist()
+    ]
+    kept_human_names = set(mapped_human_names)
+    kept_human_names.update(name for name in human_names if _is_hand_keypoint(name))
+    kept_human_indices = [
+        index for index, name in enumerate(human_names) if name in kept_human_names
+    ]
+    human_joints = np.asarray(result["human_joints"])
+    result["human_joints"] = human_joints[:, kept_human_indices]
+    result["human_joint_names"] = np.asarray(
+        [human_names[index] for index in kept_human_indices],
+        dtype=str,
+    )
+    result["human_joint_parent_indices"] = _compact_parent_indices(
+        np.asarray(result["human_joint_parent_indices"]),
+        kept_human_indices,
+    )
+
+    if HUMAN_ORIENTATION_KEYS.issubset(result):
+        orientation_names = [
+            str(value)
+            for value in np.asarray(result["human_orientation_joint_names"]).tolist()
+        ]
+        orientation_indices = [
+            index
+            for index, name in enumerate(orientation_names)
+            if name in set(mapped_human_names)
+        ]
+        orientation_names_array = np.asarray(
+            [orientation_names[index] for index in orientation_indices],
+            dtype=str,
+        )
+        orientation_quaternions = np.asarray(
+            result["human_orientation_quaternions_wxyz"],
+        )[:, orientation_indices]
+        if orientation_indices:
+            result["human_orientation_joint_names"] = orientation_names_array
+            result["human_orientation_quaternions_wxyz"] = orientation_quaternions
+            result["human_orientation_sha256"] = np.asarray(
+                compute_human_orientation_sha256(
+                    orientation_names_array,
+                    orientation_quaternions,
+                ),
+            )
+        else:
+            for key in HUMAN_ORIENTATION_KEYS:
+                result.pop(key, None)
+
+    robot_names = [
+        str(value) for value in np.asarray(result["robot_link_names"]).tolist()
+    ]
+    mapped_robot_names = [
+        str(value)
+        for value in np.asarray(result["mapped_robot_link_names"]).tolist()
+    ]
+    kept_robot_names = set(mapped_robot_names)
+    if bool(np.asarray(result.get("orientation_tracking_enabled", False)).item()):
+        kept_robot_names.update(
+            str(value)
+            for value in np.asarray(
+                result.get("orientation_robot_link_names", np.empty(0, dtype=str)),
+            ).tolist()
+        )
+    kept_robot_indices = [
+        index for index, name in enumerate(robot_names) if name in kept_robot_names
+    ]
+    robot_positions = np.asarray(result["robot_link_positions"])
+    robot_quaternions = np.asarray(result["robot_link_quaternions_wxyz"])
+    result["robot_link_positions"] = robot_positions[:, kept_robot_indices]
+    result["robot_link_quaternions_wxyz"] = robot_quaternions[:, kept_robot_indices]
+    result["robot_link_names"] = np.asarray(
+        [robot_names[index] for index in kept_robot_indices],
+        dtype=str,
+    )
+    result["robot_link_parent_indices"] = _compact_parent_indices(
+        np.asarray(result["robot_link_parent_indices"]),
+        kept_robot_indices,
+    )
+
+    result["human_points_world"] = np.asarray(
+        result["mapped_human_joints"],
+        dtype=np.float32,
+    )
+    result["robot_points_world"] = np.asarray(
+        result["mapped_robot_joints"],
+        dtype=np.float32,
+    )
+    interaction_target = np.asarray(result["interaction_target_vertices_w"])
+    result["terrain_points_world"] = _terrain_points_from_payload(
+        result,
+        num_frames=int(human_joints.shape[0]),
+        interaction_target_vertices=interaction_target,
+        interaction_num_human_vertices=int(
+            np.asarray(result["interaction_num_human_vertices"]).item(),
+        ),
+    )
+    result["schema_version"] = np.asarray(RESULT_SCHEMA_VERSION, dtype=np.int32)
+    return result
 
 
 def collision_interior_margin_m(penetration_tolerance: float) -> float:
@@ -1286,6 +1493,54 @@ def _validate_object_point_group(
     return demo_world, target_world
 
 
+def _validate_point_cloud_group(
+    payload: Mapping[str, Any],
+    *,
+    num_frames: int,
+    mapped_human_joints: np.ndarray,
+    mapped_robot_joints: np.ndarray,
+) -> None:
+    present = POINT_CLOUD_KEYS.intersection(payload)
+    if not present:
+        return
+    missing = POINT_CLOUD_KEYS.difference(payload)
+    if missing:
+        _fail(
+            "point-cloud fields must be stored as one complete group; "
+            f"missing {', '.join(sorted(missing))}",
+        )
+    human_points = _require_float_array(
+        payload,
+        "human_points_world",
+        shape=mapped_human_joints.shape,
+        dtype=np.float32,
+    )
+    robot_points = _require_float_array(
+        payload,
+        "robot_points_world",
+        shape=mapped_robot_joints.shape,
+        dtype=np.float32,
+    )
+    terrain_points = _require_float_array(
+        payload,
+        "terrain_points_world",
+        dtype=np.float32,
+    )
+    if (
+        terrain_points.ndim != 3
+        or terrain_points.shape[0] != num_frames
+        or terrain_points.shape[2] != 3
+    ):
+        _fail(
+            "'terrain_points_world' must have shape "
+            f"({num_frames}, points, 3), got {terrain_points.shape}",
+        )
+    if not np.array_equal(human_points, mapped_human_joints):
+        _fail("'human_points_world' must equal the mapped human solver anchors")
+    if not np.array_equal(robot_points, mapped_robot_joints):
+        _fail("'robot_points_world' must equal the mapped robot solver anchors")
+
+
 def _validate_preprocessing_metadata(payload: Mapping[str, Any]) -> None:
     source_height = _require_real_scalar(
         payload,
@@ -2306,6 +2561,12 @@ def validate_result_artifact(payload: Mapping[str, Any]) -> None:
         object_poses_demo=object_poses_demo,
         object_poses_target=object_poses_target,
     )
+    _validate_point_cloud_group(
+        payload,
+        num_frames=num_frames,
+        mapped_human_joints=mapped_human_joints,
+        mapped_robot_joints=mapped_robot_joints,
+    )
     _validate_interaction_mesh_group(
         payload,
         num_frames=num_frames,
@@ -2637,8 +2898,9 @@ def write_result_artifact(
 ) -> Path:
     """Validate all saved data and assets, then atomically publish an NPZ."""
 
-    validate_result_artifact(payload)
-    validate_result_external_assets(payload)
+    compact_payload = compact_result_payload(payload)
+    validate_result_artifact(compact_payload)
+    validate_result_external_assets(compact_payload)
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
@@ -2652,7 +2914,7 @@ def write_result_artifact(
         temporary_file = os.fdopen(file_descriptor, "wb")
         file_descriptor = -1
         with temporary_file:
-            np.savez_compressed(temporary_file, **dict(payload))
+            np.savez_compressed(temporary_file, **compact_payload)
             temporary_file.flush()
             os.fsync(temporary_file.fileno())
         temporary_path.replace(destination)
@@ -2709,6 +2971,7 @@ __all__ = [
     "INTERACTION_MESH_KEYS",
     "NONLINEAR_CONSTRAINT_VIOLATION_ATOL",
     "OBJECT_POINT_KEYS",
+    "POINT_CLOUD_KEYS",
     "POSITION_MATCH_ATOL",
     "QUATERNION_NORM_ATOL",
     "REQUIRED_RESULT_KEYS",
@@ -2716,6 +2979,7 @@ __all__ = [
     "ResultArtifactValidationError",
     "build_object_asset_manifest",
     "collision_interior_margin_m",
+    "compact_result_payload",
     "compute_file_sha256",
     "compute_human_orientation_sha256",
     "compute_object_asset_manifest",

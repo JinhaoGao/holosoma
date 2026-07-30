@@ -25,6 +25,7 @@ from holosoma_retargeting.result_artifact import (  # noqa: E402
     ResultArtifactValidationError,
     build_object_asset_manifest,
     collision_interior_margin_m,
+    compact_result_payload,
     compute_human_orientation_sha256,
     is_legacy_result_artifact,
     read_result_schema_version,
@@ -471,7 +472,7 @@ def _with_orientation_diagnostics(
 
 class ResultArtifactTests(unittest.TestCase):
     def test_canonical_payload_requires_mesh_without_fabricating_orientations(self):
-        self.assertEqual(RESULT_SCHEMA_VERSION, 2)
+        self.assertEqual(RESULT_SCHEMA_VERSION, 3)
         payload = _valid_payload()
 
         validate_result_artifact(payload)
@@ -480,6 +481,56 @@ class ResultArtifactTests(unittest.TestCase):
         self.assertNotIn("human_orientation_quaternions_wxyz", payload)
         self.assertNotIn("human_orientation_sha256", payload)
         self.assertIn("interaction_source_vertices_w", payload)
+
+    def test_compaction_keeps_solver_anchors_and_available_hand_points(self):
+        payload = _valid_payload()
+        human_joints = np.zeros((2, 8, 3), dtype=np.float32)
+        human_joints[:, 0] = np.asarray((0.0, 0.0, 1.0))
+        human_joints[:, 3] = np.asarray((0.0, 0.2, 0.8))
+        payload.update(
+            {
+                "human_joints": human_joints,
+                "human_joint_names": np.asarray(
+                    (
+                        "Hips",
+                        "UnusedSpine",
+                        "LeftHand",
+                        "LeftHandMiddle3",
+                        "LeftHandThumb1",
+                        "LeftHandThumb2",
+                        "RightHand",
+                        "RightHandIndex1",
+                    ),
+                ),
+                "human_joint_parent_indices": np.asarray(
+                    (-1, 0, 1, 2, 2, 4, 1, 6),
+                    dtype=np.int32,
+                ),
+                "mapped_human_joints": human_joints[:, (0, 3)],
+                "mapped_human_joint_names": np.asarray(
+                    ("Hips", "LeftHandMiddle3"),
+                ),
+            },
+        )
+        compact = compact_result_payload(_with_interaction_mesh(payload))
+
+        self.assertNotIn("UnusedSpine", compact["human_joint_names"].tolist())
+        self.assertEqual(
+            compact["human_joint_names"].tolist(),
+            [
+                "Hips",
+                "LeftHand",
+                "LeftHandMiddle3",
+                "LeftHandThumb1",
+                "LeftHandThumb2",
+                "RightHand",
+                "RightHandIndex1",
+            ],
+        )
+        self.assertEqual(compact["robot_link_names"].shape[0], 2)
+        self.assertEqual(compact["human_points_world"].shape, (2, 2, 3))
+        self.assertGreater(compact["terrain_points_world"].shape[1], 0)
+        validate_result_artifact(compact)
 
     def test_frame_zero_ground_retry_is_fully_audited_and_cross_checked(self):
         payload = _valid_payload()
@@ -560,8 +611,19 @@ class ResultArtifactTests(unittest.TestCase):
             self.assertEqual(read_result_schema_version(output_path), RESULT_SCHEMA_VERSION)
             self.assertFalse(is_legacy_result_artifact(output_path))
             with np.load(output_path, allow_pickle=False) as saved:
-                self.assertEqual(set(saved.files), set(payload))
+                compact_payload = compact_result_payload(payload)
+                self.assertEqual(set(saved.files), set(compact_payload))
                 np.testing.assert_array_equal(saved["qpos"], payload["qpos"])
+                self.assertEqual(saved["human_joints"].shape[1], 2)
+                self.assertEqual(saved["robot_link_positions"].shape[1], 2)
+                np.testing.assert_array_equal(
+                    saved["human_points_world"],
+                    saved["mapped_human_joints"],
+                )
+                np.testing.assert_array_equal(
+                    saved["robot_points_world"],
+                    saved["mapped_robot_joints"],
+                )
             with zipfile.ZipFile(output_path) as archive:
                 self.assertTrue(archive.infolist())
                 self.assertTrue(all(member.compress_type == zipfile.ZIP_DEFLATED for member in archive.infolist()))
