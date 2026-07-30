@@ -237,6 +237,23 @@ JOINTS_MAPPINGS = {
         "LeftHand": "l_hand_sphere_link",
         "RightHand": "r_hand_sphere_link",
     },
+    ("lafan", "e2"): {
+        "Spine1": "base_link",
+        "LeftUpLeg": "l_leg_hip_pitch_link",
+        "RightUpLeg": "r_leg_hip_pitch_link",
+        "LeftLeg": "l_leg_knee_link",
+        "RightLeg": "r_leg_knee_link",
+        "LeftArm": "l_arm_shoulder_roll_link",
+        "RightArm": "r_arm_shoulder_roll_link",
+        "LeftForeArm": "l_arm_elbow_link",
+        "RightForeArm": "r_arm_elbow_link",
+        "LeftFoot": "l_leg_ankle_intermediate_1_link",
+        "RightFoot": "r_leg_ankle_intermediate_1_link",
+        "LeftToeBase": "l_foot_sphere_5_link",
+        "RightToeBase": "r_foot_sphere_5_link",
+        "LeftHand": "l_hand_sphere_link",
+        "RightHand": "r_hand_sphere_link",
+    },
     ("omomo", "g1"): {
         "Pelvis": "pelvis_contour_link",
         "L_Hip": "left_hip_pitch_link",
@@ -288,6 +305,23 @@ JOINTS_MAPPINGS = {
         "L_Wrist": "l_hand_sphere_link",
         "R_Wrist": "r_hand_sphere_link",
     },
+    ("omomo", "e2"): {
+        "Pelvis": "base_link",
+        "L_Hip": "l_leg_hip_pitch_link",
+        "R_Hip": "r_leg_hip_pitch_link",
+        "L_Knee": "l_leg_knee_link",
+        "R_Knee": "r_leg_knee_link",
+        "L_Shoulder": "l_arm_shoulder_roll_link",
+        "R_Shoulder": "r_arm_shoulder_roll_link",
+        "L_Elbow": "l_arm_elbow_link",
+        "R_Elbow": "r_arm_elbow_link",
+        "L_Ankle": "l_leg_ankle_intermediate_1_link",
+        "R_Ankle": "r_leg_ankle_intermediate_1_link",
+        "L_Toe": "l_foot_sphere_5_link",
+        "R_Toe": "r_foot_sphere_5_link",
+        "L_Wrist": "l_hand_sphere_link",
+        "R_Wrist": "r_hand_sphere_link",
+    },
     ("amass", "g1"): {
         "Pelvis": "pelvis_contour_link",
         "L_Hip": "left_hip_pitch_link",
@@ -315,6 +349,23 @@ JOINTS_MAPPINGS = {
         "R_Shoulder": "r_arm_shoulder_roll_link",
         "L_Elbow": "l_arm_elbow_pitch_link",
         "R_Elbow": "r_arm_elbow_pitch_link",
+        "L_Ankle": "l_leg_ankle_intermediate_1_link",
+        "R_Ankle": "r_leg_ankle_intermediate_1_link",
+        "L_Foot": "l_foot_sphere_5_link",
+        "R_Foot": "r_foot_sphere_5_link",
+        "L_Wrist": "l_hand_sphere_link",
+        "R_Wrist": "r_hand_sphere_link",
+    },
+    ("amass", "e2"): {
+        "Pelvis": "base_link",
+        "L_Hip": "l_leg_hip_pitch_link",
+        "R_Hip": "r_leg_hip_pitch_link",
+        "L_Knee": "l_leg_knee_link",
+        "R_Knee": "r_leg_knee_link",
+        "L_Shoulder": "l_arm_shoulder_roll_link",
+        "R_Shoulder": "r_arm_shoulder_roll_link",
+        "L_Elbow": "l_arm_elbow_link",
+        "R_Elbow": "r_arm_elbow_link",
         "L_Ankle": "l_leg_ankle_intermediate_1_link",
         "R_Ankle": "r_leg_ankle_intermediate_1_link",
         "L_Foot": "l_foot_sphere_5_link",
@@ -373,6 +424,23 @@ JOINTS_MAPPINGS = {
         "LeftFoot": "l_leg_ankle_intermediate_1_link",
         "RightFoot": "r_leg_ankle_intermediate_1_link",
     },
+    ("mocap", "e2"): {
+        "Spine1": "base_link",
+        "LeftUpLeg": "l_leg_hip_pitch_link",
+        "LeftLeg": "l_leg_knee_link",
+        "LeftToeBase": "l_foot_sphere_5_link",
+        "RightUpLeg": "r_leg_hip_pitch_link",
+        "RightLeg": "r_leg_knee_link",
+        "RightToeBase": "r_foot_sphere_5_link",
+        "LeftArm": "l_arm_shoulder_roll_link",
+        "LeftForeArm": "l_arm_elbow_link",
+        "LeftHandMiddle3": "l_hand_sphere_link",
+        "RightArm": "r_arm_shoulder_roll_link",
+        "RightForeArm": "r_arm_elbow_link",
+        "RightHandMiddle3": "r_hand_sphere_link",
+        "LeftFoot": "l_leg_ankle_intermediate_1_link",
+        "RightFoot": "r_leg_ankle_intermediate_1_link",
+    },
 }
 
 ORIENTATION_JOINTS_MAPPINGS: dict[tuple[str, str], dict[str, str]] = {
@@ -410,6 +478,23 @@ ORIENTATION_JOINTS_MAPPINGS: dict[tuple[str, str], dict[str, str]] = {
         "LeftHand": "l_hand_sphere_link",
         "RightHand": "r_hand_sphere_link",
     },
+    ("noetix_mocap", "e2"): {
+        "Hips": "base_link",
+        "LeftUpLeg": "l_leg_hip_pitch_link",
+        "RightUpLeg": "r_leg_hip_pitch_link",
+        "LeftLeg": "l_leg_knee_link",
+        "RightLeg": "r_leg_knee_link",
+        "LeftFoot": "l_leg_ankle_roll_link",
+        "RightFoot": "r_leg_ankle_roll_link",
+        "LeftToeBase": "l_foot_sphere_5_link",
+        "RightToeBase": "r_foot_sphere_5_link",
+        "LeftArm": "l_arm_shoulder_yaw_link",
+        "RightArm": "r_arm_shoulder_yaw_link",
+        "LeftForeArm": "l_arm_elbow_link",
+        "RightForeArm": "r_arm_elbow_link",
+        "LeftHand": "l_hand_sphere_link",
+        "RightHand": "r_hand_sphere_link",
+    },
 }
 
 # BVH joints have identity global frames when every rotation channel is zero.
@@ -429,6 +514,10 @@ ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ: dict[
         ORIENTATION_JOINTS_MAPPINGS[("noetix_mocap", "e1")],
         (1.0, 0.0, 0.0, 0.0),
     ),
+    ("noetix_mocap", "e2"): dict.fromkeys(
+        ORIENTATION_JOINTS_MAPPINGS[("noetix_mocap", "e2")],
+        (1.0, 0.0, 0.0, 0.0),
+    ),
 }
 
 ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ: dict[
@@ -443,6 +532,12 @@ ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ: dict[
         0.7071067811865475,
     ),
     ("noetix_mocap", "e1"): (
+        0.7071067811865476,
+        0.0,
+        0.0,
+        0.7071067811865475,
+    ),
+    ("noetix_mocap", "e2"): (
         0.7071067811865476,
         0.0,
         0.0,
@@ -473,12 +568,18 @@ ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS: dict[
         "l_arm_shoulder_roll_joint": 1.5707963267948966,
         "r_arm_shoulder_roll_joint": -1.5707963267948966,
     },
+    ("noetix_mocap", "e2"): {
+        "l_arm_shoulder_roll_joint": 1.5707963267948966,
+        "l_arm_elbow_joint": 1.0025094781323536,
+        "r_arm_shoulder_roll_joint": -1.5707963267948966,
+        "r_arm_elbow_joint": 1.0043259754318,
+    },
 }
 
 # Noetix is a separate company-collected dataset and has its own loader and
 # converter. Its normalized skeleton reuses only the LAFAN joint-name topology
 # and robot mapping. AMASS and GVHMR both use the first 22 SMPL-X body joints.
-for _robot_type in ("g1", "e1"):
+for _robot_type in ("g1", "e1", "e2"):
     JOINTS_MAPPINGS[("noetix_mocap", _robot_type)] = JOINTS_MAPPINGS[("lafan", _robot_type)].copy()
     JOINTS_MAPPINGS[("gvhmr", _robot_type)] = JOINTS_MAPPINGS[("amass", _robot_type)].copy()
 

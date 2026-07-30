@@ -19,6 +19,7 @@ _ROBOT_DEFAULTS: dict[str, RobotDefaults] = {
     "g1": {"robot_dof": 29, "robot_height": 1.32, "object_name": "ground"},
     "t1": {"robot_dof": 23, "robot_height": 1.2, "object_name": "ground"},
     "e1": {"robot_dof": 23, "robot_height": 1.4, "object_name": "ground"},
+    "e2": {"robot_dof": 23, "robot_height": 1.55, "object_name": "ground"},
 }
 
 
@@ -168,6 +169,19 @@ class RobotConfig:
                 "l_foot_sphere_5_link",
                 "r_foot_sphere_5_link",
             ]
+        if self.robot_type == "e2":
+            return [
+                "l_foot_sphere_1_link",
+                "r_foot_sphere_1_link",
+                "l_foot_sphere_2_link",
+                "r_foot_sphere_2_link",
+                "l_foot_sphere_3_link",
+                "r_foot_sphere_3_link",
+                "l_foot_sphere_4_link",
+                "r_foot_sphere_4_link",
+                "l_foot_sphere_5_link",
+                "r_foot_sphere_5_link",
+            ]
         raise ValueError(f"Invalid robot type: {self.robot_type}")
 
     FOOT_STICKING_LINKS = property(
@@ -248,6 +262,11 @@ class RobotConfig:
             return np.concatenate([np.arange(7), np.arange(11, 23)])
         if self.robot_type == "e1":
             return np.arange(20)
+        if self.robot_type == "e2":
+            # Floating base, both six-DoF legs, and all three waist joints.
+            # The arms remain free to follow the interaction and orientation
+            # objectives without a competing nominal-pose penalty.
+            return np.arange(22)
         # Default: return empty array if robot type not defined (nominal tracking not used)
         return np.array([], dtype=int)
 

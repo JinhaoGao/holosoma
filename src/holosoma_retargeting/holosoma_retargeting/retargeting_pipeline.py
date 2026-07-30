@@ -28,7 +28,10 @@ import numpy as np
 
 from holosoma_retargeting.config_types.data_type import MotionDataConfig, normalize_data_format
 from holosoma_retargeting.config_types.retargeter import RetargeterConfig
-from holosoma_retargeting.config_types.retargeting import RetargetingConfig
+from holosoma_retargeting.config_types.retargeting import (
+    RetargetingConfig,
+    validate_production_task,
+)
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.task import TaskConfig
 from holosoma_retargeting.data_utils.motion_data import (
@@ -844,6 +847,12 @@ def validate_config(cfg: RetargetingConfig) -> None:
     Raises:
         ValueError: If configuration is invalid
     """
+    if cfg.dataset is not None:
+        validate_production_task(
+            task=cfg.task_type,
+            robot=cfg.robot,
+            dataset=cfg.dataset,
+        )
     data_format = cfg.data_format or DEFAULT_DATA_FORMATS[cfg.task_type]
     validate_motion_task(data_format, cfg.task_type)
     if not cfg.retargeter.save_interaction_mesh:

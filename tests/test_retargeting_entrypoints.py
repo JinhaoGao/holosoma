@@ -97,6 +97,66 @@ class RetargetingEntrypointTests(unittest.TestCase):
         self.assertIsInstance(submitted, RetargetingConfig)
         self.assertEqual(submitted.task_name, "sub3_tripod_001")
 
+    def test_production_task_matrix_accepts_required_combinations(self):
+        datasets = (
+            "climbing",
+            "gvhmr",
+            "lafan",
+            "noetix_csv_climb",
+            "noetix_mocap",
+            "OMOMO_new",
+        )
+        for robot in ("g1", "e1", "e2"):
+            for dataset in datasets:
+                with self.subTest(task="robot_only", robot=robot, dataset=dataset):
+                    config = internal_config_from_command(
+                        RetargetingCommand(
+                            task="robot_only",
+                            robot=robot,
+                            dataset=dataset,
+                        ),
+                    )
+                    self.assertEqual(config.dataset, dataset)
+
+        for dataset in ("climbing", "noetix_csv_climb"):
+            with self.subTest(task="climbing", dataset=dataset):
+                internal_config_from_command(
+                    RetargetingCommand(
+                        task="climbing",
+                        robot="g1",
+                        dataset=dataset,
+                    ),
+                )
+        internal_config_from_command(
+            RetargetingCommand(
+                task="object_interaction",
+                robot="g1",
+                dataset="OMOMO_new",
+            ),
+        )
+
+    def test_production_task_matrix_rejects_out_of_scope_combinations(self):
+        for command in (
+            RetargetingCommand(
+                task="object_interaction",
+                robot="e1",
+                dataset="OMOMO_new",
+            ),
+            RetargetingCommand(
+                task="climbing",
+                robot="e2",
+                dataset="climbing",
+            ),
+            RetargetingCommand(
+                task="object_interaction",
+                robot="g1",
+                dataset="lafan",
+            ),
+        ):
+            with self.subTest(command=command):
+                with self.assertRaises(ValueError):
+                    internal_config_from_command(command)
+
 
 if __name__ == "__main__":
     unittest.main()

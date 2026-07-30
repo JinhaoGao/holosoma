@@ -155,7 +155,7 @@ class RetargetMotionNominalQposTests(unittest.TestCase):
 
 
 class OmomoRetargetingObjectSetupTests(unittest.TestCase):
-    ROBOTS = {"g1": 29, "e1": 23}
+    ROBOTS = {"g1": 29}
 
     def setUp(self):
         self._asset_temp = tempfile.TemporaryDirectory()
@@ -171,7 +171,7 @@ class OmomoRetargetingObjectSetupTests(unittest.TestCase):
                 "object_interaction",
             )
 
-    def test_all_objects_setup_for_g1_and_e1(self):
+    def test_all_objects_setup_for_supported_robots(self):
         for robot_name, robot_dof in self.ROBOTS.items():
             robot_config = RobotConfig(robot_type=robot_name)
             motion_config = MotionDataConfig(data_format="omomo", robot_type=robot_name)

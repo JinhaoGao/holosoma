@@ -42,6 +42,30 @@ DATASET_DEFAULT_PATHS: dict[str, Path] = {
     "OMOMO_new": _DEMO_DATA_ROOT / "OMOMO_new",
 }
 
+SUPPORTED_TASK_DATASETS: dict[TaskType, frozenset[str]] = {
+    "robot_only": frozenset(DATASET_DATA_FORMATS),
+    "object_interaction": frozenset({"OMOMO_new"}),
+    "climbing": frozenset({"climbing", "noetix_csv_climb"}),
+}
+
+
+def validate_production_task(
+    *,
+    task: str,
+    robot: str,
+    dataset: str,
+) -> None:
+    """Reject task/robot/dataset combinations outside the production matrix."""
+
+    if task not in SUPPORTED_TASK_DATASETS:
+        choices = ", ".join(SUPPORTED_TASK_DATASETS)
+        raise ValueError(f"Unknown task {task!r}; choose one of: {choices}")
+    if dataset not in SUPPORTED_TASK_DATASETS[task]:
+        supported = ", ".join(sorted(SUPPORTED_TASK_DATASETS[task]))
+        raise ValueError(f"task={task!r} supports dataset presets: {supported}")
+    if task != "robot_only" and robot != "g1":
+        raise ValueError(f"task={task!r} is supported only on robot='g1'")
+
 
 @dataclass(frozen=True)
 class RetargetingCommand:
@@ -79,9 +103,15 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
     except KeyError as exc:
         choices = ", ".join(DATASET_DATA_FORMATS)
         raise ValueError(f"Unknown dataset preset {dataset!r}; choose one of: {choices}") from exc
+    validate_production_task(
+        task=command.task,
+        robot=command.robot,
+        dataset=dataset,
+    )
     return RetargetingConfig(
         task_type=command.task,
         robot=command.robot,
+        dataset=dataset,
         data_format=data_format,
         task_name=command.motion,
         data_path=command.data_path or default_data_path,
@@ -104,6 +134,9 @@ class RetargetingConfig:
     # --- top-level run knobs ---
     robot: str = "g1"
     """Robot type. Use str to allow dynamic robot types via _ROBOT_DEFAULTS."""
+
+    dataset: str | None = None
+    """User-facing dataset preset when invoked through a production command."""
 
     data_format: str | None = None
     """Motion data format. Auto-determined by task_type if None.

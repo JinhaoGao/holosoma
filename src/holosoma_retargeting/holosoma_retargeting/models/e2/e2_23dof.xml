@@ -1,0 +1,200 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mujoco model="E2_23dof">
+  <compiler angle="radian" meshdir="." autolimits="true" balanceinertia="true" />
+  <default>
+    <joint damping="0.001" armature="0.03" frictionloss="0.1" />
+    <geom rgba="0.78 0.82 0.92 1" />
+  </default>
+  <asset>
+    <texture name="ground_texture" type="2d" builtin="checker" rgb1=".2 .3 .4" rgb2=".1 .15 .2" width="512" height="512" />
+    <material name="ground_material" texture="ground_texture" texrepeat="1 1" texuniform="true" reflectance="0" />
+    <mesh name="base_link" file="simplified/base_link.STL" />
+    <mesh name="l_leg_hip_pitch_link" file="simplified/l_leg_hip_pitch_link.STL" />
+    <mesh name="l_leg_hip_yaw_link" file="simplified/l_leg_hip_yaw_link.STL" />
+    <mesh name="l_leg_knee_link" file="simplified/l_leg_knee_link.STL" />
+    <mesh name="l_leg_ankle_roll_link" file="simplified/l_leg_ankle_roll_link.STL" />
+    <mesh name="r_leg_hip_pitch_link" file="simplified/r_leg_hip_pitch_link.STL" />
+    <mesh name="r_leg_hip_yaw_link" file="simplified/r_leg_hip_yaw_link.STL" />
+    <mesh name="r_leg_knee_link" file="simplified/r_leg_knee_link.STL" />
+    <mesh name="r_leg_ankle_roll_link" file="simplified/r_leg_ankle_roll_link.STL" />
+    <mesh name="waist_pitch_link" file="simplified/waist_pitch_link.STL" />
+    <mesh name="l_arm_shoulder_pitch_link" file="simplified/l_arm_shoulder_pitch_link.STL" />
+    <mesh name="l_arm_shoulder_yaw_link" file="simplified/l_arm_shoulder_yaw_link.STL" />
+    <mesh name="l_arm_elbow_link" file="simplified/l_arm_elbow_link.STL" />
+    <mesh name="r_arm_shoulder_pitch_link" file="simplified/r_arm_shoulder_pitch_link.STL" />
+    <mesh name="r_arm_shoulder_yaw_link" file="simplified/r_arm_shoulder_yaw_link.STL" />
+    <mesh name="r_arm_elbow_link" file="simplified/r_arm_elbow_link.STL" />
+  </asset>
+  <worldbody>
+    <light directional="true" diffuse=".7 .7 .7" specular=".2 .2 .2" pos="0 0 4" dir="0 0 -1" />
+    <geom name="ground" type="plane" size="0 0 1" pos="0 0 0" material="ground_material" condim="3" conaffinity="15" />
+    <body name="base_link" pos="0 0 0.7595">
+      <inertial pos="-0.00046609 -1.3058E-06 0.11394" mass="5.28864017" fullinertia="0.0182468 0.01506873 0.0079828 -2.1e-06 1.497e-05 9.27e-06" />
+      <geom type="mesh" mesh="base_link" contype="1" conaffinity="1" group="2" name="base_link_geom" pos="0 0 0" euler="0 0 0" />
+      <freejoint name="root" />
+      <body name="l_leg_hip_pitch_link" pos="-0.00047114 0.06165 0.064">
+        <inertial pos="0.0057148 0.064627 -2.5541E-05" mass="1.3773579" fullinertia="0.00163416 0.00114094 0.00147983 4.164e-05 -5.2e-07 -2.6e-07" />
+        <geom type="mesh" mesh="l_leg_hip_pitch_link" contype="1" conaffinity="1" group="2" name="l_leg_hip_pitch_link_geom" pos="0 0 0" euler="0 0 0" />
+        <joint name="l_leg_hip_pitch_joint" type="hinge" axis="0 1 0" range="-2.3562 3.1416" />
+        <body name="l_leg_hip_roll_link" pos="0.004 0.070612 0.0003284">
+          <inertial pos="0.012068 0.00018298 -0.046409" mass="0.26525549" fullinertia="0.00031798 0.00039374 0.00028296 7.9e-07 0.00011439 1.2e-07" />
+          <joint name="l_leg_hip_roll_joint" type="hinge" axis="1 0 0" range="-0.349 2.9671" />
+          <body name="l_leg_hip_yaw_link" pos="-0.004 8.7975E-05 -0.076112">
+            <inertial pos="0.0015978 4.5174E-05 -0.17547" mass="3.57683738" fullinertia="0.06583596 0.06641946 0.00357311 4.16e-06 -0.0001477 3.05e-05" />
+            <geom type="mesh" mesh="l_leg_hip_yaw_link" contype="1" conaffinity="1" group="2" name="l_leg_hip_yaw_link_geom" pos="0 0 0" euler="0 0 0" />
+            <joint name="l_leg_hip_yaw_joint" type="hinge" axis="0 0 1" range="-4.7124 4.7124" />
+            <body name="l_leg_knee_link" pos="0 -0.00099998 -0.3155">
+              <inertial pos="-0.00010582 0.003327 -0.13825" mass="2.28601337" fullinertia="0.01653896 0.01597839 0.00202898 4.1e-06 -0.00062564 0.00027374" />
+              <geom type="mesh" mesh="l_leg_knee_link" contype="1" conaffinity="1" group="2" name="l_leg_knee_link_geom" pos="0 0 0" euler="0 0 0" />
+              <joint name="l_leg_knee_joint" type="hinge" axis="0 1 0" range="0 2.7925" />
+              <body name="l_leg_ankle_pitch_link" pos="0.008 0.0025 -0.39">
+                <inertial pos="0.0010073 1.1822E-05 -0.0029683" mass="0.12719236" fullinertia="1.176e-05 2.401e-05 1.965e-05 0 3.8e-07 0" />
+                <joint name="l_leg_ankle_pitch_joint" type="hinge" axis="0 1 0" range="-1.0472 0.4363" />
+                <body name="l_leg_ankle_roll_link" pos="0.0035 0 0">
+                  <inertial pos="0.018153 2.0402E-09 -0.028716" mass="1.08809345" fullinertia="0.00037285 0.00205606 0.00212484 0 -8.271e-05 0" />
+                  <geom type="mesh" mesh="l_leg_ankle_roll_link" contype="1" conaffinity="1" group="2" name="l_leg_ankle_roll_link_geom" pos="0 0 0" euler="0 0 0" />
+                  <joint name="l_leg_ankle_roll_joint" type="hinge" axis="1 0 0" range="-0.3491 0.3491" />
+                  <body name="l_foot_sphere_1_link" pos="-0.055 0.0275 -0.041">
+                    <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                    <geom type="sphere" size="0.005" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="l_foot_sphere_1_link_geom" pos="0 0 0" euler="0 0 0" />
+                  </body>
+                  <body name="l_foot_sphere_2_link" pos="-0.055 -0.0275 -0.041">
+                    <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                    <geom type="sphere" size="0.005" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="l_foot_sphere_2_link_geom" pos="0 0 0" euler="0 0 0" />
+                  </body>
+                  <body name="l_foot_sphere_3_link" pos="0.11 0.0275 -0.041">
+                    <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                    <geom type="sphere" size="0.005" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="l_foot_sphere_3_link_geom" pos="0 0 0" euler="0 0 0" />
+                  </body>
+                  <body name="l_foot_sphere_4_link" pos="0.11 -0.0275 -0.041">
+                    <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                    <geom type="sphere" size="0.005" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="l_foot_sphere_4_link_geom" pos="0 0 0" euler="0 0 0" />
+                  </body>
+                  <body name="l_foot_sphere_5_link" pos="0.145 0 -0.041">
+                    <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                    <geom type="sphere" size="0.005" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="l_foot_sphere_5_link_geom" pos="0 0 0" euler="0 0 0" />
+                  </body>
+                </body>
+              </body>
+              <body name="l_leg_ankle_intermediate_1_link" pos="0.008 0.0025 -0.355">
+                <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                <geom type="sphere" size="0.01" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="l_leg_ankle_intermediate_1_link_geom" pos="0 0 0" euler="0 0 0" />
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="r_leg_hip_pitch_link" pos="-0.00047114 -0.06175 0.064">
+        <inertial pos="0.0057148 -0.064527 -2.5567E-05" mass="1.37736766" fullinertia="0.00163417 0.00114095 0.00147984 -4.163e-05 -5.2e-07 2.5e-07" />
+        <geom type="mesh" mesh="r_leg_hip_pitch_link" contype="1" conaffinity="1" group="2" name="r_leg_hip_pitch_link_geom" pos="0 0 0" euler="0 0 0" />
+        <joint name="r_leg_hip_pitch_joint" type="hinge" axis="0 1 0" range="-2.3562 3.1416" />
+        <body name="r_leg_hip_roll_link" pos="0.004 -0.070484 0.00034008">
+          <inertial pos="0.012068 -0.00021152 -0.046421" mass="0.26525429" fullinertia="0.00031798 0.00039374 0.00028296 -7.9e-07 0.00011439 -1.2e-07" />
+          <joint name="r_leg_hip_roll_joint" type="hinge" axis="1 0 0" range="-2.9671 0.349" />
+          <body name="r_leg_hip_yaw_link" pos="-0.004 -0.00011639 -0.076124">
+            <inertial pos="0.0015979 -4.5172E-05 -0.17547" mass="3.57684117" fullinertia="0.06583607 0.06641956 0.00357311 -4.17e-06 -0.0001477 -3.05e-05" />
+            <geom type="mesh" mesh="r_leg_hip_yaw_link" contype="1" conaffinity="1" group="2" name="r_leg_hip_yaw_link_geom" pos="0 0 0" euler="0 0 0" />
+            <joint name="r_leg_hip_yaw_joint" type="hinge" axis="0 0 1" range="-4.7124 4.7124" />
+            <body name="r_leg_knee_link" pos="0 0.00099999 -0.3155">
+              <inertial pos="-0.00010522 -0.0033267 -0.13825" mass="2.28577932" fullinertia="0.01653856 0.01597796 0.00202885 -4.1e-06 -0.00062561 -0.00027375" />
+              <geom type="mesh" mesh="r_leg_knee_link" contype="1" conaffinity="1" group="2" name="r_leg_knee_link_geom" pos="0 0 0" euler="0 0 0" />
+              <joint name="r_leg_knee_joint" type="hinge" axis="0 1 0" range="0 2.7925" />
+              <body name="r_leg_ankle_pitch_link" pos="0.008 -0.0025 -0.39">
+                <inertial pos="0.0010072 -1.1812E-05 -0.0029681" mass="0.1271935" fullinertia="1.176e-05 2.401e-05 1.965e-05 0 3.8e-07 0" />
+                <joint name="r_leg_ankle_pitch_joint" type="hinge" axis="0 1 0" range="-1.0472 0.4363" />
+                <body name="r_leg_ankle_roll_link" pos="0.0035 0 0">
+                  <inertial pos="0.018153 1.3733E-09 -0.028716" mass="1.08809345" fullinertia="0.00037285 0.00205606 0.00212484 0 -8.271e-05 0" />
+                  <geom type="mesh" mesh="r_leg_ankle_roll_link" contype="1" conaffinity="1" group="2" name="r_leg_ankle_roll_link_geom" pos="0 0 0" euler="0 0 0" />
+                  <joint name="r_leg_ankle_roll_joint" type="hinge" axis="1 0 0" range="-0.3491 0.3491" />
+                  <body name="r_foot_sphere_1_link" pos="-0.055 0.0275 -0.041">
+                    <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                    <geom type="sphere" size="0.005" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="r_foot_sphere_1_link_geom" pos="0 0 0" euler="0 0 0" />
+                  </body>
+                  <body name="r_foot_sphere_2_link" pos="-0.055 -0.0275 -0.041">
+                    <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                    <geom type="sphere" size="0.005" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="r_foot_sphere_2_link_geom" pos="0 0 0" euler="0 0 0" />
+                  </body>
+                  <body name="r_foot_sphere_3_link" pos="0.11 0.0275 -0.041">
+                    <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                    <geom type="sphere" size="0.005" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="r_foot_sphere_3_link_geom" pos="0 0 0" euler="0 0 0" />
+                  </body>
+                  <body name="r_foot_sphere_4_link" pos="0.11 -0.0275 -0.041">
+                    <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                    <geom type="sphere" size="0.005" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="r_foot_sphere_4_link_geom" pos="0 0 0" euler="0 0 0" />
+                  </body>
+                  <body name="r_foot_sphere_5_link" pos="0.145 0 -0.041">
+                    <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                    <geom type="sphere" size="0.005" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="r_foot_sphere_5_link_geom" pos="0 0 0" euler="0 0 0" />
+                  </body>
+                </body>
+              </body>
+              <body name="r_leg_ankle_intermediate_1_link" pos="0.008 -0.0025 -0.355">
+                <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                <geom type="sphere" size="0.01" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="r_leg_ankle_intermediate_1_link_geom" pos="0 0 0" euler="0 0 0" />
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="waist_yaw_link" pos="-0.00015545 0 0.1987">
+        <inertial pos="0.0094985 -0.002821 0.0075679" mass="0.59018663" fullinertia="0.00030261 0.00037821 0.00048887 6.74e-06 2.021e-05 2.292e-05" />
+        <joint name="waist_yaw_joint" type="hinge" axis="0 0 1" range="-4.7124 4.7124" />
+        <body name="waist_roll_link" pos="0.0024843 0 0.0273">
+          <inertial pos="-0.0021186 -0.0022521 1.6044E-07" mass="0.28793127" fullinertia="0.00010388 3.441e-05 0.00011646 -8e-08 0 0" />
+          <joint name="waist_roll_joint" type="hinge" axis="1 0 0" range="-0.5235 0.5235" />
+          <body name="waist_pitch_link" pos="-0.002 4.3903E-05 0">
+            <inertial pos="0.0094096 0.00018056 0.21088" mass="10.27021425" fullinertia="0.1489514 0.12388776 0.05227676 -0.00015352 0.00144613 0.00015166" />
+            <geom type="mesh" mesh="waist_pitch_link" contype="1" conaffinity="1" group="2" name="waist_pitch_link_geom" pos="0 0 0" euler="0 0 0" />
+            <joint name="waist_pitch_joint" type="hinge" axis="0 1 0" range="-0.5235 0.5235" />
+            <body name="l_arm_shoulder_pitch_link" pos="0 0.093744 0.31863" euler="0.17453 0 0">
+              <inertial pos="0.0020861 0.065027 -0.025743" mass="1.62441562" fullinertia="0.00230664 0.00168123 0.00182534 2.43e-05 -1.656e-05 -0.00026119" />
+              <geom type="mesh" mesh="l_arm_shoulder_pitch_link" contype="1" conaffinity="1" group="2" name="l_arm_shoulder_pitch_link_geom" pos="0 0 0" euler="0 0 0" />
+              <joint name="l_arm_shoulder_pitch_joint" type="hinge" axis="0 1 0" range="-3.1416 3.1416" />
+              <body name="l_arm_shoulder_roll_link" pos="0.0016805 0.069094 -0.029289" euler="-0.17453 0 0">
+                <inertial pos="-0.0058081 0.0026038 -0.032793" mass="0.55306301" fullinertia="0.00110419 0.00137016 0.00089266 4.95e-06 -0.00011466 -5.33e-06" />
+                <joint name="l_arm_shoulder_roll_joint" type="hinge" axis="1 0 0" range="-0.2618 2.7925" />
+                <body name="l_arm_shoulder_yaw_link" pos="-0.00041494 0.0031926 -0.081712">
+                  <inertial pos="-0.0007002 0.003668 -0.085936" mass="1.60901054" fullinertia="0.00604459 0.00598632 0.00125199 -3.38e-06 2.178e-05 -3.72e-06" />
+                  <geom type="mesh" mesh="l_arm_shoulder_yaw_link" contype="1" conaffinity="1" group="2" name="l_arm_shoulder_yaw_link_geom" pos="0 0 0" euler="0 0 0" />
+                  <joint name="l_arm_shoulder_yaw_joint" type="hinge" axis="0 0 1" range="-3.4907 3.4907" />
+                  <body name="l_arm_elbow_link" pos="0.002579 0.0080593 -0.14844">
+                    <inertial pos="0.096434 -0.0036868 -0.071498" mass="0.72445956" fullinertia="0.00205858 0.00607616 0.00476261 0.00018695 0.00248819 -0.00012787" />
+                    <geom type="mesh" mesh="l_arm_elbow_link" contype="1" conaffinity="1" group="2" name="l_arm_elbow_link_geom" pos="0 0 0" euler="0 0 0" />
+                    <joint name="l_arm_elbow_joint" type="hinge" axis="0 1 0" range="-1.3963 1.1345" />
+                    <body name="l_hand_sphere_link" pos="0.249 -0.008 -0.159">
+                      <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                      <geom type="sphere" size="0.005" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="l_hand_sphere_link_geom" pos="0 0 0" euler="0 0 0" />
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+            <body name="r_arm_shoulder_pitch_link" pos="0 -0.093832 0.31863" euler="-0.17453 0 0">
+              <inertial pos="0.0020862 -0.065027 -0.025744" mass="1.62440409" fullinertia="0.00230661 0.0016812 0.00182533 -2.43e-05 -1.657e-05 0.00026117" />
+              <geom type="mesh" mesh="r_arm_shoulder_pitch_link" contype="1" conaffinity="1" group="2" name="r_arm_shoulder_pitch_link_geom" pos="0 0 0" euler="0 0 0" />
+              <joint name="r_arm_shoulder_pitch_joint" type="hinge" axis="0 1 0" range="-3.1416 3.1416" />
+              <body name="r_arm_shoulder_roll_link" pos="0.00028649 -0.069101 -0.028713" euler="0.17453 0 0">
+                <inertial pos="-0.004415 -0.0026968 -0.033362" mass="0.55306279" fullinertia="0.00110419 0.00137015 0.00089264 -4.98e-06 -0.00011464 5.33e-06" />
+                <joint name="r_arm_shoulder_roll_joint" type="hinge" axis="1 0 0" range="-2.7925 0.2618" />
+                <body name="r_arm_shoulder_yaw_link" pos="0.00097907 -0.0032851 -0.082281">
+                  <inertial pos="-0.00069901 -0.0036688 -0.085932" mass="1.60901747" fullinertia="0.00604457 0.00598654 0.00125223 3.54e-06 2.169e-05 3.9e-06" />
+                  <geom type="mesh" mesh="r_arm_shoulder_yaw_link" contype="1" conaffinity="1" group="2" name="r_arm_shoulder_yaw_link_geom" pos="0 0 0" euler="0 0 0" />
+                  <joint name="r_arm_shoulder_yaw_joint" type="hinge" axis="0 0 1" range="-3.4907 3.4907" />
+                  <body name="r_arm_elbow_link" pos="0.0014956 -0.0080617 -0.14845">
+                    <inertial pos="0.097515 0.0036903 -0.071484" mass="0.72448255" fullinertia="0.00205863 0.00607637 0.00476283 -0.00018694 0.00248827 0.00012787" />
+                    <geom type="mesh" mesh="r_arm_elbow_link" contype="1" conaffinity="1" group="2" name="r_arm_elbow_link_geom" pos="0 0 0" euler="0 0 0" />
+                    <joint name="r_arm_elbow_joint" type="hinge" axis="0 1 0" range="-1.3963 1.1345" />
+                    <body name="r_hand_sphere_link" pos="0.25 0.008 -0.159">
+                      <inertial pos="0 0 0" mass="0.001" fullinertia="1e-07 1e-07 1e-07 0 0 0" />
+                      <geom type="sphere" size="0.005" rgba="0.2 0.2 0.8 1" contype="0" conaffinity="0" density="0" group="1" name="r_hand_sphere_link_geom" pos="0 0 0" euler="0 0 0" />
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>
