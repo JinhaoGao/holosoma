@@ -458,7 +458,6 @@ def _canonical_result_path(
     results_root: Path,
     robot: str,
     task_type: str,
-    data_format: str,
     dataset_partition: str,
     sequence_key: str,
     variant: RetargetVariant,
@@ -473,9 +472,8 @@ def _canonical_result_path(
         raise ValueError(f"Invalid sequence_key: {sequence_key!r}")
     sequence_parts = tuple(_encode_path_component(part, "sequence_key") for part in raw_sequence_parts)
     common = (
-        Path(robot)
-        / task_type
-        / data_format
+        Path(_encode_path_component(robot, "robot"))
+        / _encode_path_component(task_type, "task_type")
         / _encode_path_component(dataset_partition, "dataset_partition")
         / Path(*sequence_parts)
     )
@@ -490,7 +488,7 @@ def _canonical_result_path(
             / common
             / "identity.npz"
         )
-    return results_root / "canonical" / common / f"{variant.name}.npz"
+    return results_root / common / f"{variant.name}.npz"
 
 
 def _persistent_results_state_root(results_root: Path) -> Path:
@@ -608,7 +606,7 @@ def build_retarget_job(
     if not resolved_source_path.is_file():
         raise FileNotFoundError(f"Retargeting source file not found: {resolved_source_path}")
 
-    partition = dataset_partition or normalized.data_path.name
+    partition = dataset_partition or normalized.dataset or normalized.data_path.name
     key = sequence_key if sequence_key is not None else _default_sequence_key(normalized, resolved_source_path)
     root = (
         Path(results_root).expanduser().resolve()
@@ -616,14 +614,13 @@ def build_retarget_job(
         else (
             normalized.save_dir.expanduser().resolve()
             if normalized.save_dir is not None
-            else Path(__file__).resolve().parent / "demo_results" / "v1"
+            else Path(__file__).resolve().parent / "demo_results"
         )
     )
     output_path = _canonical_result_path(
         results_root=root,
         robot=normalized.robot,
         task_type=normalized.task_type,
-        data_format=canonical_format,
         dataset_partition=partition,
         sequence_key=key,
         variant=variant,
@@ -634,7 +631,6 @@ def build_retarget_job(
         results_root=root,
         robot=normalized.robot,
         task_type=normalized.task_type,
-        data_format=canonical_format,
         dataset_partition=partition,
         sequence_key=key,
         variant=IDENTITY_VARIANT,

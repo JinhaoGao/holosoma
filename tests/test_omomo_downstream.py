@@ -282,10 +282,10 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
             np.savez(root / "sub2_tripod_019_trans_0.npz", qpos=np.zeros((1, 1)))
             np.savez(root / "sub2_tripod_019_ablation.npz", qpos=np.zeros((1, 1)))
 
-            with self.assertRaisesRegex(ValueError, "strict schema-v2"):
+            with self.assertRaisesRegex(ValueError, "strict current-schema"):
                 get_task_names(root, "robot_only")
 
-    def test_non_v2_canonical_identity_does_not_silently_fall_back(self):
+    def test_non_current_identity_does_not_silently_fall_back(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             identity_path = root / "canonical" / "sequence" / "identity.npz"
@@ -297,7 +297,10 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
             )
             np.savez(root / "sequence_original.npz", qpos=np.zeros((1, 1)))
 
-            with self.assertRaisesRegex(ValueError, "schema_version=1; expected 2"):
+            with self.assertRaisesRegex(
+                ValueError,
+                f"schema_version={RESULT_SCHEMA_VERSION - 1}; expected {RESULT_SCHEMA_VERSION}",
+            ):
                 get_task_names(root, "robot_object")
 
     def test_duplicate_sequence_keys_across_partitions_require_a_narrower_root(self):
@@ -366,7 +369,7 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
                 qpos=np.zeros((1, 1)),
             )
 
-            with self.assertRaisesRegex(ValueError, "strict schema-v2"):
+            with self.assertRaisesRegex(ValueError, "strict current-schema"):
                 get_task_names(root, "robot_terrain")
 
 
@@ -545,7 +548,7 @@ class OmomoAcceptanceHarnessTests(unittest.TestCase):
         )
         self.assertTrue(
             all(
-                "/canonical/" in result["result_path"] and result["result_path"].endswith("/identity.npz")
+                "/canonical/" not in result["result_path"] and result["result_path"].endswith("/identity.npz")
                 for result in report["results"]
             ),
         )

@@ -647,7 +647,7 @@ def _load_evaluation_result(
     robot_type: str | None = None,
     data_format: str | None = None,
 ) -> VariantResult:
-    """Load and bind one strict schema-v2 identity to evaluation settings."""
+    """Load and bind one strict current-schema identity to evaluation settings."""
 
     result = load_variant_result(
         "identity",
@@ -910,7 +910,7 @@ def get_task_names(
     robot_type: str | None = None,
     data_format: str | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Return strict schema-v2 identity results selected for evaluation."""
+    """Return strict current-schema identity results selected for evaluation."""
 
     if data_type not in {"robot_object", "robot_only", "robot_terrain"}:
         raise ValueError(f"Invalid data type: {data_type}")
@@ -934,7 +934,7 @@ def get_task_names(
             "Evaluation no longer accepts legacy *_original.npz files because "
             "they do not guarantee saved skeletons, contact state, FPS, cost, "
             "or an externally validated asset closure. Rebuild them as strict "
-            "schema-v2 identity.npz artifacts first.",
+            "current-schema identity.npz artifacts first.",
         )
     return [], []
 

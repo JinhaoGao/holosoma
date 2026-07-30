@@ -26,6 +26,10 @@ from holosoma_retargeting.examples import (  # noqa: E402
     parallel_robot_retarget,
     robot_retarget,
 )
+from holosoma_retargeting.retargeting_pipeline import (  # noqa: E402
+    RetargetVariant,
+    _canonical_result_path,
+)
 
 
 class RetargetingEntrypointTests(unittest.TestCase):
@@ -89,6 +93,29 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 with mock.patch.object(module, "run_retargeting_family") as runner:
                     module.run_config(cfg)
                 self.assertEqual(runner.call_args.args[0].save_dir, custom_root)
+
+    def test_result_path_is_partitioned_by_robot_and_dataset(self):
+        result = _canonical_result_path(
+            results_root=Path("/results"),
+            robot="e2",
+            task_type="robot_only",
+            dataset_partition="noetix_mocap",
+            sequence_key="session/walk",
+            variant=RetargetVariant(
+                name="translated",
+                translation=(0.2, 0.0, 0.0),
+            ),
+            run_kind="augmentation",
+            experiment_name=None,
+        )
+
+        self.assertEqual(
+            result,
+            Path(
+                "/results/e2/robot_only/noetix_mocap/session/walk/translated.npz",
+            ),
+        )
+        self.assertNotIn("canonical", result.parts)
 
     def test_compact_command_resolves_dataset_defaults(self):
         command = RetargetingCommand(
