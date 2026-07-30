@@ -55,11 +55,12 @@ are represented as an absent optional layer rather than fabricated points.
 
 ## Orientation contract
 
-Orientation loss is disabled by default. A single command switch enables a
-reviewed repository profile, while an optional configuration file assigns
-weights by semantic mapped joint. Zero weight disables a mapping. Source data
-without reliable orientations remains valid for position-only retargeting and
-fails clearly if orientation loss is explicitly requested.
+Orientation loss is disabled by default. A single command switch enables equal
+weights for every reviewed mapping, while an optional JSON configuration
+assigns weights by human keypoint or robot link. An omitted or zero weight
+disables a mapping. Source data without reliable orientations remains valid for
+position-only retargeting and fails clearly if orientation loss is explicitly
+requested.
 
 Each orientation-capable dataset and robot pair has a T-pose calibration. A
 fixed frame offset aligns the source joint frame with the robot link frame
@@ -84,7 +85,7 @@ No other `demo_results_*` tree belongs to the production result set.
 Each implementation stage is committed independently. A stage commit must have
 a focused diff, relevant tests, no accidentally generated result files, and no
 raw E2 mesh payloads. The final branch must pass the retargeting test suite,
-format and lint checks, type checks configured by the repository, and
-`git diff --check`. The final audit also verifies the exact public scripts,
-task matrix, result directory layout, default-off orientation behavior, and a
-clean worktree.
+format and lint checks, `git diff --check`, and the repository CI type check.
+The final audit also verifies the exact public scripts, task matrix, result
+directory layout, default-off orientation behavior, and that this work created
+no untracked files.

@@ -933,7 +933,7 @@ def get_task_names(
         raise ValueError(
             "Evaluation no longer accepts legacy *_original.npz files because "
             "they do not guarantee saved skeletons, contact state, FPS, cost, "
-            "or an externally validated asset closure. Rebuild them as strict "
+            "or an externally validated asset closure. Regenerate them as strict "
             "current-schema identity.npz artifacts first.",
         )
     return [], []

@@ -160,7 +160,7 @@ class RetargetJob:
 
 @dataclass(frozen=True)
 class RetargetJobResult:
-    """Minimal execution result shared by single, batch, and experiments."""
+    """Minimal execution result shared by single and augmentation commands."""
 
     output_path: Path
     source_path: Path
@@ -438,7 +438,7 @@ def _default_sequence_key(
     normalized: RetargetingConfig,
     source_path: Path,
 ) -> str:
-    """Derive the canonical identity used by recursive batch discovery."""
+    """Derive the result identity for the explicitly selected source."""
 
     spec = get_motion_format_spec(str(normalized.data_format))
     if not spec.recursive_files:
