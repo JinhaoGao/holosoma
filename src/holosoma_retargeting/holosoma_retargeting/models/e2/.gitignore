@@ -1,1 +1,3 @@
+# Vendor source meshes stay local; synchronize the generator and simplified
+# runtime assets instead.
 /meshes (raw)/

@@ -1,26 +1,12 @@
+# Package-local editor and cache files
 *.swp
 __pycache__
+*.py[cod]
 *.zip
 .vscode
-*.pt
-*.pkl
 *.egg-info
-data/
 .DS_Store
-rt_all_data/
-rt_results/
-results_single/
-experiments/
-*scaled*.urdf
-*scaled*.xml
-models/*/generated/
-nightly_data/
-nightly_results/
-demo_results/
-demo_results_parallel/
-*.pyc
-demo_data/lafan/
-converted_res/
-data_utils/lafan1
-*.sh
-*.bvh
+
+# Local source/check-out directories that are not package inputs
+/data/
+/data_utils/lafan1/

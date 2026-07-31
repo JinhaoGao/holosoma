@@ -21,14 +21,28 @@ logs
 log/
 logs_eval
 
-# Retargeting demo datasets
+# Retargeting datasets stay local. The small fixtures already tracked by Git
+# remain synchronized; adding another fixture must be an explicit review choice.
 src/holosoma_retargeting/holosoma_retargeting/demo_data/
+
+# Retargeting results and local experiment workspaces
+src/holosoma_retargeting/holosoma_retargeting/demo_results/
+src/holosoma_retargeting/holosoma_retargeting/demo_results_parallel/
+src/holosoma_retargeting/holosoma_retargeting/rt_results/
+src/holosoma_retargeting/holosoma_retargeting/results_single/
+src/holosoma_retargeting/holosoma_retargeting/experiments/
+src/holosoma_retargeting/holosoma_retargeting/rt_all_data/
+src/holosoma_retargeting/holosoma_retargeting/nightly_data/
+src/holosoma_retargeting/holosoma_retargeting/nightly_results/
+src/holosoma_retargeting/holosoma_retargeting/converted_res/
 
 # Licensed SMPL-X body model files (keep local; do not commit)
 src/holosoma_retargeting/holosoma_retargeting/models/smplx/*.npz
 
 # Runtime-generated robot/object MuJoCo scenes and scaled object assets
 src/holosoma_retargeting/holosoma_retargeting/models/*/generated/
+src/holosoma_retargeting/holosoma_retargeting/models/*/*_scaled_*.urdf
+src/holosoma_retargeting/holosoma_retargeting/models/*/*_scaled_*.xml
 
 # Isaacsim Converted Files
 src/holosoma/holosoma/data/robots/converted/
