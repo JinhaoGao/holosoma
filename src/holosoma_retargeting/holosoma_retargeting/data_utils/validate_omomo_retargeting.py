@@ -23,10 +23,6 @@ from holosoma_retargeting.data_utils.omomo import (
     select_omomo_files,
 )
 from holosoma_retargeting.examples.robot_retarget import run_config as run_retargeting
-from holosoma_retargeting.result_artifact import (
-    validate_result_artifact,
-    validate_result_external_assets,
-)
 from holosoma_retargeting.retargeting_pipeline import build_retarget_job
 
 
@@ -115,8 +111,6 @@ def _validate_result(
     frame_count: int,
 ) -> tuple[int, int]:
     with np.load(result_path, allow_pickle=False) as result:
-        validate_result_artifact(result)
-        validate_result_external_assets(result)
         qpos = np.asarray(result["qpos"])
         if qpos.shape != (frame_count, 7 + robot_dof + 7):
             raise ValueError(f"Unexpected qpos shape {qpos.shape}; expected {(frame_count, 7 + robot_dof + 7)}")
@@ -138,7 +132,7 @@ def _validate_result(
                 raise ValueError(f"Unexpected {key} shape {points.shape}; expected {expected_shape}")
             if not np.isfinite(points).all():
                 raise ValueError(f"{key} contains NaN or Inf")
-    return qpos.shape
+    return int(qpos.shape[0]), int(qpos.shape[1])
 
 
 def run_acceptance(

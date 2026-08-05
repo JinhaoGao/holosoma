@@ -36,15 +36,35 @@ python examples/parallel_robot_retarget.py \
 
 Use `--data-path` only when the dataset is outside its repository default,
 `--save-dir` to override the result root, and `--overwrite` to replace an
-existing result at the same path. Live solver debug, live visualization,
-dataset traversal, ablation, search, and result rebuilding are not public
-command options.
+existing result at the same path. Live Viser visualization is enabled by
+default. `--retargeter.debug` adds mapped human/robot keypoints, hand
+skeletons, and object-point diagnostics and waits for Enter after solving.
+Use `--retargeter.no-visualize` for headless runs. An existing result does not
+rerun the solver, so use `--overwrite` to watch the live solve again or inspect
+the saved result with the player. Dataset traversal, ablation, search, and
+result rebuilding are not public command options.
+
+Foot-sticking XY hard constraints are enabled by default. Pass
+`--foot-sticking True` to state that choice explicitly or
+`--foot-sticking False` to disable them completely for the selected single or
+augmented run. This switch does not disable ground non-penetration or joint
+limits:
+
+```bash
+python examples/robot_retarget.py \
+  --task robot_only \
+  --robot e2 \
+  --dataset lafan \
+  --motion walk2_subject3 \
+  --foot-sticking False
+```
 
 ## Supported matrix
 
 | Dataset preset | Internal format | Direct source orientation | `robot_only` |
 | --- | --- | --- | --- |
 | `climbing` | `mocap` | No; the legacy source is position-only NPY | G1, E1, E2 |
+| `fbx_mocap` | `fbx_mocap` | Yes; direct FBX local-rotation FK | G1, E1, E2 |
 | `gvhmr` | `gvhmr` | Yes; direct SMPL-X rotation FK | G1, E1, E2 |
 | `lafan` | `lafan` | Yes; BVH rotation-channel FK | G1, E1, E2 |
 | `noetix_csv_climb` | `mocap` | Yes; converted bone-rotation FK | G1, E1, E2 |
@@ -57,8 +77,8 @@ those two interaction tasks.
 
 ## Optional orientation loss
 
-Orientation loss is disabled by default. `--orientation` enables equal weights
-for the 15 calibrated mappings:
+Orientation loss is disabled by default. `--orientation_weights WEIGHT` assigns one
+non-negative weight to all 15 calibrated mappings:
 
 ```bash
 python examples/robot_retarget.py \
@@ -66,21 +86,11 @@ python examples/robot_retarget.py \
   --robot g1 \
   --dataset gvhmr \
   --motion tennis \
-  --orientation
+  --orientation_weights 1
 ```
 
-For per-keypoint or per-link weights, pass a JSON file:
-
-```json
-{
-  "enabled": true,
-  "weights": {
-    "Pelvis": 0.2,
-    "L_Shoulder": 0.1,
-    "right_shoulder_yaw_link": 0.1
-  }
-}
-```
+For per-keypoint or per-link weights, use the complete profile for the selected
+robot:
 
 ```bash
 python examples/robot_retarget.py \
@@ -88,14 +98,54 @@ python examples/robot_retarget.py \
   --robot g1 \
   --dataset gvhmr \
   --motion tennis \
-  --orientation-config ./orientation.json
+  --orientation_config examples/orientation_weights/g1.json
 ```
 
-Keys may name either a mapped human keypoint or its robot link. Unspecified
-mappings have zero weight. G1, E1, and E2 each use their own robot FK T-pose;
-each direct-orientation format supplies its source T-pose frame. A fixed frame
-offset aligns those frames before the loss is evaluated, following the same
-principle as GMR. No orientation is inferred from positions or bone vectors.
+The repository provides `g1.json`, `e1.json`, and `e2.json`. Each contains
+complete tables for `gvhmr`, `lafan`, `noetix_csv_climb`, `noetix_mocap`, and
+`OMOMO_new`; the current `--dataset` selects the table. Every mapped key must
+appear and may name either its human keypoint or robot link. Set a value to
+zero to remove that keypoint's orientation loss. The profile robot must match
+the command, and `--orientation_weights` and `--orientation_config` are mutually
+exclusive. G1, E1, and E2 each use their own robot FK T-pose; each
+direct-orientation format supplies its source T-pose frame. No orientation is
+inferred from positions or bone vectors.
+
+## Natural-posture regularization
+
+Natural-posture regularization is also disabled by default. Use
+`--nature_weights WEIGHT` to assign one non-negative weight to every actuated
+joint. The fixed natural reference angles are read from the bundled
+`examples/nature_weights/g1.json`, `e1.json`, or `e2.json` profile selected by
+`--robot`:
+
+```bash
+python examples/robot_retarget.py \
+  --task robot_only \
+  --robot g1 \
+  --dataset gvhmr \
+  --motion tennis \
+  --nature_weights 0.1
+```
+
+For independent joint weights, pass a robot-specific JSON file or a directory
+containing the three corresponding files through `--nature_config`. Each table
+contains direct absolute weights and its natural reference angles in radians:
+
+```bash
+python examples/robot_retarget.py \
+  --task robot_only \
+  --robot g1 \
+  --dataset gvhmr \
+  --motion tennis \
+  --nature_config examples/nature_weights/g1.json
+```
+
+Every SQP iteration adds the fixed joint-space cost
+`sum_i w_i (q_i - q_i_natural)^2`. Active natural-pose joints are initialized from
+the same references once before frame zero, while later frames continue from
+the preceding solution. `--nature_weights` and `--nature_config` are mutually
+exclusive. A zero uniform or table weight removes the corresponding cost.
 
 ## Outputs
 
@@ -111,25 +161,27 @@ Augmented results:
 demo_results_parallel/<robot>/<task>/<dataset>/<motion>/<variant>.npz
 ```
 
-The artifact retains float64 qpos, solver metadata, mapped human and robot
-points, available hand keypoints, mapped robot-link positions and wxyz
-orientations, available direct source orientations, effective human/robot/
-terrain/object point clouds, object data, and the source/target Interaction
-Mesh. Unused full-body and full-link trajectories are pruned.
+Each NPZ retains float64 qpos, solver metadata, the human and robot points used
+by position or orientation retargeting, compact skeleton connectivity, mapped
+robot-link positions and wxyz orientations, direct source orientations used by
+the solver, effective human/robot/terrain/object point clouds, object data, and
+the source/target Interaction Mesh. These fields are saved by default without
+schema, hash, manifest, or cross-field artifact validation. Unused full-body
+and full-link trajectories are omitted.
 
 ## Visualization
 
 ```bash
 python viser_player.py \
-  --input-path demo_results/g1/robot_only/gvhmr/tennis/identity.npz \
-  --show-point-clouds \
-  --show-source-orientation-axes \
-  --show-robot-orientation-axes
+  --input-path demo_results/g1/robot_only/gvhmr/tennis/identity.npz
 ```
 
-The single point-cloud switch displays saved human, robot, terrain, demo-object,
-and target-object points with distinct colors. Interaction Mesh, skeleton, key
-point, and orientation-axis layers remain independently controllable in Viser.
+The viewer loads every available saved layer by default. Interaction Mesh,
+human and robot skeletons, point clouds, object keypoints, and orientation axes
+are independently controlled from the Viser Layers tab; no layer list is
+required on the command line. The Playback tab also provides a joint selector
+with the complete angle trajectory and URDF lower/upper limits for each
+actuated joint.
 Use `multi_viser_player.py --family <motion-directory>` to inspect one saved
 augmentation family on a synchronized timeline.
 

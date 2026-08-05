@@ -25,7 +25,8 @@ dependencies = [
     "smplx",
     "jinja2",
     "mujoco",
-    "viser>=0.1.32",
+    "plotly",
+    "viser>=0.2.0",
     "robot_descriptions",
     "yourdfpy",
     "cvxpy",
@@ -35,7 +36,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["mypy", "ruff", "pytest"]
+fbx = ["cmeel-assimp==5.4.3.1"]
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["holosoma_retargeting*"]
+
+[tool.setuptools.package-data]
+holosoma_retargeting = [
+    "examples/orientation_weights/*.json",
+    "examples/nature_weights/*.json",
+]

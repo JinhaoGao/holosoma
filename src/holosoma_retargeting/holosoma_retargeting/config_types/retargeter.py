@@ -53,6 +53,12 @@ class RetargeterConfig:
     These parameters control the retargeting optimization process.
     """
 
+    visualize: bool = False
+    """Whether to start the live Viser retargeting viewer."""
+
+    debug: bool = False
+    """Whether to draw human, robot, hand, and object diagnostic overlays."""
+
     q_a_init_idx: int = -7
     """Offset used to select the first optimized qpos address as ``7 + offset``.
     For example, -7 starts at qpos[0] (the full floating base), -3 starts at
@@ -76,45 +82,11 @@ class RetargeterConfig:
     foot_sticking_tolerance: float = 1e-3
     """Tolerance for foot sticking constraints in x, y."""
 
-    foot_sticking_fallback_tolerance: float | None = 0.02
-    """Fallback XY tolerance used only when the normal foot-sticking problem is infeasible.
-    Set to None to disable the fallback."""
-
-    release_foot_sticking_on_infeasible: bool = True
-    """Whether to release only the current frame's foot-sticking constraints if
-    both the normal and relaxed problems remain infeasible."""
-
-    release_object_non_penetration_on_infeasible: bool = False
-    """Opt in to releasing only the current frame's robot-object non-penetration
-    constraints as a last local fallback. Ground constraints remain enabled.
-    Disabled by default because such frames no longer satisfy the collision
-    acceptance criterion."""
-
-    retry_without_foot_sticking_on_infeasible: bool = True
-    """Whether to retry an entire sequence without foot sticking when a local
-    release still cannot recover a feasible trajectory."""
-
-    retry_frame_zero_ground_on_infeasible: bool = True
-    """Whether an eligible robot-only frame-zero solve may retry once after a
-    pure ground feasibility failure by lifting only the optimized floating-base
-    Z coordinate to the strict collision interior margin. Object interaction,
-    climbing, nominal-trajectory, non-ground, and later-frame failures are
-    never eligible."""
-
     foot_lock: FootLockConfig = field(default_factory=FootLockConfig)
     """Configuration for explicit frame-range based foot locking."""
 
     step_size: float = 0.2
     """Trust region for each SQP iteration."""
-
-    sqp_max_iterations: int = 50
-    """Safety cap for SQP iterations per frame."""
-
-    sqp_min_iterations: int = 4
-    """Minimum SQP iterations before convergence-based stopping is allowed."""
-
-    sqp_convergence_patience: int = 3
-    """Stop after this many consecutive feasible iterations with a stable step."""
 
     self_collision: SelfCollisionConfig = field(default_factory=SelfCollisionConfig)
     """Configuration for self-collision avoidance."""
@@ -128,6 +100,10 @@ class RetargeterConfig:
     orientation_weights: dict[str, float] = field(default_factory=dict)
     """Per-human-joint SO(3) tracking weights. Empty or all-zero disables
     orientation tracking and preserves the position-only solver path."""
+
+    orientation_preview: bool = False
+    """Save independently calibrated human-target and robot-link frames for
+    visualization without adding an SO(3) objective or computing errors."""
 
     orientation_alignment_mode: Literal[
         "t_pose",
@@ -147,3 +123,14 @@ class RetargeterConfig:
     ) = None
     """Explicit per-human-joint alignment quaternions used when
     orientation_alignment_mode is 'explicit'."""
+
+    natural_pose_joint_positions: dict[str, float] = field(
+        default_factory=dict,
+    )
+    """Fixed natural-pose joint angles in radians, keyed by scalar robot
+    joint name. A configured profile must cover every actuated joint."""
+
+    natural_pose_weights: dict[str, float] = field(default_factory=dict)
+    """Non-negative natural-pose cost weights keyed by the same joint names
+    as natural_pose_joint_positions. Zero-weight joints stay documented
+    in the profile but do not contribute to the objective."""

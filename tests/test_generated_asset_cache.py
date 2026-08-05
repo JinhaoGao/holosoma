@@ -75,14 +75,6 @@ class JobAssetPathTests(unittest.TestCase):
                 identity_job.generated_assets_dir,
                 identity_job.output_path.parent / ".assets" / "identity",
             )
-            self.assertEqual(
-                identity_job.output_lock_path,
-                identity_job.output_path.parent / ".locks" / "identity.lock",
-            )
-            self.assertEqual(
-                identity_job.baseline_lock_path,
-                identity_job.output_lock_path,
-            )
             self.assertTrue(identity_job.generated_assets_dir.is_relative_to(results_root))
             self.assertFalse(identity_job.generated_assets_dir.is_relative_to(source_dir))
 

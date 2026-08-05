@@ -10,14 +10,9 @@ Shared robot-retargeting pipeline for all task types:
 from __future__ import annotations
 
 import copy
-import fcntl
-import hashlib
 import json
 import logging
-import os
 import re
-import tempfile
-from contextlib import ExitStack, contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -47,12 +42,6 @@ from holosoma_retargeting.data_utils.object_assets import (
     get_omomo_object_asset,
 )
 from holosoma_retargeting.data_utils.omomo import parse_omomo_sequence_name
-from holosoma_retargeting.result_artifact import (
-    RESULT_SCHEMA_VERSION,
-    ResultArtifactValidationError,
-    validate_result_artifact,
-    validate_result_external_assets,
-)
 from holosoma_retargeting.src.interaction_mesh_retargeter import (
     InteractionMeshRetargeter,  # type: ignore[import-not-found]
 )
@@ -138,24 +127,18 @@ IDENTITY_VARIANT = RetargetVariant()
 
 @dataclass(frozen=True)
 class RetargetJob:
-    """Fully normalized description of one solver invocation."""
+    """Resolved paths and inputs for one solver invocation."""
 
     config: RetargetingConfig
     source_path: Path
     output_path: Path
     baseline_path: Path
-    output_lock_path: Path
-    baseline_lock_path: Path
     generated_assets_dir: Path
     sequence_key: str
     dataset_partition: str
     run_kind: RunKind
     variant: RetargetVariant
-    source_sha256: str
     config_json: str
-    config_sha256: str
-    baseline_config_json: str
-    baseline_config_sha256: str
 
 
 @dataclass(frozen=True)
@@ -250,14 +233,6 @@ def _json_ready(value):
     return value
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        while chunk := file.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _normalized_job_payload(
     normalized: RetargetingConfig,
     *,
@@ -265,11 +240,28 @@ def _normalized_job_payload(
     variant: RetargetVariant,
     dataset_partition: str,
     sequence_key: str,
-) -> tuple[str, str]:
+) -> str:
     solver_config = asdict(normalized)
+    # Live display choices do not change solver output and must not split
+    # otherwise identical saved trajectories.
+    solver_config["retargeter"].pop("visualize", None)
+    solver_config["retargeter"].pop("debug", None)
     solver_config["augmentation"] = False
     solver_config["overwrite_existing"] = False
     solver_config["save_dir"] = None
+    motion_config = normalized.motion_data_config
+    solver_config["resolved_motion_data_contract"] = {
+        "demo_joints": motion_config.resolved_demo_joints,
+        "joint_parent_indices": motion_config.resolved_joint_parent_indices,
+        "joints_mapping": motion_config.resolved_joints_mapping,
+        "orientation_joints_mapping": motion_config.resolved_orientation_joints_mapping,
+        "orientation_t_pose_human_quaternions_wxyz": (motion_config.resolved_orientation_t_pose_human_quaternions_wxyz),
+        "orientation_t_pose_robot_base_quaternion_wxyz": (
+            motion_config.resolved_orientation_t_pose_robot_base_quaternion_wxyz
+        ),
+        "orientation_t_pose_robot_joint_positions": (motion_config.resolved_orientation_t_pose_robot_joint_positions),
+        "orientation_alignment_quaternions_wxyz": (motion_config.resolved_orientation_alignment_quaternions_wxyz),
+    }
     payload = {
         "config": solver_config,
         "run_kind": run_kind,
@@ -278,64 +270,26 @@ def _normalized_job_payload(
         "dataset_partition": dataset_partition,
         "sequence_key": sequence_key,
     }
-    config_json = json.dumps(
+    return json.dumps(
         _json_ready(payload),
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
     )
-    return config_json, hashlib.sha256(config_json.encode("utf-8")).hexdigest()
 
 
-def _artifact_scalar_text(data: np.lib.npyio.NpzFile, key: str) -> str:
-    value = np.asarray(data[key])
-    if value.ndim != 0 or value.dtype.kind not in {"S", "U"}:
-        raise ValueError(f"{key!r} must be a scalar string")
-    item = value.item()
-    return item.decode("utf-8") if isinstance(item, bytes) else str(item)
+def saved_result_has_qpos(path: str | Path) -> bool:
+    """Return whether a result is a readable NPZ containing a qpos trajectory."""
 
-
-def result_artifact_matches_job(
-    path: Path,
-    job: RetargetJob,
-    *,
-    identity_baseline: bool = False,
-) -> bool:
-    """Return whether an artifact exactly matches a planned job.
-
-    Schema validity alone is insufficient for safe resume. This contract also
-    binds the result to the resolved source path and bytes, normalized config,
-    semantic variant, and run kind. ``identity_baseline`` applies the identity
-    metadata stored on an augmented job before its qpos can be reused.
-    """
-
-    artifact_path = Path(path)
-    if not artifact_path.is_file():
+    result_path = Path(path)
+    if not result_path.is_file():
         return False
-    expected_variant = IDENTITY_VARIANT.name if identity_baseline else job.variant.name
-    expected_run_kind = "single" if identity_baseline else job.run_kind
-    expected_config_json = job.baseline_config_json if identity_baseline else job.config_json
-    expected_config_sha256 = job.baseline_config_sha256 if identity_baseline else job.config_sha256
     try:
-        with np.load(artifact_path, allow_pickle=False) as data:
-            validate_result_artifact(data)
-            matches = (
-                int(np.asarray(data["schema_version"]).item()) == RESULT_SCHEMA_VERSION
-                and _artifact_scalar_text(data, "source_path") == str(job.source_path)
-                and _artifact_scalar_text(data, "source_sha256") == job.source_sha256
-                and _artifact_scalar_text(data, "config_json") == expected_config_json
-                and _artifact_scalar_text(data, "config_sha256") == expected_config_sha256
-                and _artifact_scalar_text(data, "variant") == expected_variant
-                and _artifact_scalar_text(data, "run_kind") == expected_run_kind
-            )
-            if not matches:
-                return False
-            validate_result_external_assets(data)
-            return True
+        with np.load(result_path, allow_pickle=False) as data:
+            return "qpos" in data and np.asarray(data["qpos"]).ndim == 2
     except (
         KeyError,
         OSError,
-        ResultArtifactValidationError,
         TypeError,
         UnicodeDecodeError,
         ValueError,
@@ -352,8 +306,7 @@ def _encode_path_component(value: str, field_name: str) -> str:
         raise ValueError(f"{field_name} must contain exactly one path component")
     encoded = quote(value, safe="._-")
     if len(encoded.encode("ascii")) > 240:
-        digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
-        encoded = f"sha256-{digest}"
+        raise ValueError(f"{field_name} is too long for a portable result path")
     return encoded
 
 
@@ -422,12 +375,6 @@ def _canonical_result_path(
     return results_root / common / f"{variant.name}.npz"
 
 
-def _job_lock_path(output_path: Path) -> Path:
-    """Keep the only runtime lock beside the selected motion family."""
-
-    return output_path.parent / ".locks" / f"{output_path.stem}.lock"
-
-
 def _generated_assets_dir_for_job(output_path: Path, variant: RetargetVariant) -> Path:
     """Place generated scenes with the selected motion instead of in a global cache."""
 
@@ -474,10 +421,9 @@ def build_retarget_job(
     dataset_partition: str | None = None,
     sequence_key: str | None = None,
     source_path: Path | None = None,
-    source_sha256: str | None = None,
     overwrite_existing: bool | None = None,
 ) -> RetargetJob:
-    """Normalize a config and resolve one stable source/output contract."""
+    """Normalize a config and resolve one source/output job."""
 
     _validate_job_semantics(
         variant=variant,
@@ -486,7 +432,7 @@ def build_retarget_job(
     normalized = normalize_retargeting_config(cfg)
     # Augmentation is an orchestration request. The variant is the complete,
     # stable solver input, so this CLI-only flag must not split otherwise
-    # identical identity artifacts into separate resume identities.
+    # identical identity results into separate paths.
     normalized.augmentation = False
     if overwrite_existing is not None:
         normalized.overwrite_existing = bool(overwrite_existing)
@@ -530,20 +476,10 @@ def build_retarget_job(
         sequence_key=key,
         variant=IDENTITY_VARIANT,
     )
-    output_lock_path = _job_lock_path(output_path)
-    baseline_lock_path = _job_lock_path(baseline_path)
-    resolved_source_sha256 = source_sha256 or _sha256_file(resolved_source_path)
-    config_json, config_sha256 = _normalized_job_payload(
+    config_json = _normalized_job_payload(
         normalized,
         run_kind=run_kind,
         variant=variant,
-        dataset_partition=partition,
-        sequence_key=key,
-    )
-    baseline_config_json, baseline_config_sha256 = _normalized_job_payload(
-        normalized,
-        run_kind="single",
-        variant=IDENTITY_VARIANT,
         dataset_partition=partition,
         sequence_key=key,
     )
@@ -553,18 +489,12 @@ def build_retarget_job(
         source_path=resolved_source_path,
         output_path=output_path,
         baseline_path=baseline_path,
-        output_lock_path=output_lock_path,
-        baseline_lock_path=baseline_lock_path,
         generated_assets_dir=generated_assets_dir,
         sequence_key=key,
         dataset_partition=partition,
         run_kind=run_kind,
         variant=variant,
-        source_sha256=resolved_source_sha256,
         config_json=config_json,
-        config_sha256=config_sha256,
-        baseline_config_json=baseline_config_json,
-        baseline_config_sha256=baseline_config_sha256,
     )
 
 
@@ -943,6 +873,16 @@ def _compute_q_init_base(
             human_quat_init = estimate_mocap_foot_orientation(human_joints, constants.DEMO_JOINTS)
         else:
             raise ValueError(f"Unknown source orientation mode: {constants.SOURCE_ORIENTATION_MODE}")
+        root_frame_offset = getattr(
+            constants,
+            "SOURCE_ROOT_FRAME_TO_ROBOT_BASE_QUATERNION_WXYZ",
+            None,
+        )
+        if root_frame_offset is not None:
+            human_quat_init = _multiply_quaternions_wxyz(
+                np.asarray(human_quat_init, dtype=np.float64)[None, :],
+                np.asarray(root_frame_offset, dtype=np.float64)[None, :],
+            )[0]
         q_init_base = np.concatenate(
             [human_joints[0, base_joint_idx, :3], human_quat_init, np.zeros(constants.ROBOT_DOF)]
         )
@@ -1138,23 +1078,11 @@ def build_retargeter_kwargs_from_config(
         "foot_lock": retargeter_config.foot_lock,
         "penetration_tolerance": retargeter_config.penetration_tolerance,
         "foot_sticking_tolerance": retargeter_config.foot_sticking_tolerance,
-        "foot_sticking_fallback_tolerance": retargeter_config.foot_sticking_fallback_tolerance,
-        "release_foot_sticking_on_infeasible": retargeter_config.release_foot_sticking_on_infeasible,
-        "release_object_non_penetration_on_infeasible": (
-            retargeter_config.release_object_non_penetration_on_infeasible
-        ),
-        "retry_without_foot_sticking_on_infeasible": (retargeter_config.retry_without_foot_sticking_on_infeasible),
-        "retry_frame_zero_ground_on_infeasible": (
-            retargeter_config.retry_frame_zero_ground_on_infeasible and task_type == "robot_only"
-        ),
         "self_collision": retargeter_config.self_collision,
         "step_size": retargeter_config.step_size,
-        "sqp_max_iterations": retargeter_config.sqp_max_iterations,
-        "sqp_min_iterations": retargeter_config.sqp_min_iterations,
-        "sqp_convergence_patience": retargeter_config.sqp_convergence_patience,
-        "visualize": False,
+        "visualize": retargeter_config.visualize,
         "mesh_opacity": 1.0,
-        "debug": False,
+        "debug": retargeter_config.debug,
         "show_interaction_mesh": False,
         "save_interaction_mesh": True,
         "interaction_mesh_mode": "both",
@@ -1164,11 +1092,22 @@ def build_retargeter_kwargs_from_config(
         "nominal_tracking_tau": retargeter_config.nominal_tracking_tau,
         "orientation_joints_mapping": constants.ORIENTATION_JOINTS_MAPPING,
         "orientation_weights": retargeter_config.orientation_weights,
+        "orientation_preview": retargeter_config.orientation_preview,
         "orientation_alignment_mode": retargeter_config.orientation_alignment_mode,
         "orientation_t_pose_human_quaternions_wxyz": (constants.ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ),
         "orientation_t_pose_robot_base_quaternion_wxyz": (constants.ORIENTATION_T_POSE_ROBOT_BASE_QUATERNION_WXYZ),
         "orientation_t_pose_robot_joint_positions": (constants.ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS),
-        "orientation_alignment_quaternions_wxyz": (retargeter_config.orientation_alignment_quaternions_wxyz),
+        "orientation_alignment_quaternions_wxyz": (
+            retargeter_config.orientation_alignment_quaternions_wxyz
+            if retargeter_config.orientation_alignment_quaternions_wxyz is not None
+            else getattr(
+                constants,
+                "ORIENTATION_ALIGNMENT_QUATERNIONS_WXYZ",
+                {},
+            )
+        ),
+        "natural_pose_joint_positions": retargeter_config.natural_pose_joint_positions,
+        "natural_pose_weights": retargeter_config.natural_pose_weights,
     }
 
 
@@ -1286,113 +1225,6 @@ def _direct_motion_orientations(
     )
 
 
-def _verify_job_source(job: RetargetJob) -> None:
-    """Ensure the selected motion still has the bytes planned for this job."""
-
-    observed_sha256 = _sha256_file(job.source_path)
-    if observed_sha256 != job.source_sha256:
-        raise RuntimeError(
-            "Retargeting source bytes changed after job planning: "
-            f"{job.source_path}; expected {job.source_sha256}, "
-            f"observed {observed_sha256}"
-        )
-
-
-def _verify_job_config(job: RetargetJob) -> None:
-    """Ensure callers did not mutate the normalized config after planning."""
-
-    observed_config_json, observed_config_sha256 = _normalized_job_payload(
-        job.config,
-        run_kind=job.run_kind,
-        variant=job.variant,
-        dataset_partition=job.dataset_partition,
-        sequence_key=job.sequence_key,
-    )
-    if observed_config_json != job.config_json or observed_config_sha256 != job.config_sha256:
-        raise RuntimeError(
-            "Retargeting normalized configuration changed after job planning",
-        )
-
-
-def _revalidate_job_inputs(job: RetargetJob) -> None:
-    _verify_job_source(job)
-    _verify_job_config(job)
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _cleanup_stale_solve_candidates(output_path: Path) -> None:
-    """Remove candidates orphaned by an uncatchable prior process exit.
-
-    The caller must hold this output's exclusive job lock, so no cooperating
-    writer can own either the outer solve candidate or the nested atomic NPZ
-    temporary file at the same time.
-    """
-
-    parent = output_path.parent
-    if not parent.is_dir():
-        return
-    patterns = (
-        f".{output_path.name}.solve.*.tmp.npz",
-        f"..{output_path.name}.solve.*.tmp.npz.*.tmp.npz",
-    )
-    removed = False
-    candidates = {candidate for pattern in patterns for candidate in parent.glob(pattern)}
-    for candidate in sorted(candidates):
-        candidate.unlink(missing_ok=True)
-        removed = True
-    if removed:
-        _fsync_directory(parent)
-
-
-def _publish_solved_artifact(
-    job: RetargetJob,
-    temporary_output_path: Path,
-) -> None:
-    """Validate and atomically replace the selected result."""
-
-    if not result_artifact_matches_job(
-        temporary_output_path,
-        job,
-    ):
-        raise RuntimeError(
-            "Solver output failed the exact schema, source, config, or external-asset contract before publication",
-        )
-    _revalidate_job_inputs(job)
-    temporary_output_path.replace(job.output_path)
-    _fsync_directory(job.output_path.parent)
-
-
-@contextmanager
-def _job_file_lock(
-    path: Path,
-    *,
-    shared: bool,
-):
-    lock_path = Path(path)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(
-        lock_path,
-        os.O_CREAT | os.O_RDWR,
-        0o600,
-    )
-    try:
-        fcntl.flock(
-            descriptor,
-            fcntl.LOCK_SH if shared else fcntl.LOCK_EX,
-        )
-        yield
-    finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
-
-
 def _resumed_job_result(job: RetargetJob) -> RetargetJobResult:
     return RetargetJobResult(
         output_path=job.output_path,
@@ -1403,43 +1235,47 @@ def _resumed_job_result(job: RetargetJob) -> RetargetJobResult:
     )
 
 
+def _validate_existing_job_result(job: RetargetJob) -> None:
+    """Require an existing artifact to match the complete solver identity."""
+
+    try:
+        with np.load(job.output_path, allow_pickle=False) as data:
+            if "qpos" not in data or np.asarray(data["qpos"]).ndim != 2:
+                raise ValueError("it does not contain a two-dimensional qpos trajectory")
+            if "config_json" not in data:
+                raise ValueError("it does not contain config_json")
+            saved_config = np.asarray(data["config_json"])
+            if saved_config.ndim != 0:
+                raise ValueError("config_json is not a scalar string")
+            saved_config_json = str(saved_config.item())
+    except (OSError, TypeError, UnicodeDecodeError) as exc:
+        raise ValueError(
+            f"Existing retargeting result is unreadable: {job.output_path}; pass --overwrite to regenerate it",
+        ) from exc
+    except ValueError as exc:
+        raise ValueError(
+            f"Existing retargeting result is invalid because {exc}: "
+            f"{job.output_path}; pass --overwrite to regenerate it",
+        ) from exc
+
+    if saved_config_json != job.config_json:
+        raise ValueError(
+            "Existing retargeting result was produced by a different solver "
+            f"configuration: {job.output_path}; pass --overwrite to regenerate it",
+        )
+
+
 def run_retargeting_job(job: RetargetJob) -> RetargetJobResult:
-    """Execute or exactly resume one job under baseline and output locks."""
+    """Execute one job, or reuse its existing output unless overwrite is set."""
 
     _validate_job_semantics(
         variant=job.variant,
         run_kind=job.run_kind,
     )
-    is_augmented = job.run_kind == "augmentation"
-    with ExitStack() as locks:
-        if is_augmented:
-            locks.enter_context(
-                _job_file_lock(
-                    job.baseline_lock_path,
-                    shared=True,
-                )
-            )
-        locks.enter_context(
-            _job_file_lock(
-                job.output_lock_path,
-                shared=False,
-            )
-        )
-        _cleanup_stale_solve_candidates(job.output_path)
-        _revalidate_job_inputs(job)
-        if job.output_path.exists():
-            if result_artifact_matches_job(job.output_path, job):
-                if not job.config.overwrite_existing:
-                    _revalidate_job_inputs(job)
-                    return _resumed_job_result(job)
-            elif not job.config.overwrite_existing:
-                raise FileExistsError(
-                    "Canonical result path already exists but does not match "
-                    "this exact source/config job. Pass --overwrite-existing "
-                    f"to replace it explicitly: {job.output_path}"
-                )
-            _revalidate_job_inputs(job)
-        return _run_retargeting_job_unlocked(job)
+    if job.output_path.exists() and not job.config.overwrite_existing:
+        _validate_existing_job_result(job)
+        return _resumed_job_result(job)
+    return _run_retargeting_job_unlocked(job)
 
 
 def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
@@ -1450,18 +1286,8 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         run_kind=job.run_kind,
     )
     is_augmented = job.run_kind == "augmentation"
-    if is_augmented and not result_artifact_matches_job(
-        job.baseline_path,
-        job,
-        identity_baseline=True,
-    ):
-        raise ValueError(
-            "Augmentation requires an exact identity baseline for the same "
-            "source bytes and normalized identity configuration: "
-            f"{job.baseline_path}"
-        )
-    if is_augmented:
-        _revalidate_job_inputs(job)
+    if is_augmented and not saved_result_has_qpos(job.baseline_path):
+        raise ValueError(f"Augmentation requires an identity result containing qpos: {job.baseline_path}")
 
     cfg = job.config
     task_name = cfg.task_name
@@ -1473,7 +1299,6 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         task_name,
         human_height=cfg.motion_data_config.human_height,
     )
-    _verify_job_source(job)
     if motion.source_path.resolve() != job.source_path:
         raise ValueError(
             "Normalized job source does not match the motion adapter: "
@@ -1494,7 +1319,29 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
     )
     constants.SOURCE_FPS = motion.fps
     constants.SOURCE_ROOT_QUATERNIONS = motion.root_quaternions_wxyz
+    constants.SOURCE_ROOT_FRAME_TO_ROBOT_BASE_QUATERNION_WXYZ = (
+        motion.root_frame_to_robot_base_quaternion_wxyz
+    )
+    if (
+        motion.t_pose_orientation_joint_names is not None
+        and motion.t_pose_orientation_quaternions_wxyz is not None
+    ):
+        constants.ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ = dict(
+            zip(
+                motion.t_pose_orientation_joint_names,
+                (
+                    tuple(float(value) for value in quaternion)
+                    for quaternion in motion.t_pose_orientation_quaternions_wxyz
+                ),
+                strict=True,
+            )
+        )
     human_joints = motion.joints.copy()
+    visualization_human_joints = (
+        motion.source_skeleton_positions.copy()
+        if motion.source_skeleton_positions is not None
+        else None
+    )
     if data_format in {"lafan", "noetix_mocap"}:
         spine_joint_idx = constants.DEMO_JOINTS.index("Spine1")
         human_joints[:, spine_joint_idx, 2] -= 0.06
@@ -1528,6 +1375,14 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
             (human_joints.shape[0], 1),
         )
     smpl_scale = constants.ROBOT_HEIGHT / motion.human_height
+
+    if visualization_human_joints is not None:
+        toe_indices = [constants.DEMO_JOINTS.index(name) for name in cfg.motion_data_config.toe_names]
+        source_ground_height = float(human_joints[:, toe_indices, 2].min())
+        if source_ground_height >= 0.1:
+            source_ground_height -= 0.1
+        visualization_human_joints[..., 2] -= source_ground_height
+        visualization_human_joints *= smpl_scale
 
     job.output_path.parent.mkdir(parents=True, exist_ok=True)
     object_local_pts, object_local_pts_demo, object_urdf_path = setup_object_data(
@@ -1592,6 +1447,8 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         augmentation_rotation=job.variant.rotation,
         baseline_path=job.baseline_path,
     )
+    if retargeter.natural_pose_tracking_enabled:
+        q_init = retargeter.apply_natural_pose_to_initial_qpos(q_init)
     orientation_target_world_rotation_deltas_wxyz = _object_pose_rotation_deltas_wxyz(
         object_poses,
         object_poses_augmented,
@@ -1612,9 +1469,7 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         "dataset_partition": job.dataset_partition,
         "sequence_key": job.sequence_key,
         "source_path": str(job.source_path),
-        "source_sha256": job.source_sha256,
         "config_json": job.config_json,
-        "config_sha256": job.config_sha256,
         "orientation_source": orientation_source,
         "source_human_height": float(motion.human_height),
         "human_position_scale": float(smpl_scale),
@@ -1631,37 +1486,31 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         task_name,
         job.output_path,
     )
-    temporary_descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{job.output_path.name}.solve.",
-        suffix=".tmp.npz",
-        dir=job.output_path.parent,
+    retargeter.retarget_motion(
+        human_joint_motions=human_joints,
+        human_joint_quaternions_wxyz=human_joint_quaternions,
+        human_orientation_joint_names=human_orientation_joint_names,
+        visualization_human_joint_motions=visualization_human_joints,
+        visualization_human_joint_names=motion.source_skeleton_joint_names,
+        visualization_human_joint_parent_indices=(motion.source_skeleton_parent_indices),
+        visualization_human_joint_quaternions_wxyz=(motion.source_skeleton_quaternions_wxyz),
+        orientation_target_world_rotation_deltas_wxyz=(orientation_target_world_rotation_deltas_wxyz),
+        object_poses=object_poses,
+        object_poses_augmented=object_poses_augmented,
+        object_points_local_demo=object_local_pts_demo,
+        object_points_local=object_local_pts,
+        foot_sticking_sequences=foot_sticking_sequences,
+        q_a_init=q_init,
+        q_nominal_list=q_nominal,
+        original=not is_augmented,
+        dest_res_path=str(job.output_path),
+        fps=constants.SOURCE_FPS,
+        result_metadata=result_metadata,
     )
-    os.close(temporary_descriptor)
-    temporary_output_path = Path(temporary_name)
-    try:
-        retargeter.retarget_motion(
-            human_joint_motions=human_joints,
-            human_joint_quaternions_wxyz=human_joint_quaternions,
-            human_orientation_joint_names=human_orientation_joint_names,
-            orientation_target_world_rotation_deltas_wxyz=(orientation_target_world_rotation_deltas_wxyz),
-            object_poses=object_poses,
-            object_poses_augmented=object_poses_augmented,
-            object_points_local_demo=object_local_pts_demo,
-            object_points_local=object_local_pts,
-            foot_sticking_sequences=foot_sticking_sequences,
-            q_a_init=q_init,
-            q_nominal_list=q_nominal,
-            original=not is_augmented,
-            dest_res_path=str(temporary_output_path),
-            fps=constants.SOURCE_FPS,
-            result_metadata=result_metadata,
+    if cfg.retargeter.visualize and cfg.retargeter.debug:
+        input(
+            "Viser debug view is ready. Press Enter to close it and exit ...",
         )
-        _publish_solved_artifact(
-            job,
-            temporary_output_path,
-        )
-    finally:
-        temporary_output_path.unlink(missing_ok=True)
     return RetargetJobResult(
         output_path=job.output_path,
         source_path=job.source_path,
@@ -1674,7 +1523,6 @@ def main(cfg: RetargetingConfig) -> RetargetFamilyResult:
     """Run one action through the same identity-first canonical variant family."""
 
     results: list[RetargetJobResult] = []
-    source_sha256: str | None = None
     for variant in planned_variants(
         cfg.task_type,
         augmentation=cfg.augmentation,
@@ -1683,9 +1531,7 @@ def main(cfg: RetargetingConfig) -> RetargetFamilyResult:
             cfg,
             variant=variant,
             run_kind="single" if variant.is_identity else "augmentation",
-            source_sha256=source_sha256,
         )
-        source_sha256 = job.source_sha256
         result = run_retargeting_job(job)
         results.append(result)
     return RetargetFamilyResult(results=tuple(results))

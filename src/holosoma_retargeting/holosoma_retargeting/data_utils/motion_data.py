@@ -65,6 +65,17 @@ class HumanMotion:
     orientation_joint_names: tuple[str, ...] | None = None
     orientation_quaternions_wxyz: np.ndarray | None = None
     orientation_source: str | None = None
+    t_pose_orientation_joint_names: tuple[str, ...] | None = None
+    t_pose_orientation_quaternions_wxyz: np.ndarray | None = None
+    """Direct source bind-pose frames used only for per-link frame calibration."""
+    source_skeleton_joint_names: tuple[str, ...] | None = None
+    source_skeleton_parent_indices: tuple[int, ...] | None = None
+    source_skeleton_positions: np.ndarray | None = None
+    source_skeleton_quaternions_wxyz: np.ndarray | None = None
+    source_skeleton_bind_quaternions_wxyz: np.ndarray | None = None
+    """Complete source joint tree retained for visualization only."""
+    root_frame_to_robot_base_quaternion_wxyz: np.ndarray | None = None
+    """Explicit source-root-frame to robot-base-frame rotation, when declared by the source metadata."""
     joint_parent_indices: tuple[int, ...] = ()
     _canonical_joint_names: tuple[str, ...] = field(default=(), repr=False)
     _root_joint_name: str | None = field(default=None, repr=False)
@@ -222,6 +233,22 @@ MOTION_FORMATS: dict[str, MotionFormatSpec] = {
             coordinate_systems=frozenset({"z_up"}),
         ),
     ),
+    "fbx_mocap": MotionFormatSpec(
+        name="fbx_mocap",
+        suffixes=(".npz",),
+        task_types=frozenset({"robot_only"}),
+        root_joint="Hips",
+        orientation_mode="mocap",
+        default_fps=30.0,
+        default_human_height=1.78,
+        recursive_files=True,
+        excluded_filenames=frozenset({"scene_reconstruction.npz"}),
+        direct_orientation_npz=DirectOrientationNPZSpec(
+            source_formats=frozenset({"fbx_mocap"}),
+            coordinate_systems=frozenset({"z_up"}),
+            require_orientation_coordinate_system=True,
+        ),
+    ),
     "noetix_mocap": MotionFormatSpec(
         name="noetix_mocap",
         suffixes=(".npz",),
@@ -271,12 +298,14 @@ def _npz_matches_format(path: Path, spec: MotionFormatSpec) -> bool:
     """Disambiguate formats that intentionally share the NPZ suffix."""
     if path.suffix.lower() != ".npz":
         return True
-    if spec.name not in {"lafan", "mocap", "noetix_mocap"}:
+    if spec.name not in {"fbx_mocap", "lafan", "mocap", "noetix_mocap"}:
         return True
     with np.load(path, allow_pickle=False) as data:
         source_format = str(np.asarray(data["source_format"]).item()).lower() if "source_format" in data else None
         if spec.name == "lafan":
             return source_format == "lafan"
+        if spec.name == "fbx_mocap":
+            return source_format == "fbx_mocap"
         if spec.name == "mocap":
             if source_format is not None:
                 return source_format in {"mocap", "noetix_csv_mocap"}
@@ -303,13 +332,19 @@ def _is_motion_file(path: Path, spec: MotionFormatSpec) -> bool:
 def _is_path_candidate(path: Path, spec: MotionFormatSpec) -> bool:
     if not path.is_file() or path.name in spec.excluded_filenames:
         return False
-    if path.suffix.lower() != ".npz" or spec.name not in {"lafan", "mocap", "noetix_mocap"}:
+    if path.suffix.lower() != ".npz" or spec.name not in {
+        "fbx_mocap",
+        "lafan",
+        "mocap",
+        "noetix_mocap",
+    }:
         return True
     with np.load(path, allow_pickle=False) as data:
         if "source_format" not in data:
             return True
         source_format = str(np.asarray(data["source_format"]).item()).lower()
     expected = {
+        "fbx_mocap": {"fbx_mocap"},
         "lafan": {"lafan"},
         "mocap": {"mocap", "noetix_csv_mocap"},
         "noetix_mocap": {
@@ -409,6 +444,14 @@ def _validate_motion(
     orientation_joint_names: tuple[str, ...] | list[str] | np.ndarray | None = None,
     orientation_quaternions: np.ndarray | None = None,
     orientation_source: str | None = None,
+    t_pose_orientation_joint_names: tuple[str, ...] | list[str] | np.ndarray | None = None,
+    t_pose_orientation_quaternions: np.ndarray | None = None,
+    source_skeleton_joint_names: tuple[str, ...] | list[str] | np.ndarray | None = None,
+    source_skeleton_parent_indices: tuple[int, ...] | list[int] | np.ndarray | None = None,
+    source_skeleton_positions: np.ndarray | None = None,
+    source_skeleton_quaternions_wxyz: np.ndarray | None = None,
+    source_skeleton_bind_quaternions_wxyz: np.ndarray | None = None,
+    root_frame_to_robot_base_quaternion_wxyz: np.ndarray | None = None,
 ) -> HumanMotion:
     canonical_joint_names = tuple(DEMO_JOINTS_REGISTRY[spec.name])
     expected_joints = len(canonical_joint_names)
@@ -493,6 +536,138 @@ def _validate_motion(
                 f"{spec.name} direct orientation quaternions must already be unit length",
             )
 
+    validated_root_frame_offset = None
+    if root_frame_to_robot_base_quaternion_wxyz is not None:
+        validated_root_frame_offset = np.asarray(
+            root_frame_to_robot_base_quaternion_wxyz,
+            dtype=np.float64,
+        ).copy()
+        if validated_root_frame_offset.shape != (4,) or not np.isfinite(validated_root_frame_offset).all():
+            raise ValueError(f"{spec.name} root frame offset must be one finite WXYZ quaternion")
+        norm = np.linalg.norm(validated_root_frame_offset)
+        if norm <= 1e-8:
+            raise ValueError(f"{spec.name} root frame offset must be non-zero")
+        validated_root_frame_offset /= norm
+
+    t_pose_fields_present = (
+        t_pose_orientation_joint_names is not None,
+        t_pose_orientation_quaternions is not None,
+    )
+    if any(t_pose_fields_present) and not all(t_pose_fields_present):
+        raise ValueError(
+            f"{spec.name} bind-pose orientation names and quaternions must be present together",
+        )
+    validated_t_pose_names: tuple[str, ...] | None = None
+    validated_t_pose_quaternions: np.ndarray | None = None
+    if t_pose_orientation_joint_names is not None and t_pose_orientation_quaternions is not None:
+        names_array = np.asarray(t_pose_orientation_joint_names)
+        if names_array.ndim != 1:
+            raise ValueError(f"{spec.name} bind-pose orientation names must be one-dimensional")
+        validated_t_pose_names = tuple(str(name) for name in names_array.tolist())
+        if not validated_t_pose_names or len(set(validated_t_pose_names)) != len(validated_t_pose_names):
+            raise ValueError(f"{spec.name} bind-pose orientation names must be non-empty and unique")
+        unknown_t_pose_names = set(validated_t_pose_names).difference(canonical_joint_names)
+        if unknown_t_pose_names:
+            raise ValueError(
+                f"{spec.name} bind-pose orientation joints are not canonical: "
+                f"{sorted(unknown_t_pose_names)}",
+            )
+        validated_t_pose_quaternions = np.asarray(
+            t_pose_orientation_quaternions,
+            dtype=np.float32,
+        ).copy()
+        expected_t_pose_shape = (len(validated_t_pose_names), 4)
+        if validated_t_pose_quaternions.shape != expected_t_pose_shape:
+            raise ValueError(
+                f"{spec.name} bind-pose orientation quaternions must have shape "
+                f"{expected_t_pose_shape}, got {validated_t_pose_quaternions.shape}",
+            )
+        t_pose_norms = np.linalg.norm(validated_t_pose_quaternions.astype(np.float64), axis=-1)
+        if (
+            not np.isfinite(validated_t_pose_quaternions).all()
+            or np.any(t_pose_norms <= 1e-8)
+            or np.any(np.abs(t_pose_norms - 1.0) > 1e-3)
+        ):
+            raise ValueError(f"{spec.name} bind-pose orientation quaternions must be finite unit quaternions")
+
+    source_skeleton_fields_present = (
+        source_skeleton_joint_names is not None,
+        source_skeleton_parent_indices is not None,
+        source_skeleton_positions is not None,
+        source_skeleton_quaternions_wxyz is not None,
+        source_skeleton_bind_quaternions_wxyz is not None,
+    )
+    if any(source_skeleton_fields_present) and not all(source_skeleton_fields_present):
+        raise ValueError(f"{spec.name} complete source-skeleton fields must be present together")
+    validated_source_skeleton_names: tuple[str, ...] | None = None
+    validated_source_skeleton_parents: tuple[int, ...] | None = None
+    validated_source_skeleton_positions: np.ndarray | None = None
+    validated_source_skeleton_quaternions: np.ndarray | None = None
+    validated_source_skeleton_bind_quaternions: np.ndarray | None = None
+    if source_skeleton_joint_names is not None:
+        names_array = np.asarray(source_skeleton_joint_names)
+        if names_array.ndim != 1:
+            raise ValueError(f"{spec.name} complete source-skeleton names must be one-dimensional")
+        validated_source_skeleton_names = tuple(str(name) for name in names_array.tolist())
+        source_joint_count = len(validated_source_skeleton_names)
+        if source_joint_count == 0 or len(set(validated_source_skeleton_names)) != source_joint_count:
+            raise ValueError(f"{spec.name} complete source-skeleton names must be non-empty and unique")
+        parents = np.asarray(source_skeleton_parent_indices, dtype=np.int32)
+        if parents.shape != (source_joint_count,):
+            raise ValueError(
+                f"{spec.name} complete source-skeleton parents must have shape {(source_joint_count,)}, "
+                f"got {parents.shape}"
+            )
+        indices = np.arange(source_joint_count, dtype=np.int32)
+        if np.any((parents < -1) | (parents >= indices) | (parents == indices)) or np.count_nonzero(parents == -1) != 1:
+            raise ValueError(
+                f"{spec.name} complete source-skeleton parents must describe one parent-first rooted tree"
+            )
+        validated_source_skeleton_parents = tuple(int(parent) for parent in parents)
+        validated_source_skeleton_positions = np.asarray(source_skeleton_positions, dtype=np.float32).copy()
+        expected_source_positions_shape = (joints.shape[0], source_joint_count, 3)
+        if (
+            validated_source_skeleton_positions.shape != expected_source_positions_shape
+            or not np.isfinite(validated_source_skeleton_positions).all()
+        ):
+            raise ValueError(
+                f"{spec.name} complete source-skeleton positions must be finite with shape "
+                f"{expected_source_positions_shape}, got {validated_source_skeleton_positions.shape}"
+            )
+        validated_source_skeleton_quaternions = np.asarray(
+            source_skeleton_quaternions_wxyz,
+            dtype=np.float32,
+        ).copy()
+        expected_source_quaternion_shape = (joints.shape[0], source_joint_count, 4)
+        if validated_source_skeleton_quaternions.shape != expected_source_quaternion_shape:
+            raise ValueError(
+                f"{spec.name} complete source-skeleton quaternions must have shape "
+                f"{expected_source_quaternion_shape}, got {validated_source_skeleton_quaternions.shape}"
+            )
+        source_norms = np.linalg.norm(validated_source_skeleton_quaternions.astype(np.float64), axis=-1)
+        if (
+            not np.isfinite(validated_source_skeleton_quaternions).all()
+            or np.any(source_norms <= 1e-8)
+            or np.any(np.abs(source_norms - 1.0) > 1e-3)
+        ):
+            raise ValueError(f"{spec.name} complete source-skeleton quaternions must be finite unit quaternions")
+        validated_source_skeleton_bind_quaternions = np.asarray(
+            source_skeleton_bind_quaternions_wxyz,
+            dtype=np.float32,
+        ).copy()
+        if validated_source_skeleton_bind_quaternions.shape != (source_joint_count, 4):
+            raise ValueError(
+                f"{spec.name} complete source bind frames must have shape {(source_joint_count, 4)}, "
+                f"got {validated_source_skeleton_bind_quaternions.shape}"
+            )
+        bind_norms = np.linalg.norm(validated_source_skeleton_bind_quaternions.astype(np.float64), axis=-1)
+        if (
+            not np.isfinite(validated_source_skeleton_bind_quaternions).all()
+            or np.any(bind_norms <= 1e-8)
+            or np.any(np.abs(bind_norms - 1.0) > 1e-3)
+        ):
+            raise ValueError(f"{spec.name} complete source bind frames must be finite unit quaternions")
+
     return HumanMotion(
         joints=joints,
         fps=float(fps),
@@ -502,6 +677,14 @@ def _validate_motion(
         orientation_joint_names=validated_orientation_names,
         orientation_quaternions_wxyz=validated_orientation_quaternions,
         orientation_source=validated_orientation_source,
+        t_pose_orientation_joint_names=validated_t_pose_names,
+        t_pose_orientation_quaternions_wxyz=validated_t_pose_quaternions,
+        source_skeleton_joint_names=validated_source_skeleton_names,
+        source_skeleton_parent_indices=validated_source_skeleton_parents,
+        source_skeleton_positions=validated_source_skeleton_positions,
+        source_skeleton_quaternions_wxyz=validated_source_skeleton_quaternions,
+        source_skeleton_bind_quaternions_wxyz=validated_source_skeleton_bind_quaternions,
+        root_frame_to_robot_base_quaternion_wxyz=validated_root_frame_offset,
         joint_parent_indices=DEMO_JOINT_PARENT_INDICES[spec.name],
         _canonical_joint_names=canonical_joint_names,
         _root_joint_name=spec.root_joint,
@@ -698,12 +881,107 @@ def _load_mocap(path: Path, spec: MotionFormatSpec, human_height: float | None) 
     orientation_names = None
     orientations = None
     orientation_source = None
+    t_pose_orientation_names = None
+    t_pose_orientations = None
+    source_skeleton_names = None
+    source_skeleton_parents = None
+    source_skeleton_positions = None
+    source_skeleton_quaternions = None
+    source_skeleton_bind_quaternions = None
+    root_frame_offset = None
     if path.suffix.lower() == ".npz":
         with np.load(path, allow_pickle=False) as data:
             _validate_joint_names(data, spec)
             joints = np.asarray(data["global_joint_positions"])
             source_fps = _read_scalar(data, "fps")
             orientation_names, orientations, orientation_source = _read_orientations(data, spec)
+            if spec.name == "fbx_mocap":
+                if "t_pose_orientation_joint_names" not in data or "t_pose_orientation_quaternions_wxyz" not in data:
+                    raise KeyError("fbx_mocap is missing direct bind-pose orientation frames; reconvert the raw FBX")
+                t_pose_orientation_names = tuple(
+                    str(name) for name in np.asarray(data["t_pose_orientation_joint_names"]).tolist()
+                )
+                t_pose_orientations = np.asarray(
+                    data["t_pose_orientation_quaternions_wxyz"],
+                    dtype=np.float32,
+                )
+                complete_source_fields = (
+                    "source_skeleton_joint_names",
+                    "source_skeleton_parent_indices",
+                    "source_skeleton_positions",
+                    "source_skeleton_quaternions_wxyz",
+                    "source_skeleton_bind_quaternions_wxyz",
+                )
+                missing_source_fields = [field for field in complete_source_fields if field not in data]
+                if missing_source_fields:
+                    raise KeyError(
+                        "fbx_mocap is missing the complete source joint tree; "
+                        f"reconvert the raw FBX (missing {missing_source_fields})"
+                    )
+                source_skeleton_names = tuple(
+                    str(name) for name in np.asarray(data["source_skeleton_joint_names"]).tolist()
+                )
+                source_skeleton_parents = tuple(
+                    int(parent) for parent in np.asarray(data["source_skeleton_parent_indices"]).tolist()
+                )
+                source_skeleton_positions = np.asarray(data["source_skeleton_positions"], dtype=np.float32)
+                source_skeleton_quaternions = np.asarray(
+                    data["source_skeleton_quaternions_wxyz"],
+                    dtype=np.float32,
+                )
+                source_skeleton_bind_quaternions = np.asarray(
+                    data["source_skeleton_bind_quaternions_wxyz"],
+                    dtype=np.float32,
+                )
+                source_coordinates = _read_required_string(data, "source_coordinate_system", spec)
+                position_transform = _read_required_string(data, "position_coordinate_transform", spec)
+                orientation_transform = _read_required_string(data, "orientation_coordinate_transform", spec)
+                if source_coordinates != "fbx_global_settings_y_up_centimetres":
+                    raise ValueError(f"Unsupported FBX source coordinate system: {source_coordinates!r}")
+                expected_global_settings = {
+                    "source_fbx_up_axis": 1,
+                    "source_fbx_up_axis_sign": 1,
+                    "source_fbx_front_axis": 2,
+                    "source_fbx_front_axis_sign": 1,
+                    "source_fbx_coord_axis": 0,
+                    "source_fbx_coord_axis_sign": 1,
+                    "source_fbx_unit_scale_factor": 1.0,
+                }
+                for key, expected in expected_global_settings.items():
+                    if key not in data:
+                        raise KeyError(f"fbx_mocap is missing raw FBX GlobalSettings field {key!r}")
+                    actual = float(np.asarray(data[key]).item())
+                    if actual != expected:
+                        raise ValueError(f"Unsupported raw FBX GlobalSettings field {key!r}: {actual}")
+                anatomical_left_axis = _read_required_string(data, "source_anatomical_left_axis", spec)
+                if anatomical_left_axis != "positive_x_from_named_bind_joints":
+                    raise ValueError(f"Unsupported FBX anatomical left axis: {anatomical_left_axis!r}")
+                anatomical_forward_axis = _read_required_string(data, "source_anatomical_forward_axis", spec)
+                if anatomical_forward_axis != "positive_z_from_named_bind_toes":
+                    raise ValueError(f"Unsupported FBX anatomical forward axis: {anatomical_forward_axis!r}")
+                expected_position_transform = "metres_x_negative_z_y_and_initial_hips_xy_recenter"
+                if position_transform != expected_position_transform:
+                    raise ValueError(
+                        "FBX motion was converted with a mirrored or unsupported coordinate transform; "
+                        f"expected {expected_position_transform!r}, got {position_transform!r}. "
+                        "Reconvert it from the original FBX file.",
+                    )
+                expected_orientation_transform = "basis_conjugation_rx_plus_90_right_handed"
+                if orientation_transform != expected_orientation_transform:
+                    raise ValueError(
+                        "FBX motion was converted with a mirrored or unsupported orientation transform; "
+                        f"expected {expected_orientation_transform!r}, got {orientation_transform!r}. "
+                        "Reconvert it from the original FBX file.",
+                    )
+                if "root_frame_to_robot_base_quaternion_wxyz" not in data:
+                    raise KeyError(
+                        "fbx_mocap is missing root_frame_to_robot_base_quaternion_wxyz; "
+                        "reconvert it from the original FBX file",
+                    )
+                root_frame_offset = np.asarray(
+                    data["root_frame_to_robot_base_quaternion_wxyz"],
+                    dtype=np.float64,
+                )
             height = (
                 human_height
                 if human_height is not None
@@ -717,6 +995,10 @@ def _load_mocap(path: Path, spec: MotionFormatSpec, human_height: float | None) 
     joints = joints[::stride]
     if orientations is not None:
         orientations = orientations[::stride]
+    if source_skeleton_positions is not None:
+        source_skeleton_positions = source_skeleton_positions[::stride]
+    if source_skeleton_quaternions is not None:
+        source_skeleton_quaternions = source_skeleton_quaternions[::stride]
     return _validate_motion(
         joints=joints,
         spec=spec,
@@ -726,6 +1008,14 @@ def _load_mocap(path: Path, spec: MotionFormatSpec, human_height: float | None) 
         orientation_joint_names=orientation_names,
         orientation_quaternions=orientations,
         orientation_source=orientation_source,
+        t_pose_orientation_joint_names=t_pose_orientation_names,
+        t_pose_orientation_quaternions=t_pose_orientations,
+        source_skeleton_joint_names=source_skeleton_names,
+        source_skeleton_parent_indices=source_skeleton_parents,
+        source_skeleton_positions=source_skeleton_positions,
+        source_skeleton_quaternions_wxyz=source_skeleton_quaternions,
+        source_skeleton_bind_quaternions_wxyz=source_skeleton_bind_quaternions,
+        root_frame_to_robot_base_quaternion_wxyz=root_frame_offset,
     )
 
 
@@ -793,6 +1083,7 @@ def _load_omomo(path: Path, spec: MotionFormatSpec, human_height: float | None) 
 MotionLoader = Callable[[Path, MotionFormatSpec, float | None], HumanMotion]
 _LOADERS: dict[str, MotionLoader] = {
     "amass": _load_amass,
+    "fbx_mocap": _load_mocap,
     "gvhmr": _load_gvhmr,
     "lafan": _load_lafan,
     "mocap": _load_mocap,

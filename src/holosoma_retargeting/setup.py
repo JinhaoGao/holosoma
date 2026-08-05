@@ -7,6 +7,12 @@ setup(
     description="holosoma-retargeting: retargeting components for converting human motions to robot motions",
     author="Amazon FAR Team",
     packages=find_packages(),
+    package_data={
+        "holosoma_retargeting": [
+            "examples/orientation_weights/*.json",
+            "examples/nature_weights/*.json",
+        ],
+    },
     python_requires=">=3.11",
     install_requires=[
         # Needs to ping numpy to 2.3.5;
@@ -22,11 +28,13 @@ setup(
         "smplx",
         "jinja2",
         "mujoco",
-        "viser>=0.1.32",
+        "plotly",
+        "viser>=0.2.0",
         "robot_descriptions",
         "yourdfpy",
         "cvxpy",
         "libigl",
         "tyro",
     ],
+    extras_require={"fbx": ["cmeel-assimp==5.4.3.1"]},
 )

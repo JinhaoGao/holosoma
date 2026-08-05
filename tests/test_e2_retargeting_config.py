@@ -16,6 +16,7 @@ from holosoma_retargeting.retargeting_pipeline import normalize_retargeting_conf
 
 class E2RetargetingConfigTest(unittest.TestCase):
     DATA_FORMATS = (
+        "fbx_mocap",
         "gvhmr",
         "lafan",
         "mocap",
@@ -54,6 +55,19 @@ class E2RetargetingConfigTest(unittest.TestCase):
                 self.assertEqual(len(set(mapping.values())), len(mapping))
                 self.assertEqual(len(motion.toe_names), 2)
 
+                shoulder_names = (
+                    ("L_Shoulder", "R_Shoulder") if data_format in {"gvhmr", "omomo"} else ("LeftArm", "RightArm")
+                )
+                for side, shoulder_name in zip(("l", "r"), shoulder_names):
+                    self.assertEqual(
+                        mapping[shoulder_name],
+                        f"{side}_arm_shoulder_roll_link",
+                    )
+                    self.assertEqual(
+                        motion.resolved_orientation_joints_mapping[shoulder_name],
+                        f"{side}_arm_shoulder_yaw_link",
+                    )
+
     def test_human_format_aliases_resolve_to_the_same_e2_mappings(self) -> None:
         for alias, canonical in self.DATA_FORMAT_ALIASES.items():
             with self.subTest(alias=alias):
@@ -68,6 +82,22 @@ class E2RetargetingConfigTest(unittest.TestCase):
                     canonical_config.resolved_joints_mapping,
                 )
 
+    def test_gvhmr_and_amass_e2_hips_use_canonical_roll_links(self) -> None:
+        gvhmr_mapping = MotionDataConfig(
+            data_format="gvhmr",
+            robot_type="e2",
+        ).resolved_joints_mapping
+        amass_mapping = MotionDataConfig(
+            data_format="amass",
+            robot_type="e2",
+        ).resolved_joints_mapping
+
+        self.assertEqual(gvhmr_mapping["L_Hip"], "l_leg_hip_roll_link")
+        self.assertEqual(gvhmr_mapping["R_Hip"], "r_leg_hip_roll_link")
+        self.assertEqual(amass_mapping["L_Hip"], "l_leg_hip_roll_link")
+        self.assertEqual(amass_mapping["R_Hip"], "r_leg_hip_roll_link")
+        self.assertIsNot(gvhmr_mapping, amass_mapping)
+
     def test_top_level_e2_selection_normalizes_nested_configs_for_every_format(self) -> None:
         for data_format in self.DATA_FORMATS:
             with self.subTest(data_format=data_format):
@@ -81,7 +111,7 @@ class E2RetargetingConfigTest(unittest.TestCase):
                     ),
                 )
                 self.assertEqual(config.robot_config.robot_type, "e2")
-                self.assertEqual(config.robot_config.ROBOT_HEIGHT, 1.55)
+                self.assertEqual(config.robot_config.ROBOT_HEIGHT, 1.6)
                 self.assertEqual(config.motion_data_config.robot_type, "e2")
                 self.assertEqual(
                     config.motion_data_config.data_format,
@@ -100,7 +130,7 @@ class E2RetargetingConfigTest(unittest.TestCase):
         )
 
         self.assertEqual(robot.ROBOT_DOF, 23)
-        self.assertEqual(robot.ROBOT_HEIGHT, 1.55)
+        self.assertEqual(robot.ROBOT_HEIGHT, 1.6)
         self.assertEqual(robot.ROBOT_URDF_FILE, "models/e2/e2_23dof.urdf")
         self.assertEqual(len(robot.FOOT_STICKING_LINKS), 10)
         self.assertEqual(robot.NOMINAL_TRACKING_INDICES.tolist(), list(range(22)))

@@ -177,8 +177,10 @@ def infer_data_format(source_path: Path) -> str:
 
     with np.load(source_path, allow_pickle=False) as data:
         fields = set(data.files)
-        if "source_format" in fields and str(np.asarray(data["source_format"]).item()).lower() == "gvhmr":
-            return "gvhmr"
+        if "source_format" in fields:
+            source_format = str(np.asarray(data["source_format"]).item()).lower()
+            if source_format in {"fbx_mocap", "gvhmr"}:
+                return source_format
         if {"raw_joint_names", "source_bvh"}.intersection(fields):
             return "noetix_mocap"
         if "joint_names" in fields:

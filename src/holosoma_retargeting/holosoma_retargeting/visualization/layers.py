@@ -108,7 +108,7 @@ LAYER_SPECS: tuple[LayerSpec, ...] = (
         LayerId.SOURCE_ORIENTATION,
         "Diagnostics",
         "Source orientation axes",
-        "Global source-human joint coordinate frames.",
+        "Global source-human joint frames; scope can be switched between retargeting joints and the full FBX tree.",
         "r",
     ),
     LayerSpec(
@@ -122,7 +122,7 @@ LAYER_SPECS: tuple[LayerSpec, ...] = (
         LayerId.ROBOT_ORIENTATION,
         "Diagnostics",
         "Robot orientation axes",
-        "Actual robot link frames saved by orientation tracking.",
+        "Actual robot link frames; scope can be switched between retargeting links and the complete MuJoCo tree.",
         "a",
     ),
     LayerSpec(

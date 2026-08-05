@@ -133,6 +133,9 @@ class ViserConfig:
     orientation_joints: tuple[str, ...] = ()
     """Human joint names whose target and robot orientation frames are shown."""
 
+    orientation_scope: Literal["retargeting", "all"] = "retargeting"
+    """Show only retargeting-related frames or every saved human/robot link frame."""
+
     orientation_axis_length: float = 0.065
     """Length of each orientation axis in scene units."""
 

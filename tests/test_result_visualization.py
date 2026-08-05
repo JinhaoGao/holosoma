@@ -33,12 +33,68 @@ from holosoma_retargeting.visualization.layers import (
     LayerController,
     LayerId,
 )
+from holosoma_retargeting.visualization.joint_angles import (
+    build_joint_angle_diagnostics,
+    make_joint_angle_figure,
+)
 from holosoma_retargeting.visualization.orientation import (
     load_orientation_diagnostics,
+    load_orientation_preview,
 )
 
 
 class ResultVisualizationTests(unittest.TestCase):
+    def test_joint_angle_plot_aligns_saved_qpos_with_urdf_joint_order(self):
+        qpos = np.zeros((3, 9), dtype=np.float64)
+        qpos[:, 7] = (10.0, 20.0, 30.0)
+        qpos[:, 8] = (1.0, 2.0, 3.0)
+
+        diagnostics = build_joint_angle_diagnostics(
+            qpos,
+            {
+                "joint_a": (-1.0, 1.0),
+                "joint_b": (-2.0, 2.0),
+            },
+            np.asarray([1, 0]),
+        )
+        figure = make_joint_angle_figure(diagnostics, "joint_a", current_frame=2)
+
+        self.assertEqual(diagnostics.joint_names, ("joint_a", "joint_b"))
+        np.testing.assert_array_equal(diagnostics.angles[:, 0], (1.0, 2.0, 3.0))
+        np.testing.assert_array_equal(diagnostics.angles[:, 1], (10.0, 20.0, 30.0))
+        self.assertEqual(
+            tuple(trace.name for trace in figure.data),
+            (
+                "Joint angle",
+                "Lower limit (-1.000 rad)",
+                "Upper limit (1.000 rad)",
+                "Current frame",
+                "Current value",
+            ),
+        )
+        np.testing.assert_array_equal(figure.data[0].y, (1.0, 2.0, 3.0))
+        np.testing.assert_array_equal(figure.data[1].y, (-1.0, -1.0, -1.0))
+        np.testing.assert_array_equal(figure.data[2].y, (1.0, 1.0, 1.0))
+        np.testing.assert_array_equal(figure.data[3].x, (2, 2))
+        np.testing.assert_array_equal(figure.data[4].x, (2,))
+        np.testing.assert_array_equal(figure.data[4].y, (3.0,))
+        self.assertEqual(figure.data[4].text, ("F2: 3.000 rad",))
+        self.assertEqual(figure.layout.xaxis.title.text, "Frame")
+        self.assertEqual(figure.layout.yaxis.title.text, "Angle (rad)")
+        self.assertEqual(figure.layout.font.color, "#1f2937")
+        self.assertEqual(figure.layout.height, 220)
+
+    def test_joint_angle_diagnostics_rejects_qpos_without_all_robot_joints(self):
+        with self.assertRaisesRegex(ValueError, "required"):
+            build_joint_angle_diagnostics(
+                np.zeros((2, 8), dtype=np.float64),
+                {
+                    "joint_a": (-1.0, 1.0),
+                    "joint_b": (-2.0, 2.0),
+                },
+                None,
+            )
+
     def test_canonical_layer_ids_and_labels_are_unique(self):
         self.assertEqual(
             len({spec.layer_id for spec in LAYER_SPECS}),
@@ -106,6 +162,26 @@ class ResultVisualizationTests(unittest.TestCase):
         ):
             single_viewer_main(ViserConfig())
 
+    def test_visualization_loader_ignores_schema_and_unrecognized_fields(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "result.npz"
+            np.savez(
+                path,
+                qpos=np.zeros((2, 8), dtype=np.float64),
+                fps=np.float64(30.0),
+                schema_version=np.int32(999),
+                ground_non_penetration_violation=np.zeros(2, dtype=np.float64),
+                arbitrary_future_field=np.asarray("ignored"),
+            )
+
+            qpos, fps, human_joints, metadata, interaction_mesh = load_npz(str(path))
+
+        self.assertEqual(qpos.shape, (2, 8))
+        self.assertEqual(fps, 30.0)
+        self.assertIsNone(human_joints)
+        self.assertNotIn("schema_version", metadata)
+        self.assertIsNone(interaction_mesh)
+
     def test_empty_saved_orientation_arrays_are_an_unavailable_layer(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "empty_orientation.npz"
@@ -122,6 +198,29 @@ class ResultVisualizationTests(unittest.TestCase):
             diagnostics = load_orientation_diagnostics(path, expected_frames=2)
 
         self.assertIsNone(diagnostics)
+
+    def test_orientation_preview_loads_without_error_or_weight_arrays(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "orientation_preview.npz"
+            identity = np.zeros((2, 1, 4), dtype=np.float32)
+            identity[..., 0] = 1.0
+            np.savez(
+                path,
+                orientation_preview_enabled=np.asarray(True),
+                orientation_preview_human_joint_names=np.asarray(["LeftArm"]),
+                orientation_preview_robot_link_names=np.asarray(["left_shoulder_link"]),
+                orientation_preview_alignment_mode=np.asarray("t_pose"),
+                orientation_preview_alignment_quaternions_wxyz=identity[0],
+                orientation_preview_target_quaternions_wxyz=identity,
+            )
+
+            preview = load_orientation_preview(path, expected_frames=2)
+
+        self.assertIsNotNone(preview)
+        assert preview is not None
+        self.assertEqual(preview.human_joint_names, ("LeftArm",))
+        self.assertEqual(preview.robot_link_names, ("left_shoulder_link",))
+        self.assertEqual(preview.alignment_mode, "t_pose")
 
     def test_only_two_public_visualization_scripts_remain(self):
         package = PACKAGE_ROOT / "holosoma_retargeting"
@@ -165,8 +264,6 @@ class ResultVisualizationTests(unittest.TestCase):
                     dtype=bool,
                 ),
                 foot_sticking_enabled_for_saved_trajectory=np.asarray(True),
-                foot_sticking_fallback_frames=np.asarray([1], dtype=np.int32),
-                foot_sticking_release_frames=np.empty(0, dtype=np.int32),
                 object_points_demo_local=np.zeros((4, 3), dtype=np.float32),
                 object_points_target_local=np.ones((4, 3), dtype=np.float32),
                 object_points_demo_world=np.zeros((2, 4, 3), dtype=np.float32),
@@ -198,13 +295,61 @@ class ResultVisualizationTests(unittest.TestCase):
         )
         self.assertEqual(
             _saved_foot_sticking_constraint_status(metadata["foot_sticking"], 1),
-            "active with relaxed tolerance",
+            "active",
         )
         self.assertEqual(metadata["object_keypoints"]["demo_local"].shape, (4, 3))
         self.assertEqual(metadata["object_keypoints"]["target_local"].shape, (4, 3))
         self.assertEqual(metadata["object_keypoints"]["demo_world"].shape, (2, 4, 3))
         self.assertEqual(metadata["object_keypoints"]["target_world"].shape, (2, 4, 3))
         self.assertEqual(interaction_mesh["source_vertices"].shape, (2, 3, 3))
+
+    def test_rich_loose_result_keeps_independent_position_and_orientation_points(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result_path = Path(tmpdir) / "e1_result.npz"
+            identity = np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+            np.savez_compressed(
+                result_path,
+                qpos=np.zeros((2, 30), dtype=np.float64),
+                fps=np.float64(30.0),
+                human_joints=np.zeros((2, 2, 3), dtype=np.float32),
+                human_joint_names=np.asarray(["Hips", "Spine1"]),
+                human_joint_parent_indices=np.asarray([-1, 0], dtype=np.int32),
+                mapped_human_joint_names=np.asarray(["Spine1"]),
+                mapped_robot_joints=np.zeros((2, 1, 3), dtype=np.float32),
+                mapped_robot_link_names=np.asarray(["base_link"]),
+                human_points_world=np.zeros((2, 1, 3), dtype=np.float32),
+                robot_points_world=np.ones((2, 1, 3), dtype=np.float32),
+                terrain_points_world=np.zeros((2, 4, 3), dtype=np.float32),
+                human_orientation_joint_names=np.asarray(["Hips"]),
+                human_orientation_quaternions_wxyz=np.tile(identity, (2, 1, 1)),
+                robot_link_positions=np.zeros((2, 1, 3), dtype=np.float32),
+                robot_link_quaternions_wxyz=np.tile(identity, (2, 1, 1)),
+                robot_link_names=np.asarray(["base_link"]),
+                robot_link_parent_indices=np.asarray([-1], dtype=np.int32),
+                orientation_human_joint_names=np.asarray(["Hips"]),
+                orientation_robot_link_names=np.asarray(["base_link"]),
+                orientation_weights=np.asarray([0.85], dtype=np.float64),
+                orientation_target_quaternions_wxyz=np.tile(identity, (2, 1, 1)),
+                orientation_robot_quaternions_wxyz=np.tile(identity, (2, 1, 1)),
+                orientation_errors_rad=np.zeros((2, 1), dtype=np.float32),
+                interaction_source_vertices_w=np.zeros((2, 5, 3), dtype=np.float32),
+                interaction_target_vertices_w=np.ones((2, 5, 3), dtype=np.float32),
+                interaction_tetrahedra=np.zeros((2, 1, 4), dtype=np.int32),
+                interaction_tetrahedra_counts=np.ones(2, dtype=np.int32),
+                interaction_num_human_vertices=np.int32(1),
+                interaction_num_object_vertices=np.int32(4),
+            )
+
+            _, _, _, metadata, interaction_mesh = load_npz(str(result_path))
+
+        self.assertEqual(metadata["mapped_human_joint_names"], ["Spine1"])
+        self.assertEqual(metadata["human_orientation_joint_names"], ["Hips"])
+        self.assertEqual(metadata["human_points_world"].shape, (2, 1, 3))
+        self.assertEqual(metadata["robot_points_world"].shape, (2, 1, 3))
+        self.assertEqual(metadata["terrain_points_world"].shape, (2, 4, 3))
+        self.assertEqual(metadata["robot_link_quaternions_wxyz"].shape, (2, 1, 4))
+        self.assertEqual(metadata["orientation_diagnostics"].human_joint_names, ("Hips",))
+        self.assertEqual(interaction_mesh["target_vertices"].shape, (2, 5, 3))
 
     def test_foot_sticking_status_uses_green_and_red_lights(self):
         status = format_foot_sticking_status(

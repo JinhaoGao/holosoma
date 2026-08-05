@@ -8,7 +8,6 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest import mock
 
-import cvxpy as cp
 import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -29,12 +28,7 @@ from holosoma_retargeting.examples.robot_retarget import (  # noqa: E402
     build_retargeter_kwargs_from_config,
     create_task_constants,
 )
-from holosoma_retargeting.src.interaction_mesh_retargeter import (  # noqa: E402
-    ConstraintMode,
-    InteractionMeshRetargeter,
-    NonlinearConstraintResiduals,
-    SQPIterationResult,
-)
+from holosoma_retargeting.src.interaction_mesh_retargeter import InteractionMeshRetargeter  # noqa: E402
 
 
 def _build_e1_retargeter(
@@ -44,6 +38,7 @@ def _build_e1_retargeter(
     orientation_alignment_mode: str = "t_pose",
     activate_foot_sticking: bool = False,
     foot_lock: FootLockConfig | None = None,
+    orientation_preview: bool = False,
 ) -> InteractionMeshRetargeter:
     robot_urdf = PACKAGE_ROOT / "holosoma_retargeting" / "models" / "e1" / "e1_23dof.urdf"
     constants = create_task_constants(
@@ -60,6 +55,7 @@ def _build_e1_retargeter(
         activate_foot_sticking=activate_foot_sticking,
         foot_lock=foot_lock or FootLockConfig(),
         orientation_weights=orientation_weights,
+        orientation_preview=orientation_preview,
         orientation_alignment_mode=orientation_alignment_mode,
     )
     return InteractionMeshRetargeter(
@@ -561,29 +557,34 @@ class OrientationObjectiveTests(unittest.TestCase):
         self.assertTrue(np.all(retargeter.track_nominal_indices < len(retargeter.q_a_indices)))
 
     def test_reduced_manipulator_jacobians_support_active_qpos_suffixes(self):
-        residuals = NonlinearConstraintResiduals(
-            ground_non_penetration=0.0,
-            object_non_penetration=0.0,
-            foot_sticking=0.0,
-            foot_lock=0.0,
-            self_collision=0.0,
-            joint_limits=0.0,
-        )
         for q_a_init_idx in (0, 12):
             foot_constraints_active = q_a_init_idx == 0
             retargeter = _build_e1_retargeter(
                 {},
                 q_a_init_idx=q_a_init_idx,
                 activate_foot_sticking=foot_constraints_active,
-                foot_lock=FootLockConfig(
-                    enable=foot_constraints_active,
+                foot_lock=FootLockConfig(enable=False),
+            )
+            q = retargeter.robot_model.qpos0.copy()
+            if foot_constraints_active:
+                _, foot_positions, _ = retargeter._calc_manipulator_jacobians(
+                    q,
+                    links=retargeter.foot_links,
+                    obj_frame=False,
+                )
+                floor_z = float(np.mean([position[2] for position in foot_positions.values()]))
+                retargeter.foot_lock = FootLockConfig(
+                    enable=True,
                     windows={
                         "left": [(0, 0)],
                         "right": [(0, 0)],
                     },
-                ),
-            )
-            q = retargeter.robot_model.qpos0.copy()
+                    z_floor=floor_z,
+                )
+                retargeter._foot_lock_windows = {
+                    "left": ((0, 0),),
+                    "right": ((0, 0),),
+                }
             jacobians, _, _ = retargeter._calc_manipulator_jacobians(
                 q,
                 links=retargeter.laplacian_match_links,
@@ -610,14 +611,7 @@ class OrientationObjectiveTests(unittest.TestCase):
                             return_value=({}, {}),
                         ),
                     )
-                    stack.enter_context(
-                        mock.patch.object(
-                            retargeter,
-                            "_evaluate_nonlinear_constraint_residuals",
-                            return_value=residuals,
-                        ),
-                    )
-                    result = retargeter.solve_single_iteration(
+                    result_q, _ = retargeter.solve_single_iteration(
                         q_locked=q,
                         q_a_n_last=q[retargeter.q_a_indices],
                         q_t_last=q,
@@ -631,13 +625,11 @@ class OrientationObjectiveTests(unittest.TestCase):
                             "left": foot_constraints_active,
                             "right": foot_constraints_active,
                         },
+                        init_t=True,
                         frame_idx=0,
-                        requested_mode=ConstraintMode(
-                            "normal" if foot_constraints_active else "inactive",
-                        ),
                     )
 
-                self.assertEqual(result.q.shape, q.shape)
+                self.assertEqual(result_q.shape, q.shape)
 
     def test_default_manipulator_jacobian_contract_is_unchanged(self):
         retargeter = _build_e1_retargeter(
@@ -795,6 +787,26 @@ class OrientationObjectiveTests(unittest.TestCase):
         self.assertEqual(targets.shape, (3, 1, 3, 3))
         self.assertEqual(alignments.shape, (1, 3, 3))
 
+    def test_preview_calibrates_all_links_without_tracking_or_error_diagnostics(self):
+        retargeter = _build_e1_retargeter({}, orientation_preview=True)
+        quaternions = np.zeros(
+            (2, len(retargeter.demo_joints), 4),
+            dtype=np.float64,
+        )
+        quaternions[..., 0] = 1.0
+
+        targets, alignments = retargeter._prepare_orientation_targets(
+            quaternions,
+            retargeter.robot_model.qpos0.copy(),
+            num_frames=2,
+        )
+
+        self.assertTrue(retargeter.orientation_preview_enabled)
+        self.assertFalse(retargeter.orientation_tracking_enabled)
+        self.assertFalse(retargeter.orientation_diagnostics_enabled)
+        self.assertEqual(targets.shape, (2, 15, 3, 3))
+        self.assertEqual(alignments.shape, (15, 3, 3))
+
     def test_invalid_orientation_weights_fail_fast(self):
         for weights, message in (
             ({"Unknown": 1.0}, "outside the orientation mapping"),
@@ -815,209 +827,3 @@ class OrientationObjectiveTests(unittest.TestCase):
                 np.array([7, 8]),
                 "geom.bodyid",
             )
-
-    @staticmethod
-    def _candidate(
-        q: np.ndarray,
-        *,
-        cost: float,
-        ground_violation: float,
-        mode: ConstraintMode | None = None,
-    ) -> SQPIterationResult:
-        return SQPIterationResult(
-            q=q,
-            linearized_cost=cost,
-            constraint_mode=mode or ConstraintMode("inactive"),
-            residuals=NonlinearConstraintResiduals(
-                ground_non_penetration=ground_violation,
-                object_non_penetration=0.0,
-                foot_sticking=0.0,
-                foot_lock=0.0,
-                self_collision=0.0,
-                joint_limits=0.0,
-            ),
-        )
-
-    def test_lower_local_cost_with_seven_mm_penetration_cannot_beat_feasible_candidate(
-        self,
-    ):
-        q = self.retargeter.robot_model.qpos0.copy()
-        feasible = self._candidate(
-            q,
-            cost=10.0,
-            ground_violation=0.0,
-        )
-        penetrating = self._candidate(
-            q + 1e-4,
-            cost=0.0,
-            ground_violation=0.007,
-        )
-
-        selected = self.retargeter._select_feasible_candidate(
-            [feasible, penetrating],
-        )
-
-        self.assertIs(selected, feasible)
-
-    def test_feasible_candidate_selection_prefers_stricter_constraint_mode(
-        self,
-    ):
-        q = self.retargeter.robot_model.qpos0.copy()
-        strict = self._candidate(
-            q,
-            cost=10.0,
-            ground_violation=0.0,
-            mode=ConstraintMode("normal"),
-        )
-        released = self._candidate(
-            q,
-            cost=0.0,
-            ground_violation=0.0,
-            mode=ConstraintMode(
-                "released",
-                object_non_penetration_released=True,
-                trust_region_released=True,
-            ),
-        )
-
-        selected = self.retargeter._select_feasible_candidate(
-            [strict, released],
-        )
-
-        self.assertIs(selected, strict)
-
-    def test_released_foot_mode_still_measures_diagnostic_violation(self):
-        retargeter = _build_e1_retargeter(
-            {},
-            q_a_init_idx=-7,
-        )
-        retargeter.activate_foot_sticking = True
-        previous = retargeter.robot_model.qpos0.copy()
-        candidate = previous.copy()
-        candidate[0] += 0.05
-
-        residuals = retargeter._evaluate_nonlinear_constraint_residuals(
-            candidate,
-            q_t_last=previous,
-            foot_sticking={"left": True, "right": False},
-            frame_idx=0,
-            mode=ConstraintMode("released"),
-        )
-
-        self.assertAlmostEqual(
-            residuals.foot_sticking,
-            0.05 - retargeter.foot_sticking_fallback_tolerance,
-            places=6,
-        )
-        self.assertAlmostEqual(
-            residuals.hard_max_violation(ConstraintMode("released")),
-            max(
-                residuals.ground_non_penetration,
-                residuals.object_non_penetration,
-                residuals.foot_lock,
-                residuals.self_collision,
-                residuals.joint_limits,
-            ),
-        )
-
-    def test_iterate_fails_explicitly_when_no_nonlinear_feasible_candidate_exists(
-        self,
-    ):
-        q = self.retargeter.robot_model.qpos0.copy()
-        penetrating = self._candidate(
-            q,
-            cost=0.0,
-            ground_violation=0.007,
-        )
-        with mock.patch.object(
-            self.retargeter,
-            "solve_single_iteration",
-            return_value=penetrating,
-        ), self.assertRaisesRegex(
-            RuntimeError,
-            "no true-geometry feasible candidate",
-        ):
-            self.retargeter.iterate(
-                q_locked=q,
-                q_n=q.copy(),
-                q_t_last=q,
-                target_laplacian=np.empty((0, 3)),
-                adj_list=[],
-                obj_pts_local=np.empty((0, 3)),
-                foot_sticking={"left": False, "right": False},
-                n_iter=2,
-            )
-
-    def test_fallback_solver_returns_explicit_constraint_mode(self):
-        variable = cp.Variable(name="fallback_test")
-        objective = cp.Minimize(cp.square(variable))
-        normal = [variable >= 1.0, variable <= -1.0]
-        relaxed = [variable == 0.0]
-
-        normal_problem, normal_mode = self.retargeter._solve_with_foot_sticking_fallback(
-            objective=objective,
-            base_constraints=[],
-            object_non_penetration_constraints=[],
-            foot_sticking_constraints=[variable == 0.0],
-            foot_sticking_fallback_constraints=[],
-            solver_kwargs={"verbose": False},
-            remove_soc_on_failure=False,
-            release_on_failure=True,
-            release_object_non_penetration_on_failure=False,
-        )
-        self.assertIn(
-            normal_problem.status,
-            (cp.OPTIMAL, cp.OPTIMAL_INACCURATE),
-        )
-        self.assertEqual(normal_mode.foot_sticking, "normal")
-
-        problem, mode = self.retargeter._solve_with_foot_sticking_fallback(
-            objective=objective,
-            base_constraints=[],
-            object_non_penetration_constraints=[],
-            foot_sticking_constraints=normal,
-            foot_sticking_fallback_constraints=relaxed,
-            solver_kwargs={"verbose": False},
-            remove_soc_on_failure=False,
-            release_on_failure=True,
-            release_object_non_penetration_on_failure=False,
-        )
-
-        self.assertIn(problem.status, (cp.OPTIMAL, cp.OPTIMAL_INACCURATE))
-        self.assertEqual(mode.foot_sticking, "relaxed")
-        self.assertFalse(mode.object_non_penetration_released)
-
-        released_problem, released_mode = self.retargeter._solve_with_foot_sticking_fallback(
-            objective=objective,
-            base_constraints=[],
-            object_non_penetration_constraints=[],
-            foot_sticking_constraints=normal,
-            foot_sticking_fallback_constraints=[],
-            solver_kwargs={"verbose": False},
-            remove_soc_on_failure=False,
-            release_on_failure=True,
-            release_object_non_penetration_on_failure=False,
-        )
-        self.assertIn(
-            released_problem.status,
-            (cp.OPTIMAL, cp.OPTIMAL_INACCURATE),
-        )
-        self.assertEqual(released_mode.foot_sticking, "released")
-
-        object_problem, object_mode = self.retargeter._solve_with_foot_sticking_fallback(
-            objective=objective,
-            base_constraints=[variable >= 0.0],
-            object_non_penetration_constraints=[variable <= -1.0],
-            foot_sticking_constraints=[],
-            foot_sticking_fallback_constraints=[],
-            solver_kwargs={"verbose": False},
-            remove_soc_on_failure=False,
-            release_on_failure=False,
-            release_object_non_penetration_on_failure=True,
-        )
-        self.assertIn(
-            object_problem.status,
-            (cp.OPTIMAL, cp.OPTIMAL_INACCURATE),
-        )
-        self.assertEqual(object_mode.foot_sticking, "inactive")
-        self.assertTrue(object_mode.object_non_penetration_released)

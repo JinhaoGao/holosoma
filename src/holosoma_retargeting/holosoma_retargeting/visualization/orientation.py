@@ -21,6 +21,17 @@ class OrientationDiagnostics:
     errors_rad: np.ndarray
 
 
+@dataclass(frozen=True)
+class OrientationPreview:
+    """Per-link calibrated target frames saved without SO(3) errors or costs."""
+
+    human_joint_names: tuple[str, ...]
+    robot_link_names: tuple[str, ...]
+    alignment_mode: str
+    alignment_quaternions_wxyz: np.ndarray
+    target_quaternions_wxyz: np.ndarray
+
+
 ORIENTATION_KEYS = (
     "orientation_human_joint_names",
     "orientation_robot_link_names",
@@ -29,6 +40,88 @@ ORIENTATION_KEYS = (
     "orientation_robot_quaternions_wxyz",
     "orientation_errors_rad",
 )
+
+ORIENTATION_PREVIEW_KEYS = (
+    "orientation_preview_enabled",
+    "orientation_preview_human_joint_names",
+    "orientation_preview_robot_link_names",
+    "orientation_preview_alignment_mode",
+    "orientation_preview_alignment_quaternions_wxyz",
+    "orientation_preview_target_quaternions_wxyz",
+)
+
+
+def load_orientation_preview(
+    path: str | Path,
+    expected_frames: int,
+) -> OrientationPreview | None:
+    """Load visualization-only calibrated frames without interpreting errors."""
+
+    result_path = Path(path)
+    with np.load(result_path, allow_pickle=False) as data:
+        present = tuple(key for key in ORIENTATION_PREVIEW_KEYS if key in data.files)
+        if not present:
+            return None
+        missing = tuple(key for key in ORIENTATION_PREVIEW_KEYS if key not in data.files)
+        if missing:
+            raise ValueError(f"{result_path} has incomplete orientation preview; missing {missing}")
+        enabled = bool(np.asarray(data["orientation_preview_enabled"]).item())
+        human_joint_names = tuple(
+            str(name) for name in np.asarray(data["orientation_preview_human_joint_names"]).tolist()
+        )
+        robot_link_names = tuple(
+            str(name) for name in np.asarray(data["orientation_preview_robot_link_names"]).tolist()
+        )
+        alignment_mode = str(np.asarray(data["orientation_preview_alignment_mode"]).item())
+        alignment_quaternions = np.asarray(
+            data["orientation_preview_alignment_quaternions_wxyz"],
+            dtype=float,
+        )
+        target_quaternions = np.asarray(
+            data["orientation_preview_target_quaternions_wxyz"],
+            dtype=float,
+        )
+
+    if not enabled:
+        empty = (
+            human_joint_names == ()
+            and robot_link_names == ()
+            and alignment_mode == ""
+            and alignment_quaternions.shape == (0, 4)
+            and target_quaternions.shape == (expected_frames, 0, 4)
+        )
+        if empty:
+            return None
+        raise ValueError(f"{result_path} has inconsistent disabled orientation preview")
+    joint_count = len(human_joint_names)
+    if joint_count == 0 or len(set(human_joint_names)) != joint_count:
+        raise ValueError(f"{result_path} orientation preview human joint names must be non-empty and unique")
+    if len(robot_link_names) != joint_count or len(set(robot_link_names)) != joint_count:
+        raise ValueError(f"{result_path} orientation preview robot link names must match and be unique")
+    if alignment_mode not in {"t_pose", "first_frame", "explicit"}:
+        raise ValueError(f"{result_path} has invalid orientation preview alignment mode {alignment_mode!r}")
+    if alignment_quaternions.shape != (joint_count, 4):
+        raise ValueError(
+            f"{result_path} orientation preview alignment shape {alignment_quaternions.shape} != {(joint_count, 4)}",
+        )
+    expected_target_shape = (expected_frames, joint_count, 4)
+    if target_quaternions.shape != expected_target_shape:
+        raise ValueError(
+            f"{result_path} orientation preview target shape {target_quaternions.shape} != {expected_target_shape}",
+        )
+    if not np.isfinite(alignment_quaternions).all() or not np.isfinite(target_quaternions).all():
+        raise ValueError(f"{result_path} orientation preview contains non-finite quaternions")
+    alignment_norms = np.linalg.norm(alignment_quaternions, axis=-1, keepdims=True)
+    target_norms = np.linalg.norm(target_quaternions, axis=-1, keepdims=True)
+    if np.any(alignment_norms < 1e-8) or np.any(target_norms < 1e-8):
+        raise ValueError(f"{result_path} orientation preview contains zero quaternions")
+    return OrientationPreview(
+        human_joint_names=human_joint_names,
+        robot_link_names=robot_link_names,
+        alignment_mode=alignment_mode,
+        alignment_quaternions_wxyz=alignment_quaternions / alignment_norms,
+        target_quaternions_wxyz=target_quaternions / target_norms,
+    )
 
 
 def load_orientation_diagnostics(

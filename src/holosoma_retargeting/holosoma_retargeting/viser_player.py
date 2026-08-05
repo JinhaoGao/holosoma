@@ -44,6 +44,10 @@ from holosoma_retargeting.src.viser_utils import (
     format_foot_sticking_status,
     infer_mujoco_xml_path,
 )
+from holosoma_retargeting.visualization.joint_angles import (
+    add_joint_angle_gui,
+    build_joint_angle_diagnostics,
+)
 from holosoma_retargeting.visualization.layers import (
     LayerController,
     LayerId,
@@ -51,6 +55,7 @@ from holosoma_retargeting.visualization.layers import (
 )
 from holosoma_retargeting.visualization.orientation import (
     OrientationDiagnostics,
+    OrientationPreview,
     interpolate_orientation_quaternions,
     orientation_axis_segments,
     orientation_joint_indices,
@@ -65,12 +70,11 @@ from holosoma_retargeting.visualization.result_loader import (
 
 
 def load_npz(npz_path: str):
-    """Load one result through the shared versioned/legacy result adapter."""
+    """Load one result through the shared visualization adapter."""
 
     result = load_variant_result(
         Path(npz_path).stem,
         npz_path,
-        allow_legacy=True,
     )
     return (
         result.qpos,
@@ -88,10 +92,6 @@ def _saved_foot_sticking_constraint_status(
     """Describe whether detected sticking was actually constrained in a saved frame."""
     if not bool(foot_sticking["enabled"]):
         return "disabled for saved trajectory"
-    if frame_idx in np.asarray(foot_sticking["release_frames"], dtype=np.int32):
-        return "released after infeasible solve"
-    if frame_idx in np.asarray(foot_sticking["fallback_frames"], dtype=np.int32):
-        return "active with relaxed tolerance"
     states = np.asarray(foot_sticking["states"], dtype=bool)
     if bool(np.any(states[frame_idx])):
         return "active"
@@ -154,25 +154,21 @@ def _build_qpos_to_viser_joint_indices(
 ) -> np.ndarray | None:
     if config.robot_urdf is None:
         raise ValueError("robot_urdf must be resolved before building the Viser player")
-    schema_version = npz_metadata.get("schema_version")
     saved_names_value = npz_metadata.get("robot_actuated_joint_names")
     saved_joint_names = (
         tuple(str(name) for name in saved_names_value) if isinstance(saved_names_value, (list, tuple)) else ()
     )
-    legacy_xml = None
-    if schema_version is None:
-        legacy_xml = (
-            Path(config.robot_mujoco_xml) if config.robot_mujoco_xml else infer_mujoco_xml_path(config.robot_urdf)
-        )
+    fallback_xml = (
+        Path(config.robot_mujoco_xml) if config.robot_mujoco_xml else infer_mujoco_xml_path(config.robot_urdf)
+    )
     indices = resolve_qpos_to_viser_joint_indices(
         result_path=config.qpos_npz,
-        schema_version=(int(schema_version) if schema_version is not None else None),
         saved_joint_names=saved_joint_names,
         viser_joint_names=tuple(viser_joint_names),
-        legacy_mujoco_xml=legacy_xml,
+        fallback_mujoco_xml=fallback_xml,
     )
     if indices is not None:
-        source = "saved robot_actuated_joint_names" if schema_version is not None else f"legacy MuJoCo XML {legacy_xml}"
+        source = "saved robot_actuated_joint_names" if saved_joint_names else f"MuJoCo XML {fallback_xml}"
         print(f"[viser_player] Reordering qpos joints from {source}.")
     return indices
 
@@ -243,6 +239,8 @@ def _resolve_data_format(
 
 def _data_format_from_path_hint(path: str) -> str | None:
     normalized = path.lower().replace("\\", "/")
+    if "fbx_mocap" in normalized:
+        return "fbx_mocap"
     if "amass_smplx" in normalized or "smplx" in normalized:
         return "amass"
     if "gvhmr" in normalized:
@@ -343,6 +341,7 @@ class MappedSkeletonOverlay:
         robot_xml_path: Path | None,
         point_radius: float,
         line_width: float,
+        human_joint_parent_indices: np.ndarray | None = None,
         mapped_robot_joints: np.ndarray | None = None,
         robot_skeleton_joints: np.ndarray | None = None,
         robot_skeleton_parent_indices: np.ndarray | None = None,
@@ -354,13 +353,25 @@ class MappedSkeletonOverlay:
         self.human_joints = np.asarray(human_joints)
         self.demo_joints = demo_joints
         self.joints_mapping = joints_mapping
-        self.human_joint_names = list(joints_mapping.keys())
+        self.human_joint_names = list(demo_joints)
+        self.mapped_human_joint_names = list(joints_mapping.keys())
         self.robot_link_names = list(joints_mapping.values())
-        self.human_joint_indices = [demo_joints.index(name) for name in self.human_joint_names]
+        self.human_joint_indices = list(range(len(demo_joints)))
         self.mapped_robot_joints = (
             np.asarray(mapped_robot_joints, dtype=np.float32) if mapped_robot_joints is not None else None
         )
-        self.mapped_edges = _mapped_skeleton_edges(self.human_joint_names)
+        self.mapped_edges = _mapped_skeleton_edges(self.mapped_human_joint_names)
+        if human_joint_parent_indices is not None:
+            human_parents = np.asarray(human_joint_parent_indices, dtype=np.int32)
+            if human_parents.shape != (len(demo_joints),):
+                raise ValueError("Full human skeleton parent indices have an incompatible shape")
+            self.human_edges = [
+                (int(parent), index)
+                for index, parent in enumerate(human_parents)
+                if parent >= 0
+            ]
+        else:
+            self.human_edges = _mapped_skeleton_edges(self.human_joint_names)
         self.robot_skeleton_joints = (
             np.asarray(robot_skeleton_joints, dtype=np.float32) if robot_skeleton_joints is not None else None
         )
@@ -377,11 +388,13 @@ class MappedSkeletonOverlay:
             ):
                 raise ValueError("Full robot skeleton positions and parent indices have incompatible shapes")
             self.robot_edges = [(int(parent), index) for index, parent in enumerate(parent_indices) if parent >= 0]
+        elif self.mapped_robot_joints is not None:
+            self.robot_edges = self.mapped_edges
         else:
             self.robot_edges = self.mapped_edges
         self.hand_visualization_spec = build_hand_visualization_spec(
             self.demo_joints,
-            self.human_joint_names,
+            self.mapped_human_joint_names,
         )
         self.line_width = float(line_width)
         self.namespace = namespace.rstrip("/")
@@ -485,7 +498,7 @@ class MappedSkeletonOverlay:
                 human_skeleton = self._draw_skeleton(
                     f"{self.namespace}/human_skeleton",
                     human_points,
-                    self.mapped_edges,
+                    self.human_edges,
                     color=np.array([0.0, 0.0, 1.0]),
                     line_width=self.line_width,
                 )
@@ -1082,33 +1095,86 @@ class SavedOrientationAxesOverlay:
 
 
 class ResultOrientationOverlays:
-    """Source, target, and robot saved axes for one result."""
+    """Saved axes with a runtime full/retargeting-link scope filter."""
 
     def __init__(
         self,
         *,
-        source: SavedOrientationAxesOverlay | None,
+        source_all: SavedOrientationAxesOverlay | None,
+        source_retargeting: SavedOrientationAxesOverlay | None,
         target: SavedOrientationAxesOverlay | None,
-        robot: SavedOrientationAxesOverlay | None,
+        robot_all: SavedOrientationAxesOverlay | None,
+        robot_retargeting: SavedOrientationAxesOverlay | None,
+        scope: str,
+        source_visible: bool,
+        robot_visible: bool,
     ) -> None:
-        self.source = source
+        self.source_all = source_all
+        self.source_retargeting = source_retargeting
         self.target = target
-        self.robot = robot
+        self.robot_all = robot_all
+        self.robot_retargeting = robot_retargeting
+        self.scope = "retargeting"
+        self.source_visible = bool(source_visible)
+        self.robot_visible = bool(robot_visible)
+        self.set_scope(scope)
+
+    @property
+    def source_available(self) -> bool:
+        return self.source_all is not None or self.source_retargeting is not None
+
+    @property
+    def source(self) -> SavedOrientationAxesOverlay | None:
+        """Return the overlay selected by the current scope for compatibility."""
+
+        return self.source_all if self.scope == "all" else self.source_retargeting
+
+    @property
+    def robot_available(self) -> bool:
+        return self.robot_all is not None or self.robot_retargeting is not None
+
+    @property
+    def robot(self) -> SavedOrientationAxesOverlay | None:
+        """Return the overlay selected by the current scope for compatibility."""
+
+        return self.robot_all if self.scope == "all" else self.robot_retargeting
+
+    def set_scope(self, scope: str) -> None:
+        if scope not in {"retargeting", "all"}:
+            raise ValueError(f"Unknown orientation scope: {scope!r}")
+        self.scope = scope
+        self._sync_scope_visibility()
+
+    def _sync_scope_visibility(self) -> None:
+        if self.source_all is not None:
+            self.source_all.set_visible(self.source_visible and self.scope == "all")
+        if self.source_retargeting is not None:
+            self.source_retargeting.set_visible(self.source_visible and self.scope == "retargeting")
+        if self.robot_all is not None:
+            self.robot_all.set_visible(self.robot_visible and self.scope == "all")
+        if self.robot_retargeting is not None:
+            self.robot_retargeting.set_visible(self.robot_visible and self.scope == "retargeting")
 
     def set_source_visible(self, visible: bool) -> None:
-        if self.source is not None:
-            self.source.set_visible(visible)
+        self.source_visible = bool(visible)
+        self._sync_scope_visibility()
 
     def set_target_visible(self, visible: bool) -> None:
         if self.target is not None:
             self.target.set_visible(visible)
 
     def set_robot_visible(self, visible: bool) -> None:
-        if self.robot is not None:
-            self.robot.set_visible(visible)
+        self.robot_visible = bool(visible)
+        self._sync_scope_visibility()
 
     def draw(self, frame_float: float) -> None:
-        for overlay in (self.source, self.target, self.robot):
+        for overlay in (
+            self.source_all,
+            self.source_retargeting,
+            self.target,
+            self.robot_all,
+            self.robot_retargeting,
+        ):
             if overlay is not None:
                 overlay.draw(frame_float)
 
@@ -1140,9 +1206,11 @@ def _build_orientation_overlay(
     npz_metadata: dict[str, object],
     num_frames: int,
 ) -> ResultOrientationOverlays:
-    source_overlay = None
+    source_all_overlay = None
+    source_retargeting_overlay = None
     target_overlay = None
-    robot_overlay = None
+    robot_all_overlay = None
+    robot_retargeting_overlay = None
 
     human_joint_names = npz_metadata.get("human_joint_names")
     mapped_joint_names = npz_metadata.get("mapped_human_joint_names")
@@ -1154,35 +1222,92 @@ def _build_orientation_overlay(
 
     source_names_value = npz_metadata.get("human_orientation_joint_names")
     source_quaternions_value = npz_metadata.get("human_orientation_quaternions_wxyz")
+    preview = npz_metadata.get("orientation_preview")
     if human_joints is not None and isinstance(source_names_value, list) and source_quaternions_value is not None:
         source_names = tuple(source_names_value)
         source_point_indices = np.asarray(
             [human_index[name] for name in source_names],
             dtype=np.int32,
         )
-        selected = _requested_saved_orientation_indices(
+        selected_all = _requested_saved_orientation_indices(
             source_names,
             config.orientation_joints,
         )
-        if selected.size:
-            source_overlay = SavedOrientationAxesOverlay(
+        retargeting_human_names = (
+            preview.human_joint_names
+            if isinstance(preview, OrientationPreview)
+            else tuple(mapped_joint_names or ())
+        )
+        selected_retargeting = _requested_saved_orientation_indices(
+            source_names,
+            config.orientation_joints or retargeting_human_names,
+        )
+        if selected_all.size:
+            source_all_overlay = SavedOrientationAxesOverlay(
                 server=server,
-                namespace="/overlays/orientation/source",
-                names=tuple(source_names[int(index)] for index in selected),
+                namespace="/overlays/orientation/source/all",
+                names=tuple(source_names[int(index)] for index in selected_all),
                 positions=np.asarray(human_joints)[
                     :,
-                    source_point_indices[selected],
+                    source_point_indices[selected_all],
                 ],
                 quaternions_wxyz=np.asarray(source_quaternions_value)[
                     :,
-                    selected,
+                    selected_all,
                 ],
                 axis_length=config.orientation_axis_length,
                 shaft_radius=config.orientation_axis_shaft_radius,
                 head_radius=config.orientation_axis_head_radius,
                 head_length=config.orientation_axis_head_length,
-                visible=config.show_source_orientation_axes,
+                visible=False,
                 loop=config.loop,
+            )
+        if selected_retargeting.size:
+            source_retargeting_overlay = SavedOrientationAxesOverlay(
+                server=server,
+                namespace="/overlays/orientation/source/retargeting",
+                names=tuple(source_names[int(index)] for index in selected_retargeting),
+                positions=np.asarray(human_joints)[:, source_point_indices[selected_retargeting]],
+                quaternions_wxyz=np.asarray(source_quaternions_value)[:, selected_retargeting],
+                axis_length=config.orientation_axis_length,
+                shaft_radius=config.orientation_axis_shaft_radius,
+                head_radius=config.orientation_axis_head_radius,
+                head_length=config.orientation_axis_head_length,
+                visible=False,
+                loop=config.loop,
+            )
+
+    if isinstance(preview, OrientationPreview) and human_joints is not None:
+        missing_preview_joints = [name for name in preview.human_joint_names if name not in human_index]
+        if missing_preview_joints:
+            raise ValueError(
+                "Orientation preview joints are absent from human_joint_names: "
+                f"{missing_preview_joints}",
+            )
+        selected = _requested_saved_orientation_indices(
+            preview.human_joint_names,
+            config.orientation_joints,
+        )
+        if selected.size:
+            target_overlay = SavedOrientationAxesOverlay(
+                server=server,
+                namespace="/overlays/orientation/aligned_target",
+                names=tuple(preview.human_joint_names[int(index)] for index in selected),
+                positions=np.asarray(human_joints)[
+                    :,
+                    [human_index[preview.human_joint_names[int(index)]] for index in selected],
+                ],
+                quaternions_wxyz=preview.target_quaternions_wxyz[:, selected],
+                axis_length=config.orientation_axis_length * 0.78,
+                shaft_radius=config.orientation_axis_shaft_radius,
+                head_radius=config.orientation_axis_head_radius,
+                head_length=config.orientation_axis_head_length,
+                visible=config.show_target_orientation_axes,
+                loop=config.loop,
+            )
+            print(
+                "[viser_player] Orientation preview uses independently calibrated "
+                f"per-link frames ({preview.alignment_mode}); no SO(3) errors are loaded.",
             )
 
     diagnostics = npz_metadata.get("orientation_diagnostics")
@@ -1234,9 +1359,9 @@ def _build_orientation_overlay(
             loop=config.loop,
         )
         if npz_metadata.get("robot_link_quaternions_wxyz") is None:
-            robot_overlay = SavedOrientationAxesOverlay(
+            robot_retargeting_overlay = SavedOrientationAxesOverlay(
                 server=server,
-                namespace="/overlays/orientation/robot",
+                namespace="/overlays/orientation/robot/retargeting",
                 names=tuple(diagnostics.robot_link_names[int(index)] for index in selected),
                 positions=robot_points[:, point_indices],
                 quaternions_wxyz=diagnostics.robot_quaternions_wxyz[
@@ -1247,7 +1372,7 @@ def _build_orientation_overlay(
                 shaft_radius=config.orientation_axis_shaft_radius,
                 head_radius=config.orientation_axis_head_radius,
                 head_length=config.orientation_axis_head_length,
-                visible=config.show_robot_orientation_axes,
+                visible=False,
                 loop=config.loop,
             )
 
@@ -1265,38 +1390,73 @@ def _build_orientation_overlay(
             if isinstance(mapped_joint_names, list) and isinstance(mapped_robot_link_names, list)
             else {}
         )
-        selected = _requested_saved_orientation_indices(
+        selected_all = _requested_saved_orientation_indices(
             robot_link_names,
             config.orientation_joints,
             aliases=aliases,
         )
-        if selected.size:
-            robot_overlay = SavedOrientationAxesOverlay(
+        retargeting_robot_names = (
+            preview.robot_link_names
+            if isinstance(preview, OrientationPreview)
+            else tuple(mapped_robot_link_names or ())
+        )
+        selected_retargeting = _requested_saved_orientation_indices(
+            robot_link_names,
+            config.orientation_joints or retargeting_robot_names,
+            aliases=aliases,
+        )
+        if selected_all.size:
+            robot_all_overlay = SavedOrientationAxesOverlay(
                 server=server,
-                namespace="/overlays/orientation/robot",
-                names=tuple(robot_link_names[int(index)] for index in selected),
-                positions=np.asarray(robot_link_positions)[:, selected],
+                namespace="/overlays/orientation/robot/all",
+                names=tuple(robot_link_names[int(index)] for index in selected_all),
+                positions=np.asarray(robot_link_positions)[:, selected_all],
                 quaternions_wxyz=np.asarray(robot_link_quaternions)[
                     :,
-                    selected,
+                    selected_all,
                 ],
                 axis_length=config.orientation_axis_length,
                 shaft_radius=config.orientation_axis_shaft_radius,
                 head_radius=config.orientation_axis_head_radius,
                 head_length=config.orientation_axis_head_length,
-                visible=config.show_robot_orientation_axes,
+                visible=False,
+                loop=config.loop,
+            )
+        if selected_retargeting.size:
+            robot_retargeting_overlay = SavedOrientationAxesOverlay(
+                server=server,
+                namespace="/overlays/orientation/robot/retargeting",
+                names=tuple(robot_link_names[int(index)] for index in selected_retargeting),
+                positions=np.asarray(robot_link_positions)[:, selected_retargeting],
+                quaternions_wxyz=np.asarray(robot_link_quaternions)[:, selected_retargeting],
+                axis_length=config.orientation_axis_length,
+                shaft_radius=config.orientation_axis_shaft_radius,
+                head_radius=config.orientation_axis_head_radius,
+                head_length=config.orientation_axis_head_length,
+                visible=False,
                 loop=config.loop,
             )
 
     overlays = ResultOrientationOverlays(
-        source=source_overlay,
+        source_all=source_all_overlay,
+        source_retargeting=source_retargeting_overlay,
         target=target_overlay,
-        robot=robot_overlay,
+        robot_all=robot_all_overlay,
+        robot_retargeting=robot_retargeting_overlay,
+        scope=config.orientation_scope,
+        source_visible=config.show_source_orientation_axes,
+        robot_visible=config.show_robot_orientation_axes,
     )
     available_names = {
-        "source": source_overlay.names if source_overlay is not None else (),
+        "source_all": source_all_overlay.names if source_all_overlay is not None else (),
+        "source_retargeting": (
+            source_retargeting_overlay.names if source_retargeting_overlay is not None else ()
+        ),
         "target": target_overlay.names if target_overlay is not None else (),
-        "robot": robot_overlay.names if robot_overlay is not None else (),
+        "robot_all": robot_all_overlay.names if robot_all_overlay is not None else (),
+        "robot_retargeting": (
+            robot_retargeting_overlay.names if robot_retargeting_overlay is not None else ()
+        ),
     }
     if any(available_names.values()):
         print(f"[viser_player] Saved orientation overlays enabled | {available_names}")
@@ -1316,6 +1476,7 @@ def _build_mapped_skeleton_overlay(
     robot_xml_path = _resolve_robot_mujoco_xml(config)
     robot_type = _resolve_robot_type(config, npz_metadata)
     saved_demo_joints = npz_metadata.get("human_joint_names")
+    saved_human_parent_indices = npz_metadata.get("human_joint_parent_indices")
     saved_mapped_human_joint_names = npz_metadata.get("mapped_human_joint_names")
     saved_mapped_robot_joints = npz_metadata.get("mapped_robot_joints")
     saved_mapped_robot_link_names = npz_metadata.get("mapped_robot_link_names")
@@ -1369,6 +1530,11 @@ def _build_mapped_skeleton_overlay(
         server=server,
         human_joints=human_joints,
         demo_joints=demo_joints,
+        human_joint_parent_indices=(
+            np.asarray(saved_human_parent_indices)
+            if saved_human_parent_indices is not None
+            else None
+        ),
         joints_mapping=joints_mapping,
         robot_xml_path=robot_xml_path,
         point_radius=config.skeleton_point_radius,
@@ -1550,6 +1716,11 @@ def make_player(
         list(joint_limits.keys()),
         npz_metadata or {},
     )
+    joint_angle_diagnostics = build_joint_angle_diagnostics(
+        qpos,
+        joint_limits,
+        qpos_to_viser_joint_indices,
+    )
     contains_object_in_qpos = config.assume_object_in_qpos
     if contains_object_in_qpos is None:
         saved_contains_object = (npz_metadata or {}).get("contains_object_in_qpos")
@@ -1578,6 +1749,7 @@ def make_player(
     if foot_sticking is not None:
         foot_sticking_states = np.asarray(foot_sticking["states"], dtype=bool)
     last_rendered_frame: dict[str, np.ndarray | float | None] = {"q": None, "frame": None}
+    joint_angle_gui = None
 
     def _redraw_mapped_skeleton() -> None:
         if (
@@ -1712,14 +1884,14 @@ def make_player(
     )
     layer_controller.register(
         LayerId.ROBOT_ORIENTATION,
-        available=orientation_overlay.robot is not None,
+        available=orientation_overlay.robot_available,
         visible=config.show_robot_orientation_axes,
         callback=orientation_overlay.set_robot_visible,
         unavailable_reason="Saved full robot link orientation frames are absent.",
     )
     layer_controller.register(
         LayerId.SOURCE_ORIENTATION,
-        available=orientation_overlay.source is not None,
+        available=orientation_overlay.source_available,
         visible=config.show_source_orientation_axes,
         callback=orientation_overlay.set_source_visible,
         unavailable_reason=("The result does not contain a directly observed source-human orientation subset."),
@@ -1745,6 +1917,24 @@ def make_player(
 
     with tabs.layers:
         layer_controller.add_gui(server.gui)
+        if orientation_overlay.source_available or orientation_overlay.robot_available:
+            with server.gui.add_folder("Orientation debug settings", expand_by_default=True):
+                orientation_scope = server.gui.add_dropdown(
+                    "Displayed link scope",
+                    ("retargeting", "all"),
+                    initial_value=config.orientation_scope,
+                    hint=(
+                        "retargeting shows only source/robot links participating in the map; "
+                        "all shows every saved FBX joint and robot link. This changes visualization only."
+                    ),
+                )
+
+                @orientation_scope.on_update
+                def _(_event) -> None:
+                    orientation_overlay.set_scope(str(orientation_scope.value))
+                    if last_rendered_frame["frame"] is not None:
+                        orientation_overlay.draw(float(last_rendered_frame["frame"]))
+
         if interaction_mesh_overlay is not None:
             with server.gui.add_folder("Interaction mesh settings", expand_by_default=False):
                 interaction_mode = server.gui.add_dropdown(
@@ -1850,6 +2040,8 @@ def make_player(
         if interaction_mesh_overlay is not None:
             interaction_mesh_overlay.draw(frame_float)
         orientation_overlay.draw(frame_float)
+        if joint_angle_gui is not None:
+            joint_angle_gui.update_frame(frame_float)
 
     # ---------- Use reusable motion control sliders from viser_utils ----------
     with tabs.playback:
@@ -1868,6 +2060,7 @@ def make_player(
             qpos_to_viser_joint_indices=qpos_to_viser_joint_indices,
             on_frame=_draw_frame_overlay,
         )
+        joint_angle_gui = add_joint_angle_gui(server.gui, joint_angle_diagnostics)
     n_frames = int(qpos.shape[0])
     print(
         f"[viser_player] Loaded {n_frames} frames | robot_dof={robot_dof} | "

@@ -1,5 +1,5 @@
 # ruff: noqa: CPY001
-"""Shared multi-motion validation and synchronized Viser scene."""
+"""Shared multi-motion loading and synchronized Viser scene."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from holosoma_retargeting.src.viser_utils import (
 from holosoma_retargeting.viser_player import (
     InteractionMeshOverlay,
     ObjectKeypointOverlay,
+    RetargetingPointCloudOverlay,
     SavedOrientationAxesOverlay,
     _mapped_skeleton_edges,
     _requested_saved_orientation_indices,
@@ -47,7 +48,6 @@ from holosoma_retargeting.visualization.result_loader import (
     interpolate_qpos,
     load_variant_result,
     resolve_qpos_to_viser_joint_indices,
-    validate_synchronized_results,
 )
 
 
@@ -109,6 +109,9 @@ class MultiResultViserConfig:
     show_object_keypoints: bool = False
     """Show saved demonstration and target object samples for all motions."""
 
+    show_point_clouds: bool = False
+    """Show saved human, robot, terrain, and object point clouds."""
+
     show_interaction_mesh: bool = False
     """Show saved source and target interaction meshes for all motions."""
 
@@ -123,6 +126,9 @@ class MultiResultViserConfig:
 
     object_keypoint_radius: float = 0.02
     """World-space radius for saved object samples."""
+
+    point_cloud_point_size: float = 0.012
+    """Rendered size of saved retargeting point-cloud samples."""
 
     show_foot_sticking: bool = True
     """Show per-motion foot-sticking status when saved states are available."""
@@ -347,15 +353,19 @@ class ComparisonScene:
     robot_root: object
     object_visual: ViserUrdf | None
     object_root: object | None
+    contains_object: bool
+    qpos_to_viser_joint_indices: np.ndarray | None
     robot_skeleton: RobotSkeletonOverlay
     orientation_overlay: OrientationOverlay | SavedOrientationAxesOverlay | None
     object_keypoints_overlay: ObjectKeypointOverlay | None = None
+    point_cloud_overlay: RetargetingPointCloudOverlay | None = None
     interaction_mesh_overlay: InteractionMeshOverlay | None = None
     robot_mesh_enabled: bool = True
     object_mesh_enabled: bool = True
     skeleton_enabled: bool = True
     orientation_enabled: bool = True
     object_keypoints_enabled: bool = False
+    point_clouds_enabled: bool = False
     interaction_mesh_enabled: bool = False
     motion_visible: bool = True
 
@@ -369,6 +379,7 @@ class ComparisonScene:
             or self.skeleton_enabled
             or self.orientation_enabled
             or self.object_keypoints_enabled
+            or self.point_clouds_enabled
             or self.interaction_mesh_enabled
         )
 
@@ -381,6 +392,8 @@ class ComparisonScene:
             self.orientation_overlay.set_enabled(self.motion_visible and self.orientation_enabled)
         if self.object_keypoints_overlay is not None:
             self.object_keypoints_overlay.set_visible(self.motion_visible and self.object_keypoints_enabled)
+        if self.point_cloud_overlay is not None:
+            self.point_cloud_overlay.set_visible(self.motion_visible and self.point_clouds_enabled)
         if self.interaction_mesh_overlay is not None:
             self.interaction_mesh_overlay.set_visible(self.motion_visible and self.interaction_mesh_enabled)
 
@@ -417,6 +430,11 @@ class ComparisonScene:
         self.object_keypoints_enabled = bool(enabled)
         if self.object_keypoints_overlay is not None:
             self.object_keypoints_overlay.set_visible(self.motion_visible and self.object_keypoints_enabled)
+
+    def set_point_clouds_enabled(self, enabled: bool) -> None:
+        self.point_clouds_enabled = bool(enabled)
+        if self.point_cloud_overlay is not None:
+            self.point_cloud_overlay.set_visible(self.motion_visible and self.point_clouds_enabled)
 
     def set_interaction_mesh_enabled(self, enabled: bool) -> None:
         self.interaction_mesh_enabled = bool(enabled)
@@ -484,7 +502,11 @@ def comparison_offsets(
 def pale_mesh_color(color: tuple[int, int, int]) -> tuple[int, int, int]:
     """Produce a pale low-saturation tint that does not obscure the skeleton."""
 
-    return tuple(round(0.25 * channel + 0.75 * 235) for channel in color)
+    return (
+        round(0.25 * color[0] + 0.75 * 235),
+        round(0.25 * color[1] + 0.75 * 235),
+        round(0.25 * color[2] + 0.75 * 235),
+    )
 
 
 def visualization_skeleton_edges(
@@ -516,7 +538,6 @@ def load_human_skeleton(
         else load_variant_result(
             Path(source).stem,
             source,
-            allow_legacy=True,
         )
     )
     path = result.path
@@ -760,7 +781,7 @@ def _semantic_comparison_labels(
     if config.labels:
         return config.labels
 
-    base_labels = [result.variant if result.schema_version is not None else result.path.stem for result in results]
+    base_labels = [result.variant or result.path.stem for result in results]
     base_counts = {label: base_labels.count(label) for label in set(base_labels)}
     labels: list[str] = []
     used: dict[str, int] = {}
@@ -778,24 +799,27 @@ def _semantic_comparison_labels(
 def load_comparison_results(
     config: MultiResultViserConfig,
 ) -> tuple[tuple[str, ...], list[VariantResult]]:
-    """Load arbitrary result paths, recover legacy fields, and validate synchronization."""
+    """Load arbitrary result paths and recover fields needed for rendering."""
 
     paths = _comparison_paths(config)
     results = [
         load_variant_result(
             path.stem,
             path,
-            allow_legacy=True,
         )
         for path in paths
     ]
     labels = _semantic_comparison_labels(config, results)
-    schema_versions = {result.schema_version for result in results}
-    if len(schema_versions) != 1:
-        raise ValueError(
-            "Comparison results are not synchronized: strict and legacy results cannot share one comparison"
-        )
     reference = results[0]
+    if config.fps is None and any(not np.isclose(result.fps, reference.fps) for result in results[1:]):
+        raise ValueError(
+            "Comparison results use different saved FPS values; pass --fps to choose one shared playback rate.",
+        )
+    robot_types = {result.robot_type for result in results if result.robot_type}
+    if len(robot_types) > 1:
+        raise ValueError(
+            f"One shared robot model cannot render multiple robot types: {sorted(robot_types)}",
+        )
     needs_layout_inference = any(result.contains_object_in_qpos is None for result in results)
     needs_robot_fk = any(result.robot_points is None for result in results)
     if needs_layout_inference or needs_robot_fk:
@@ -873,10 +897,6 @@ def load_comparison_results(
                 )
             )
         results = normalized_results
-    validate_synchronized_results(
-        results,
-        description="Comparison results",
-    )
     return labels, results
 
 
@@ -1060,14 +1080,10 @@ def make_multi_result_player(
 ):
     """Build one shared-timeline Viser scene for all comparison results."""
 
-    validate_synchronized_results(
-        results,
-        description="Comparison results",
-    )
     reference = results[0]
     robot_urdf = _resolve_robot_urdf(config, reference)
     robot_xml = _resolve_robot_xml(config, robot_urdf)
-    contains_object = reference.contains_object_in_qpos
+    driver_contains_object = bool(reference.contains_object_in_qpos)
     object_urdfs = resolve_comparison_object_urdfs(config, results)
     if config.interaction_mesh_mode not in {"source", "target", "both"}:
         raise ValueError("interaction_mesh_mode must be one of source, target, or both")
@@ -1123,7 +1139,7 @@ def make_multi_result_player(
 
     scenes: list[ComparisonScene] = []
     robot_dof: int | None = None
-    joint_order_indices: np.ndarray | None = None
+    driver_joint_order_indices: np.ndarray | None = None
     human_offset, robot_offsets = comparison_offsets(
         len(results),
         config.x_offset,
@@ -1216,7 +1232,7 @@ def make_multi_result_player(
                 )
                 object_urdf_models[object_urdf] = object_urdf_model
             object_root = server.scene.add_frame(f"{namespace}/object", show_axes=False)
-            if not contains_object:
+            if not result.contains_object_in_qpos:
                 object_root.position = offset
             object_visual = ViserUrdf(
                 server,
@@ -1228,15 +1244,16 @@ def make_multi_result_player(
         current_robot_dof = len(robot.get_actuated_joint_limits())
         if robot_dof is None:
             robot_dof = current_robot_dof
-            joint_order_indices = resolve_qpos_to_viser_joint_indices(
-                result_path=reference.path,
-                schema_version=reference.schema_version,
-                saved_joint_names=reference.robot_actuated_joint_names,
-                viser_joint_names=tuple(robot.get_actuated_joint_limits().keys()),
-                legacy_mujoco_xml=robot_xml,
-            )
         elif current_robot_dof != robot_dof:
             raise ValueError("Loaded comparison robots expose inconsistent actuated joint counts.")
+        qpos_to_viser_joint_indices = resolve_qpos_to_viser_joint_indices(
+            result_path=result.path,
+            saved_joint_names=result.robot_actuated_joint_names,
+            viser_joint_names=tuple(robot.get_actuated_joint_limits().keys()),
+            fallback_mujoco_xml=robot_xml,
+        )
+        if index == 0:
+            driver_joint_order_indices = qpos_to_viser_joint_indices
 
         orientation_overlay = _make_full_robot_orientation_overlay(
             server=server,
@@ -1284,6 +1301,41 @@ def make_multi_result_player(
         )
         if object_keypoints_overlay is not None:
             object_keypoints_overlay.set_visible(config.show_object_keypoints)
+        point_cloud_trajectories: dict[str, np.ndarray] = {}
+        for layer_name, points in (
+            ("human", result.human_points_world),
+            ("robot", result.robot_points_world),
+            ("terrain", result.terrain_points_world),
+        ):
+            if points is not None:
+                point_cloud_trajectories[layer_name] = np.asarray(
+                    points,
+                    dtype=np.float32,
+                ) + offset
+        if result.object_keypoints is not None:
+            for layer_name, field_name in (
+                ("object_demo", "demo_world"),
+                ("object_target", "target_world"),
+            ):
+                points = result.object_keypoints.get(field_name)
+                if points is not None:
+                    point_cloud_trajectories[layer_name] = np.asarray(
+                        points,
+                        dtype=np.float32,
+                    ) + offset
+        point_cloud_overlay = (
+            RetargetingPointCloudOverlay(
+                server=server,
+                trajectories=point_cloud_trajectories,
+                point_size=config.point_cloud_point_size,
+                namespace=f"{namespace}/retargeting_points",
+                loop=config.loop,
+            )
+            if point_cloud_trajectories
+            else None
+        )
+        if point_cloud_overlay is not None:
+            point_cloud_overlay.set_visible(config.show_point_clouds)
         interaction_mesh_overlay = (
             InteractionMeshOverlay(
                 server=server,
@@ -1311,14 +1363,18 @@ def make_multi_result_player(
                 robot_root=robot_root,
                 object_visual=object_visual,
                 object_root=object_root,
+                contains_object=bool(result.contains_object_in_qpos),
+                qpos_to_viser_joint_indices=qpos_to_viser_joint_indices,
                 robot_skeleton=robot_skeleton,
                 orientation_overlay=orientation_overlay,
                 object_keypoints_overlay=object_keypoints_overlay,
+                point_cloud_overlay=point_cloud_overlay,
                 interaction_mesh_overlay=interaction_mesh_overlay,
                 robot_mesh_enabled=config.show_robot_mesh,
                 object_mesh_enabled=config.show_object_mesh and object_visual is not None,
                 skeleton_enabled=config.show_robot_skeleton,
                 object_keypoints_enabled=config.show_object_keypoints and object_keypoints_overlay is not None,
+                point_clouds_enabled=config.show_point_clouds and point_cloud_overlay is not None,
                 interaction_mesh_enabled=config.show_interaction_mesh and interaction_mesh_overlay is not None,
             )
         )
@@ -1346,13 +1402,13 @@ def make_multi_result_player(
                 _robot_joints_for_viser(
                     q,
                     robot_dof,
-                    joint_order_indices,
+                    scene.qpos_to_viser_joint_indices,
                 )
             )
         scene.robot_root.position = q[0:3] + scene.offset
         if update_articulation:
             scene.robot_root.wxyz = q[3:7]
-        if contains_object and scene.object_root is not None:
+        if scene.contains_object and scene.object_root is not None:
             scene.object_root.position = q[-7:-4] + scene.offset
             if update_articulation:
                 scene.object_root.wxyz = q[-4:]
@@ -1360,6 +1416,8 @@ def make_multi_result_player(
             scene.orientation_overlay.update(q, frame_float)
         if scene.object_keypoints_overlay is not None and scene.object_keypoints_enabled:
             scene.object_keypoints_overlay.draw(frame_float)
+        if scene.point_cloud_overlay is not None and scene.point_clouds_enabled:
+            scene.point_cloud_overlay.draw(frame_float)
         if scene.interaction_mesh_overlay is not None and scene.interaction_mesh_enabled:
             scene.interaction_mesh_overlay.draw(frame_float)
 
@@ -1408,7 +1466,7 @@ def make_multi_result_player(
                     scene.result.qpos,
                     frame_float,
                     robot_dof,
-                    contains_object=contains_object,
+                    contains_object=scene.contains_object,
                     loop=config.loop,
                 )
             )
@@ -1467,6 +1525,13 @@ def make_multi_result_player(
         visible=config.show_object_keypoints,
         callback=lambda visible: [scene.set_object_keypoints_enabled(visible) for scene in scenes],
         unavailable_reason="No input contains saved demonstration/target object samples.",
+    )
+    layer_controller.register(
+        LayerId.RETARGETING_POINT_CLOUDS,
+        available=any(scene.point_cloud_overlay is not None for scene in scenes),
+        visible=config.show_point_clouds,
+        callback=lambda visible: [scene.set_point_clouds_enabled(visible) for scene in scenes],
+        unavailable_reason="No input contains saved retargeting point clouds.",
     )
     layer_controller.register(
         LayerId.INTERACTION_MESH,
@@ -1550,7 +1615,7 @@ def make_multi_result_player(
                             reference.qpos,
                             current_frame,
                             robot_dof,
-                            contains_object=contains_object,
+                            contains_object=driver_contains_object,
                             loop=config.loop,
                         )
                         _render_comparison(current_q, current_frame)
@@ -1566,7 +1631,7 @@ def make_multi_result_player(
                             reference.qpos,
                             current_frame,
                             robot_dof,
-                            contains_object=contains_object,
+                            contains_object=driver_contains_object,
                             loop=config.loop,
                         )
                         _render_comparison(current_q, current_frame)
@@ -1667,11 +1732,11 @@ def make_multi_result_player(
             robot_dof=robot_dof,
             viser_object=driver.object_visual,
             object_base_frame=driver.object_root,
-            contains_object_in_qpos=contains_object,
+            contains_object_in_qpos=driver_contains_object,
             initial_fps=round(config.fps or reference.fps),
             initial_interp_mult=config.visual_fps_multiplier,
             loop=config.loop,
-            qpos_to_viser_joint_indices=joint_order_indices,
+            qpos_to_viser_joint_indices=driver_joint_order_indices,
             on_frame=_render_comparison,
         )
 

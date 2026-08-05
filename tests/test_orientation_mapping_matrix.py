@@ -12,11 +12,19 @@ from holosoma_retargeting.config_types.data_type import (
     MotionDataConfig,
 )
 from holosoma_retargeting.config_types.robot import RobotConfig
+from holosoma_retargeting.data_utils.generate_orientation_calibration import (
+    compute_orientation_alignment_quaternions,
+    robot_t_pose_qpos,
+)
+from holosoma_retargeting.orientation_calibration import (
+    ORIENTATION_ALIGNMENT_QUATERNIONS_WXYZ,
+)
 from scipy.spatial.transform import Rotation
 
 
 class OrientationMappingMatrixTest(unittest.TestCase):
     DATA_FORMATS = (
+        "amass",
         "gvhmr",
         "lafan",
         "mocap",
@@ -42,8 +50,8 @@ class OrientationMappingMatrixTest(unittest.TestCase):
 
     def test_every_direct_orientation_format_has_three_robot_mappings(self) -> None:
         self.assertEqual(
-            set(self.DATA_FORMATS),
-            set(APPROVED_DIRECT_ORIENTATION_SOURCES).difference({"amass"}),
+            set(self.DATA_FORMATS) | {"fbx_mocap"},
+            set(APPROVED_DIRECT_ORIENTATION_SOURCES),
         )
         for data_format in self.DATA_FORMATS:
             for robot in self.ROBOTS:
@@ -68,33 +76,123 @@ class OrientationMappingMatrixTest(unittest.TestCase):
                         (*human_reference.values(), robot_base),
                     )
 
-    def test_orientation_links_are_independent_from_position_links(self) -> None:
-        expected_shoulder_links = {
-            "g1": "left_shoulder_yaw_link",
-            "e1": "l_arm_shoulder_yaw_link",
-            "e2": "l_arm_shoulder_yaw_link",
-        }
+    def test_calibrated_sources_use_source_specific_hip_links(self) -> None:
+        for data_format, human_hip, link_component in (
+            ("amass", "L_Hip", "hip_roll"),
+            ("gvhmr", "L_Hip", "hip_roll"),
+            ("lafan", "LeftUpLeg", "hip_yaw"),
+        ):
+            for robot in self.ROBOTS:
+                with self.subTest(data_format=data_format, robot=robot):
+                    link = MotionDataConfig(
+                        data_format=data_format,
+                        robot_type=robot,
+                    ).resolved_orientation_joints_mapping[human_hip]
+                    self.assertIn(link_component, link)
+
+    def test_e2_position_and_orientation_use_different_shoulder_links(self) -> None:
         for data_format, human_shoulder in (
+            ("amass", "L_Shoulder"),
             ("gvhmr", "L_Shoulder"),
             ("lafan", "LeftArm"),
+            ("fbx_mocap", "LeftArm"),
             ("mocap", "LeftArm"),
             ("noetix_mocap", "LeftArm"),
             ("omomo", "L_Shoulder"),
         ):
-            for robot, expected_link in expected_shoulder_links.items():
+            with self.subTest(data_format=data_format):
+                motion = MotionDataConfig(
+                    data_format=data_format,
+                    robot_type="e2",
+                )
+                self.assertEqual(
+                    motion.resolved_joints_mapping[human_shoulder],
+                    "l_arm_shoulder_roll_link",
+                )
+                self.assertEqual(
+                    motion.resolved_orientation_joints_mapping[human_shoulder],
+                    "l_arm_shoulder_yaw_link",
+                )
+
+    def test_only_e2_shoulder_links_differ_between_position_and_orientation(self) -> None:
+        for data_format in self.DATA_FORMATS:
+            for robot in self.ROBOTS:
                 with self.subTest(data_format=data_format, robot=robot):
                     motion = MotionDataConfig(
                         data_format=data_format,
                         robot_type=robot,
                     )
-                    self.assertEqual(
-                        motion.resolved_orientation_joints_mapping[human_shoulder],
-                        expected_link,
-                    )
-                    self.assertNotEqual(
-                        motion.resolved_joints_mapping[human_shoulder],
-                        expected_link,
-                    )
+                    position_mapping = motion.resolved_joints_mapping
+                    orientation_mapping = motion.resolved_orientation_joints_mapping
+                    self.assertIsNot(position_mapping, orientation_mapping)
+                    differing_joints = {
+                        name for name in position_mapping if position_mapping[name] != orientation_mapping[name]
+                    }
+                    if robot == "e2":
+                        shoulder_names = (
+                            {"L_Shoulder", "R_Shoulder"}
+                            if data_format in {"amass", "gvhmr", "omomo"}
+                            else {"LeftArm", "RightArm"}
+                        )
+                        self.assertEqual(differing_joints, shoulder_names)
+                    else:
+                        self.assertEqual(differing_joints, set())
+
+    def test_fbx_uses_roll_position_shoulders_and_dynamic_source_bind_frames(self) -> None:
+        for robot in self.ROBOTS:
+            with self.subTest(robot=robot):
+                fbx = MotionDataConfig(data_format="fbx_mocap", robot_type=robot)
+                noetix = MotionDataConfig(
+                    data_format="noetix_mocap",
+                    robot_type=robot,
+                )
+                self.assertEqual(
+                    fbx.resolved_orientation_joints_mapping,
+                    noetix.resolved_orientation_joints_mapping,
+                )
+                self.assertIsNot(
+                    fbx.resolved_orientation_joints_mapping,
+                    noetix.resolved_orientation_joints_mapping,
+                )
+                differing_position_joints = {
+                    name
+                    for name in fbx.resolved_joints_mapping
+                    if fbx.resolved_joints_mapping[name] != noetix.resolved_joints_mapping[name]
+                }
+                expected_differences = (
+                    {"LeftArm", "RightArm"}
+                    if robot in {"g1", "e1"}
+                    else set()
+                )
+                self.assertEqual(
+                    differing_position_joints,
+                    expected_differences,
+                )
+                self.assertIn(
+                    "shoulder_roll_link",
+                    fbx.resolved_joints_mapping["LeftArm"],
+                )
+                self.assertEqual(fbx.resolved_orientation_t_pose_human_quaternions_wxyz, {})
+                self.assertIsNotNone(
+                    fbx.resolved_orientation_t_pose_robot_base_quaternion_wxyz,
+                )
+                self.assertTrue(
+                    fbx.resolved_orientation_t_pose_robot_joint_positions,
+                )
+                self.assertEqual(fbx.resolved_orientation_alignment_quaternions_wxyz, {})
+
+    def test_position_override_does_not_implicitly_override_orientation(self) -> None:
+        motion = MotionDataConfig(
+            data_format="omomo",
+            robot_type="e2",
+            joints_mapping={"Pelvis": "base_link"},
+        )
+
+        self.assertEqual(motion.resolved_joints_mapping, {"Pelvis": "base_link"})
+        self.assertEqual(
+            motion.resolved_orientation_joints_mapping["L_Shoulder"],
+            "l_arm_shoulder_yaw_link",
+        )
 
     def test_t_pose_offsets_align_every_source_frame_with_robot_fk(self) -> None:
         for data_format in self.DATA_FORMATS:
@@ -123,6 +221,63 @@ class OrientationMappingMatrixTest(unittest.TestCase):
                         np.linalg.det(offsets),
                         np.ones(len(mapping)),
                         atol=1e-12,
+                    )
+
+    def test_saved_calibrations_match_generated_robot_fk(self) -> None:
+        for data_format in ("amass", "lafan", "gvhmr", "mocap"):
+            for robot in self.ROBOTS:
+                with self.subTest(data_format=data_format, robot=robot):
+                    generated = compute_orientation_alignment_quaternions(
+                        data_format,
+                        robot,
+                    )
+                    saved = ORIENTATION_ALIGNMENT_QUATERNIONS_WXYZ[(data_format, robot)]
+                    self.assertEqual(set(generated), set(saved))
+                    for human_joint in generated:
+                        generated_matrix = Rotation.from_quat(
+                            generated[human_joint],
+                            scalar_first=True,
+                        ).as_matrix()
+                        saved_matrix = Rotation.from_quat(
+                            saved[human_joint],
+                            scalar_first=True,
+                        ).as_matrix()
+                        np.testing.assert_allclose(
+                            generated_matrix,
+                            saved_matrix,
+                            atol=2e-12,
+                        )
+
+    def test_robot_reference_configurations_are_geometric_t_poses(self) -> None:
+        for robot in self.ROBOTS:
+            with self.subTest(robot=robot):
+                model = self.models[robot]
+                motion = MotionDataConfig(data_format="gvhmr", robot_type=robot)
+                data = mujoco.MjData(model)
+                data.qpos[:] = robot_t_pose_qpos(model, motion)
+                mujoco.mj_forward(model, data)
+                mapping = motion.resolved_orientation_joints_mapping
+                for side in ("L", "R"):
+                    body_positions = np.asarray(
+                        [
+                            data.xpos[
+                                mujoco.mj_name2id(
+                                    model,
+                                    mujoco.mjtObj.mjOBJ_BODY,
+                                    mapping[human_joint],
+                                )
+                            ]
+                            for human_joint in (
+                                f"{side}_Shoulder",
+                                f"{side}_Elbow",
+                                f"{side}_Wrist",
+                            )
+                        ]
+                    )
+                    self.assertLess(np.ptp(body_positions[:, 2]), 0.01)
+                    self.assertGreater(
+                        np.linalg.norm(body_positions[-1, :2] - body_positions[0, :2]),
+                        0.25,
                     )
 
     @staticmethod

@@ -647,12 +647,11 @@ def _load_evaluation_result(
     robot_type: str | None = None,
     data_format: str | None = None,
 ) -> VariantResult:
-    """Load and bind one strict current-schema identity to evaluation settings."""
+    """Load one saved trajectory and check fields required by evaluation."""
 
     result = load_variant_result(
         "identity",
         path,
-        allow_legacy=False,
     )
     return _validate_evaluation_result(
         result,
@@ -669,14 +668,10 @@ def _validate_evaluation_result(
     robot_type: str | None = None,
     data_format: str | None = None,
 ) -> VariantResult:
-    """Bind an already validated artifact to one evaluation contract."""
+    """Check fields that the requested evaluation actually consumes."""
 
     expected_task_type = _EVALUATION_TASK_TYPES[data_type]
     mismatches: list[str] = []
-    if result.run_kind != "single":
-        mismatches.append(f"run_kind={result.run_kind!r}")
-    if result.variant != "identity":
-        mismatches.append(f"variant={result.variant!r}")
     if result.task_type != expected_task_type:
         mismatches.append(
             f"task_type={result.task_type!r}, expected {expected_task_type!r}",
@@ -707,7 +702,7 @@ def _validate_evaluation_result(
             mismatches.append("saved terrain asset is absent")
     if mismatches:
         raise ValueError(
-            f"Evaluation result {result.path} does not satisfy the strict identity contract: {'; '.join(mismatches)}",
+            f"Evaluation result {result.path} is missing or mismatches required data: {'; '.join(mismatches)}",
         )
     return result
 
@@ -756,7 +751,7 @@ def _evaluate_single_task(
     resolved_object_name = result.object_name
     if object_name is not None and object_name != resolved_object_name:
         raise ValueError(
-            f"Explicit object_name={object_name!r} does not match strict artifact object_name={resolved_object_name!r}",
+            f"Explicit object_name={object_name!r} does not match saved object_name={resolved_object_name!r}",
         )
 
     asset_fingerprint = hashlib.sha256(
@@ -851,7 +846,7 @@ def _canonical_evaluation_results(
     robot_type: str | None = None,
     data_format: str | None = None,
 ) -> list[tuple[str, Path]]:
-    """Discover strict identity artifacts and validate their complete closure."""
+    """Discover identity results that contain the requested evaluation data."""
 
     identity_paths = sorted(path for path in data_path.rglob("identity.npz") if path.is_file())
     if not identity_paths:
@@ -864,14 +859,11 @@ def _canonical_evaluation_results(
             result = load_variant_result(
                 "identity",
                 path,
-                allow_legacy=False,
             )
         except (KeyError, OSError, ValueError) as exc:
             raise ValueError(
-                f"Cannot validate canonical evaluation result {path}: {exc}",
+                f"Cannot load evaluation result {path}: {exc}",
             ) from exc
-        if result.run_kind != "single" or result.variant != "identity":
-            continue
         if result.task_type != expected_task_type:
             continue
         result = _validate_evaluation_result(
@@ -882,7 +874,7 @@ def _canonical_evaluation_results(
         )
         if result.dataset_partition is None or result.sequence_key is None:
             raise ValueError(
-                f"Canonical evaluation result {path} has no dataset identity",
+                f"Evaluation result {path} has no dataset identity",
             )
         results.append(
             (result.dataset_partition, result.sequence_key, path),
@@ -910,7 +902,7 @@ def get_task_names(
     robot_type: str | None = None,
     data_format: str | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Return strict current-schema identity results selected for evaluation."""
+    """Return identity results selected for evaluation."""
 
     if data_type not in {"robot_object", "robot_only", "robot_terrain"}:
         raise ValueError(f"Invalid data type: {data_type}")
@@ -932,9 +924,8 @@ def get_task_names(
     if files:
         raise ValueError(
             "Evaluation no longer accepts legacy *_original.npz files because "
-            "they do not guarantee saved skeletons, contact state, FPS, cost, "
-            "or an externally validated asset closure. Regenerate them as strict "
-            "current-schema identity.npz artifacts first.",
+            "they do not provide the saved skeletons, contact state, FPS, and "
+            "cost required by the evaluator. Regenerate them as identity.npz results first.",
         )
     return [], []
 

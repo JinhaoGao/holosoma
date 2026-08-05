@@ -48,18 +48,7 @@ from holosoma_retargeting.evaluation.eval_retargeting import (  # noqa: E402
 from holosoma_retargeting.evaluation.eval_retargeting import (  # noqa: E402
     main as evaluation_main,
 )
-from holosoma_retargeting.result_artifact import (  # noqa: E402
-    RESULT_SCHEMA_VERSION,
-    write_result_artifact,
-)
 from holosoma_retargeting.retargeting_pipeline import build_retarget_job  # noqa: E402
-from test_result_artifact import (  # noqa: E402
-    _climbing_payload,
-    _dynamic_object_payload,
-    _replace_config,
-    _set_real_object_asset_manifest,
-    _valid_payload,
-)
 
 
 def _write_strict_evaluation_result(
@@ -74,46 +63,60 @@ def _write_strict_evaluation_result(
     data_format: str = "noetix_mocap",
     object_name: str | None = None,
 ) -> None:
-    if task_type == "object_interaction":
-        payload = _dynamic_object_payload()
-    elif task_type == "climbing":
-        payload = _climbing_payload()
-    else:
-        payload = _valid_payload()
-
-    payload["run_kind"] = np.asarray(run_kind)
-    payload["variant"] = np.asarray(variant)
-    payload["task_type"] = np.asarray(task_type)
-    payload["dataset_partition"] = np.asarray(dataset_partition)
-    payload["sequence_key"] = np.asarray(sequence_key)
-    payload["robot_type"] = np.asarray(robot_type)
-    payload["source_data_format"] = np.asarray(data_format)
-    payload["experiment_name"] = np.asarray("")
-    if object_name is not None:
-        payload["object_name"] = np.asarray(object_name)
-
-    config = json.loads(str(np.asarray(payload["config_json"]).item()))
-    config["run_kind"] = run_kind
-    config["experiment_name"] = None
-    config["variant"]["name"] = variant
-    config["dataset_partition"] = dataset_partition
-    config["sequence_key"] = sequence_key
-    config["config"]["task_type"] = task_type
-    config["config"]["data_format"] = data_format
-    config["config"]["robot_config"]["robot_type"] = robot_type
-    if object_name is not None:
-        config["config"]["task_config"]["object_name"] = object_name
-    _replace_config(payload, config)
-
+    resolved_object_name = object_name or (
+        "largebox" if task_type == "object_interaction" else "multi_boxes" if task_type == "climbing" else "ground"
+    )
+    config = {
+        "run_kind": run_kind,
+        "experiment_name": None,
+        "variant": {"name": variant},
+        "dataset_partition": dataset_partition,
+        "sequence_key": sequence_key,
+        "config": {
+            "task_type": task_type,
+            "data_format": data_format,
+            "robot_config": {"robot_type": robot_type},
+            "task_config": {"object_name": resolved_object_name},
+        },
+    }
+    frames = 2
+    human_joints = np.zeros((frames, 1, 3), dtype=np.float32)
+    qpos = np.zeros((frames, 30), dtype=np.float64)
+    qpos[:, 3] = 1.0
+    payload: dict[str, object] = {
+        "qpos": qpos,
+        "human_joints": human_joints,
+        "human_joint_names": np.asarray(("Hips",)),
+        "human_joint_parent_indices": np.asarray((-1,), dtype=np.int32),
+        "run_kind": np.asarray(run_kind),
+        "variant": np.asarray(variant),
+        "task_type": np.asarray(task_type),
+        "dataset_partition": np.asarray(dataset_partition),
+        "sequence_key": np.asarray(sequence_key),
+        "robot_type": np.asarray(robot_type),
+        "source_data_format": np.asarray(data_format),
+        "experiment_name": np.asarray(""),
+        "object_name": np.asarray(resolved_object_name),
+        "object_urdf": np.asarray(""),
+        "object_poses_demo": np.zeros((frames, 7), dtype=np.float32),
+        "object_poses_target": np.zeros((frames, 7), dtype=np.float32),
+        "foot_sticking_side_names": np.asarray(("left", "right")),
+        "foot_sticking_states": np.zeros((frames, 2), dtype=bool),
+        "foot_sticking_enabled_for_saved_trajectory": np.asarray(False),
+        "cost": np.asarray(0.0),
+        "fps": np.asarray(30.0),
+        "human_position_scale": np.asarray(1.0),
+        "config_json": np.asarray(json.dumps(config, separators=(",", ":"), sort_keys=True)),
+    }
     path.parent.mkdir(parents=True, exist_ok=True)
     if task_type in {"object_interaction", "climbing"}:
-        object_urdf = path.parent / f"{payload['object_name'].item()}.urdf"
+        object_urdf = path.parent / f"{resolved_object_name}.urdf"
         object_urdf.write_text(
             '<robot name="test_object"><link name="base"/></robot>',
             encoding="utf-8",
         )
-        _set_real_object_asset_manifest(payload, object_urdf)
-    write_result_artifact(path, payload)
+        payload["object_urdf"] = np.asarray(str(object_urdf))
+    np.savez_compressed(path, **payload)
 
 
 class OmomoDownstreamSceneTests(unittest.TestCase):
@@ -253,7 +256,6 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
             )
             np.savez(
                 sequence_dir / "trans_0.npz",
-                schema_version=np.int32(RESULT_SCHEMA_VERSION),
                 sequence_key=np.asarray("nested/sub1_suitcase_001"),
             )
             self._write_canonical_result(
@@ -276,26 +278,27 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
             np.savez(root / "sub2_tripod_019_trans_0.npz", qpos=np.zeros((1, 1)))
             np.savez(root / "sub2_tripod_019_ablation.npz", qpos=np.zeros((1, 1)))
 
-            with self.assertRaisesRegex(ValueError, "strict current-schema"):
+            with self.assertRaisesRegex(ValueError, "required by the evaluator"):
                 get_task_names(root, "robot_only")
 
-    def test_non_current_identity_does_not_silently_fall_back(self):
+    def test_unrecognized_metadata_does_not_gate_evaluation_discovery(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             identity_path = root / "canonical" / "sequence" / "identity.npz"
-            identity_path.parent.mkdir(parents=True)
-            np.savez(
+            _write_strict_evaluation_result(
                 identity_path,
-                schema_version=np.int32(RESULT_SCHEMA_VERSION - 1),
-                sequence_key=np.asarray("sequence"),
+                sequence_key="sequence",
+                task_type="object_interaction",
             )
-            np.savez(root / "sequence_original.npz", qpos=np.zeros((1, 1)))
+            with np.load(identity_path, allow_pickle=False) as saved:
+                payload = {key: np.asarray(saved[key]) for key in saved.files}
+            payload["unrecognized_metadata"] = np.asarray("ignored")
+            np.savez_compressed(identity_path, **payload)
 
-            with self.assertRaisesRegex(
-                ValueError,
-                f"schema_version={RESULT_SCHEMA_VERSION - 1}; expected {RESULT_SCHEMA_VERSION}",
-            ):
-                get_task_names(root, "robot_object")
+            task_names, files = get_task_names(root, "robot_object")
+
+        self.assertEqual(task_names, ["sequence"])
+        self.assertEqual(files, [str(identity_path)])
 
     def test_duplicate_sequence_keys_across_partitions_require_a_narrower_root(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -314,7 +317,7 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Select a narrower --res-dir"):
                 get_task_names(root, "robot_object")
 
-    def test_strict_identity_is_bound_to_requested_robot_and_format(self):
+    def test_evaluation_result_is_bound_to_requested_robot_and_format(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             result_path = Path(tmpdir) / "walk" / "identity.npz"
             _write_strict_evaluation_result(
@@ -344,14 +347,13 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
             identity_path.parent.mkdir(parents=True)
             np.savez(
                 identity_path,
-                schema_version=np.int32(RESULT_SCHEMA_VERSION),
                 run_kind=np.asarray("single"),
                 variant=np.asarray("identity"),
             )
 
             with self.assertRaisesRegex(
                 ValueError,
-                "Cannot validate canonical evaluation result",
+                "Cannot load evaluation result",
             ):
                 get_task_names(tmpdir, "robot_only")
 
@@ -363,7 +365,7 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
                 qpos=np.zeros((1, 1)),
             )
 
-            with self.assertRaisesRegex(ValueError, "strict current-schema"):
+            with self.assertRaisesRegex(ValueError, "required by the evaluator"):
                 get_task_names(root, "robot_terrain")
 
 
@@ -476,13 +478,6 @@ class EvaluationSavedTrajectoryMetricTests(unittest.TestCase):
 
 class OmomoAcceptanceHarnessTests(unittest.TestCase):
     def test_acceptance_matrix_validates_saved_qpos_and_metadata(self):
-        validated_qpos_dtypes = []
-
-        def validate_canonical_qpos_dtype(payload):
-            qpos_dtype = np.asarray(payload["qpos"]).dtype
-            self.assertEqual(qpos_dtype, np.dtype(np.float64))
-            validated_qpos_dtypes.append(qpos_dtype)
-
         def fake_retargeting(config):
             object_name = config.task_name.split("_")[1]
             output_path = build_retarget_job(config).output_path
@@ -515,12 +510,7 @@ class OmomoAcceptanceHarnessTests(unittest.TestCase):
             with patch(
                 "holosoma_retargeting.data_utils.validate_omomo_retargeting.run_retargeting",
                 fake_retargeting,
-            ), patch(
-                "holosoma_retargeting.data_utils.validate_omomo_retargeting.validate_result_artifact",
-                side_effect=validate_canonical_qpos_dtype,
-            ) as validate_artifact, patch(
-                "holosoma_retargeting.data_utils.validate_omomo_retargeting.validate_result_external_assets",
-            ) as validate_assets:
+            ):
                 report = run_acceptance(
                     data_dir,
                     root / "acceptance",
@@ -529,17 +519,16 @@ class OmomoAcceptanceHarnessTests(unittest.TestCase):
                     frame_count=2,
                     run_preflight=False,
                 )
+            qpos_dtypes = []
+            for result in report["results"]:
+                with np.load(result["result_path"], allow_pickle=False) as saved:
+                    qpos_dtypes.append(saved["qpos"].dtype)
 
         self.assertEqual(report["status"], "passed")
         self.assertEqual(report["expected_cases"], 2)
         self.assertEqual(report["passed_cases"], 2)
         self.assertEqual(report["failed_cases"], 0)
-        self.assertEqual(validate_artifact.call_count, 2)
-        self.assertEqual(validate_assets.call_count, 2)
-        self.assertEqual(
-            validated_qpos_dtypes,
-            [np.dtype(np.float64), np.dtype(np.float64)],
-        )
+        self.assertEqual(qpos_dtypes, [np.dtype(np.float64), np.dtype(np.float64)])
         self.assertTrue(
             all(
                 "/canonical/" not in result["result_path"] and result["result_path"].endswith("/identity.npz")

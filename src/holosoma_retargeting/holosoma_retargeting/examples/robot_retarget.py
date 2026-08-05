@@ -30,8 +30,8 @@ from holosoma_retargeting.retargeting_pipeline import (
     normalize_retargeting_config,
     planned_variants,
     resolve_task_object_name,
-    result_artifact_matches_job,
     run_retargeting_job,
+    saved_result_has_qpos,
     setup_object_data,
     validate_config,
 )
@@ -55,8 +55,8 @@ __all__ = [
     "normalize_retargeting_config",
     "planned_variants",
     "resolve_task_object_name",
-    "result_artifact_matches_job",
     "run_retargeting_job",
+    "saved_result_has_qpos",
     "setup_object_data",
     "validate_config",
 ]

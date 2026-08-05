@@ -189,7 +189,7 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
         self.assertTrue(jobs[0].variant.is_identity)
         self.assertEqual(jobs[0].run_kind, "single")
         self.assertTrue(all(job.run_kind == "augmentation" for job in jobs[1:]))
-        self.assertTrue(all(job.baseline_config_sha256 == jobs[0].config_sha256 for job in jobs[1:]))
+        self.assertTrue(all(job.baseline_path == jobs[0].output_path for job in jobs[1:]))
 
     def test_robot_only_is_rejected_by_augmentation_family(self):
         with self.assertRaisesRegex(
@@ -552,7 +552,7 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
             ("sub3_largebox_003", "trans_0"),
         )
 
-    def test_load_family_requires_synchronized_metadata(self):
+    def test_load_family_does_not_require_matching_result_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             directory = Path(tmpdir)
             self._write_result(directory / "sub3_largebox_003_original.npz")
@@ -565,8 +565,9 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
                 variants=("original", "trans_0"),
             )
 
-            with self.assertRaisesRegex(ValueError, "robot_type"):
-                load_result_family(config)
+            results = load_result_family(config)
+
+        self.assertEqual([result.robot_type for result in results], ["g1", "e1"])
 
     def test_qpos_interpolation_uses_shortest_quaternion_arc(self):
         qpos = np.zeros((2, 43), dtype=np.float32)
@@ -969,6 +970,8 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
             robot_root=object(),
             object_visual=object_visual,
             object_root=object(),
+            contains_object=True,
+            qpos_to_viser_joint_indices=None,
             robot_skeleton=robot_skeleton,
             orientation_overlay=orientation_overlay,
         )
@@ -1121,7 +1124,7 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
                 mapped_human_joint_names=np.asarray(mapped_joint_names),
                 mapped_robot_joints=np.zeros((2, 3, 3), dtype=np.float32),
                 mapped_robot_link_names=np.asarray(
-                    ("torso_link", "left_shoulder_pitch_link", "right_shoulder_pitch_link")
+                    ("torso_link", "left_shoulder_yaw_link", "right_shoulder_yaw_link")
                 ),
             )
 

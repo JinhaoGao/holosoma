@@ -24,7 +24,6 @@ from holosoma_retargeting.visualization.multi_scene import (
 )
 from holosoma_retargeting.visualization.result_loader import (
     discover_variant_paths,
-    validate_requested_family_variants,
 )
 
 
@@ -63,13 +62,10 @@ def resolve_multi_config(config: MultiViserConfig) -> MultiResultViserConfig:
 
 
 def make_multi_result_player(config: MultiViserConfig):
-    """Load compatible motions and build their shared-timeline Viser scene."""
+    """Load motions and build their shared-timeline Viser scene."""
 
     resolved = resolve_multi_config(config)
     labels, results = load_comparison_results(resolved)
-    if config.family is not None:
-        requested_variants = config.variants or tuple(result.variant for result in results)
-        validate_requested_family_variants(results, requested_variants)
     return _make_multi_result_player(resolved, labels, results)
 
 

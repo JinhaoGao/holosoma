@@ -81,10 +81,61 @@ def _save_standard_npz(
         coordinate_system = "right_handed_z_up" if data_format in {"amass", "gvhmr"} else "z_up"
         payload["quaternion_convention"] = np.asarray("wxyz")
         payload["coordinate_system"] = np.asarray(coordinate_system)
-        if data_format in {"amass", "gvhmr"}:
+        if data_format in {"amass", "fbx_mocap", "gvhmr"}:
             payload["orientation_coordinate_system"] = np.asarray(
                 coordinate_system,
             )
+        if data_format == "fbx_mocap":
+            payload["source_coordinate_system"] = np.asarray(
+                "fbx_global_settings_y_up_centimetres",
+            )
+            payload["source_fbx_up_axis"] = np.int8(1)
+            payload["source_fbx_up_axis_sign"] = np.int8(1)
+            payload["source_fbx_front_axis"] = np.int8(2)
+            payload["source_fbx_front_axis_sign"] = np.int8(1)
+            payload["source_fbx_coord_axis"] = np.int8(0)
+            payload["source_fbx_coord_axis_sign"] = np.int8(1)
+            payload["source_fbx_unit_scale_factor"] = np.float32(1.0)
+            payload["source_anatomical_left_axis"] = np.asarray(
+                "positive_x_from_named_bind_joints",
+            )
+            payload["source_anatomical_forward_axis"] = np.asarray(
+                "positive_z_from_named_bind_toes",
+            )
+            payload["position_coordinate_transform"] = np.asarray(
+                "metres_x_negative_z_y_and_initial_hips_xy_recenter",
+            )
+            payload["orientation_coordinate_transform"] = np.asarray(
+                "basis_conjugation_rx_plus_90_right_handed",
+            )
+            payload["root_frame_to_robot_base_quaternion_wxyz"] = np.asarray(
+                [2**-0.5, 0.0, 0.0, -(2**-0.5)],
+                dtype=np.float32,
+            )
+            t_pose_names = tuple(orientation_joint_names or ())
+            payload["t_pose_orientation_joint_names"] = np.asarray(t_pose_names, dtype=str)
+            t_pose_quaternions = np.zeros((len(t_pose_names), 4), dtype=np.float32)
+            t_pose_quaternions[:, 0] = 1.0
+            payload["t_pose_orientation_quaternions_wxyz"] = t_pose_quaternions
+            source_names = tuple(DEMO_JOINTS_REGISTRY[data_format])
+            source_quaternions = np.zeros(
+                (joints.shape[0], len(source_names), 4),
+                dtype=np.float32,
+            )
+            source_quaternions[..., 0] = 1.0
+            source_bind_quaternions = np.zeros(
+                (len(source_names), 4),
+                dtype=np.float32,
+            )
+            source_bind_quaternions[..., 0] = 1.0
+            payload["source_skeleton_joint_names"] = np.asarray(source_names, dtype=str)
+            payload["source_skeleton_parent_indices"] = np.asarray(
+                DEMO_JOINT_PARENT_INDICES[data_format],
+                dtype=np.int32,
+            )
+            payload["source_skeleton_positions"] = joints
+            payload["source_skeleton_quaternions_wxyz"] = source_quaternions
+            payload["source_skeleton_bind_quaternions_wxyz"] = source_bind_quaternions
     np.savez(path, **payload)
 
 
@@ -191,6 +242,7 @@ class MotionAdapterTests(unittest.TestCase):
     def test_all_registered_direct_orientation_npz_contracts_load(self):
         orientation_sources = {
             "amass": "direct_local_rotation_fk",
+            "fbx_mocap": "fbx_local_rotation_curves_fk",
             "gvhmr": "direct_local_rotation_fk",
             "lafan": "bvh_rotation_channels_fk",
             "mocap": "bone_rotation_channels_fk",
@@ -225,6 +277,20 @@ class MotionAdapterTests(unittest.TestCase):
                         motion.orientation_quaternions_wxyz,
                         quaternions,
                     )
+                    if data_format == "fbx_mocap":
+                        np.testing.assert_allclose(
+                            motion.root_frame_to_robot_base_quaternion_wxyz,
+                            (2**-0.5, 0.0, 0.0, -(2**-0.5)),
+                            atol=1e-7,
+                        )
+                        self.assertEqual(
+                            motion.t_pose_orientation_joint_names,
+                            (orientation_name,),
+                        )
+                        np.testing.assert_allclose(
+                            motion.t_pose_orientation_quaternions_wxyz,
+                            ((1.0, 0.0, 0.0, 0.0),),
+                        )
 
     def test_direct_orientation_npz_metadata_tampering_fails_loudly(self):
         cases = (

@@ -4,20 +4,25 @@
 
 from __future__ import annotations
 
-import json
-import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal, cast
+
+import tyro
 
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.config_types.retargeter import RetargeterConfig
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.task import TaskConfig
+from holosoma_retargeting.config_types.weight_profiles import (
+    resolve_natural_pose,
+    resolve_orientation_weights,
+)
 
 TaskType = Literal["robot_only", "object_interaction", "climbing"]
 DatasetName = Literal[
     "climbing",
+    "fbx_mocap",
     "gvhmr",
     "lafan",
     "noetix_csv_climb",
@@ -27,16 +32,17 @@ DatasetName = Literal[
 
 DATASET_DATA_FORMATS: dict[str, str] = {
     "climbing": "mocap",
+    "fbx_mocap": "fbx_mocap",
     "gvhmr": "gvhmr",
     "lafan": "lafan",
     "noetix_csv_climb": "mocap",
     "noetix_mocap": "noetix_mocap",
     "OMOMO_new": "omomo",
 }
-
 _DEMO_DATA_ROOT = Path(__file__).resolve().parents[1] / "demo_data"
 DATASET_DEFAULT_PATHS: dict[str, Path] = {
     "climbing": _DEMO_DATA_ROOT / "climb",
+    "fbx_mocap": _DEMO_DATA_ROOT / "fbx_mocap",
     "gvhmr": _DEMO_DATA_ROOT / "gvhmr",
     "lafan": _DEMO_DATA_ROOT / "lafan",
     "noetix_csv_climb": _DEMO_DATA_ROOT / "noetix_csv_climb",
@@ -62,11 +68,23 @@ def validate_production_task(
     if task not in SUPPORTED_TASK_DATASETS:
         choices = ", ".join(SUPPORTED_TASK_DATASETS)
         raise ValueError(f"Unknown task {task!r}; choose one of: {choices}")
-    if dataset not in SUPPORTED_TASK_DATASETS[task]:
-        supported = ", ".join(sorted(SUPPORTED_TASK_DATASETS[task]))
+    task_type = cast("TaskType", task)
+    if dataset not in SUPPORTED_TASK_DATASETS[task_type]:
+        supported = ", ".join(sorted(SUPPORTED_TASK_DATASETS[task_type]))
         raise ValueError(f"task={task!r} supports dataset presets: {supported}")
     if task != "robot_only" and robot != "g1":
         raise ValueError(f"task={task!r} is supported only on robot='g1'")
+
+
+@dataclass(frozen=True)
+class RetargeterRuntimeOptions:
+    """Small public option group for live retargeting inspection."""
+
+    visualize: bool = True
+    """Show the live Viser viewer. Use --retargeter.no-visualize for headless runs."""
+
+    debug: bool = False
+    """Show mapped human/robot keypoints, hands, skeletons, and object points."""
 
 
 @dataclass(frozen=True)
@@ -94,87 +112,43 @@ class RetargetingCommand:
     overwrite: bool = False
     """Replace an existing result for the exact same motion and configuration."""
 
-    orientation: bool = False
-    """Enable T-pose-calibrated link orientation tracking with equal weights."""
+    foot_sticking: Literal[True, False] = True
+    """Enable or completely disable the foot-sticking XY hard constraints."""
 
-    orientation_config: Path | None = None
-    """Optional JSON file containing per-human-keypoint or per-robot-link weights."""
-
-
-def _orientation_weights_from_command(
-    command: RetargetingCommand,
-    *,
-    data_format: str,
-) -> dict[str, float]:
-    """Resolve the compact orientation switch/profile into solver weights."""
-
-    motion = MotionDataConfig(
-        data_format=data_format,
-        robot_type=command.robot,
+    retargeter: RetargeterRuntimeOptions = field(
+        default_factory=RetargeterRuntimeOptions,
     )
-    mapping = motion.resolved_orientation_joints_mapping
-    if not mapping:
-        raise ValueError(
-            f"dataset={command.dataset!r} has no orientation mapping for robot={command.robot!r}",
-        )
+    """Live visualization options."""
 
-    profile_enabled = False
-    configured_weights: object = None
-    if command.orientation_config is not None:
-        profile_path = command.orientation_config.expanduser()
-        if profile_path.suffix.lower() != ".json":
-            raise ValueError("orientation_config must be a JSON file")
-        try:
-            with profile_path.open(encoding="utf-8") as profile_file:
-                profile = json.load(profile_file)
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Cannot read orientation_config {profile_path}: {exc}") from exc
-        if not isinstance(profile, dict):
-            raise ValueError("orientation_config must contain one JSON object")
-        unknown_fields = sorted(set(profile).difference({"enabled", "weights"}))
-        if unknown_fields:
-            raise ValueError(f"orientation_config contains unknown fields: {unknown_fields}")
-        profile_enabled = profile.get("enabled", True)
-        if not isinstance(profile_enabled, bool):
-            raise ValueError("orientation_config field 'enabled' must be a boolean")
-        configured_weights = profile.get("weights")
+    orientation_weights: Annotated[
+        float | None,
+        tyro.conf.arg(aliases=("--orientation_weights",)),
+    ] = None
+    """Uniform non-negative weight for every mapped link. None keeps the
+    orientation objective disabled."""
 
-    enabled = command.orientation or profile_enabled
-    if not enabled:
-        return {}
-    if configured_weights is None:
-        return dict.fromkeys(mapping, 1.0)
-    if not isinstance(configured_weights, dict):
-        raise ValueError("orientation_config field 'weights' must be an object")
+    orientation_config: Annotated[
+        Path | None,
+        tyro.conf.arg(aliases=("--orientation_config",)),
+    ] = None
+    """Robot-specific JSON file or directory with per-link orientation weights."""
 
-    link_to_human = {robot_link: human_joint for human_joint, robot_link in mapping.items()}
-    weights: dict[str, float] = {}
-    for configured_name, raw_weight in configured_weights.items():
-        if not isinstance(configured_name, str):
-            raise ValueError("orientation_config weight names must be strings")
-        if configured_name in mapping:
-            human_joint = configured_name
-        elif configured_name in link_to_human:
-            human_joint = link_to_human[configured_name]
-        else:
-            raise ValueError(
-                f"orientation_config weight {configured_name!r} is neither a mapped human keypoint nor robot link",
-            )
-        if human_joint in weights:
-            raise ValueError(
-                f"orientation_config defines {human_joint!r} more than once through keypoint/link aliases",
-            )
-        if isinstance(raw_weight, bool) or not isinstance(raw_weight, (int, float)):
-            raise ValueError(f"orientation weight for {configured_name!r} must be a number")
-        weight = float(raw_weight)
-        if not math.isfinite(weight) or weight < 0.0:
-            raise ValueError(
-                f"orientation weight for {configured_name!r} must be finite and non-negative",
-            )
-        weights[human_joint] = weight
-    if not weights or not any(weight > 0.0 for weight in weights.values()):
-        raise ValueError("enabled orientation tracking requires at least one positive weight")
-    return weights
+    orientation_preview: bool = False
+    """Save per-link frame-alignment overlays without enabling orientation costs."""
+
+    nature_weights: Annotated[
+        float | None,
+        tyro.conf.arg(aliases=("--nature_weights",)),
+    ] = None
+    """Uniform non-negative natural-pose weight for every actuated joint.
+    None keeps the natural-pose objective disabled."""
+
+    nature_config: Annotated[
+        Path | None,
+        tyro.conf.arg(aliases=("--nature_config",)),
+    ] = None
+    """Robot-specific JSON file or directory with natural references and
+    per-joint weights."""
 
 
 def internal_config_from_command(command: RetargetingCommand) -> RetargetingConfig:
@@ -192,6 +166,18 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         robot=command.robot,
         dataset=dataset,
     )
+    orientation_weights = resolve_orientation_weights(
+        robot=command.robot,
+        dataset=dataset,
+        data_format=data_format,
+        uniform_weight=command.orientation_weights,
+        config_path=command.orientation_config,
+    )
+    natural_pose = resolve_natural_pose(
+        robot=command.robot,
+        uniform_weight=command.nature_weights,
+        config_path=command.nature_config,
+    )
     return RetargetingConfig(
         task_type=command.task,
         robot=command.robot,
@@ -202,10 +188,13 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         save_dir=command.save_dir,
         overwrite_existing=command.overwrite,
         retargeter=RetargeterConfig(
-            orientation_weights=_orientation_weights_from_command(
-                command,
-                data_format=data_format,
-            ),
+            visualize=command.retargeter.visualize,
+            debug=command.retargeter.debug,
+            activate_foot_sticking=command.foot_sticking,
+            orientation_weights=orientation_weights,
+            orientation_preview=command.orientation_preview,
+            natural_pose_joint_positions=natural_pose.references,
+            natural_pose_weights=natural_pose.weights,
         ),
     )
 
@@ -231,7 +220,7 @@ class RetargetingConfig:
     data_format: str | None = None
     """Motion data format. Auto-determined by task_type if None.
     Can be any format registered in DEMO_JOINTS_REGISTRY
-    (amass, lafan, omomo, noetix_mocap, gvhmr, or mocap)."""
+    (amass, fbx_mocap, lafan, omomo, noetix_mocap, gvhmr, or mocap)."""
 
     task_name: str = "sub3_largebox_003"
     """Name of the task/sequence."""

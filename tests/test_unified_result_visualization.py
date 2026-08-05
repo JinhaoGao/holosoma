@@ -1,8 +1,7 @@
-# ruff: noqa: CPY001, E402, PT009, PT027, SIM117
+# ruff: noqa: CPY001, E402, PT009, PT027
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import sys
 import tempfile
@@ -21,19 +20,14 @@ from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.viser import ViserConfig
 from holosoma_retargeting.multi_viser_player import (
     MultiViserConfig,
-    make_multi_result_player,
     resolve_multi_config,
-)
-from holosoma_retargeting.result_artifact import (
-    RESULT_SCHEMA_VERSION,
-    compute_human_orientation_sha256,
-    write_result_artifact,
 )
 from holosoma_retargeting.src.viser_utils import (
     actuated_joint_names_from_mujoco_xml,
     actuated_joint_names_from_urdf,
 )
 from holosoma_retargeting.viser_player import (
+    MappedSkeletonOverlay,
     _build_mapped_skeleton_overlay,
     _build_orientation_overlay,
     _build_qpos_to_viser_joint_indices,
@@ -57,10 +51,6 @@ from holosoma_retargeting.visualization.result_loader import (
     resolve_qpos_to_viser_joint_indices,
     variant_result_metadata,
 )
-from test_result_artifact import (
-    _set_real_object_asset_manifest,
-    _valid_payload,
-)
 
 
 def _identity_quaternions(frames: int, items: int) -> np.ndarray:
@@ -81,42 +71,29 @@ def _refresh_config_identity(payload: dict[str, object]) -> None:
     solver_config["task_type"] = str(np.asarray(payload["task_type"]).item())
     solver_config.setdefault("robot_config", {})["robot_type"] = str(np.asarray(payload["robot_type"]).item())
     solver_config.setdefault("task_config", {})["object_name"] = str(np.asarray(payload["object_name"]).item())
-    retargeter_config = solver_config.setdefault("retargeter", {})
-    payload["frame_zero_ground_retry_eligible"] = np.asarray(
-        bool(
-            retargeter_config.get(
-                "retry_frame_zero_ground_on_infeasible",
-                False,
-            )
-        )
-        and solver_config["task_type"] == "robot_only"
-        and decoded["run_kind"] in {"single", "ablation"}
-        and 7 + int(retargeter_config.get("q_a_init_idx", 0)) <= 2
-    )
     config_json = json.dumps(
         decoded,
         separators=(",", ":"),
         sort_keys=True,
     )
     payload["config_json"] = np.asarray(config_json)
-    payload["config_sha256"] = np.asarray(hashlib.sha256(config_json.encode("utf-8")).hexdigest())
 
 
-def _refresh_human_orientation_identity(
+def _set_real_object_asset_manifest(
     payload: dict[str, object],
+    object_urdf: Path,
 ) -> None:
-    if "human_orientation_joint_names" not in payload or "human_orientation_quaternions_wxyz" not in payload:
-        payload.pop("human_orientation_sha256", None)
-        return
-    payload["human_orientation_sha256"] = np.asarray(
-        compute_human_orientation_sha256(
-            np.asarray(payload["human_orientation_joint_names"]),
-            np.asarray(
-                payload["human_orientation_quaternions_wxyz"],
-                dtype=np.float32,
-            ),
-        )
-    )
+    payload["object_urdf"] = np.asarray(str(object_urdf))
+
+
+def write_loose_result(
+    path: str | Path,
+    payload: dict[str, object],
+) -> Path:
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(destination, **payload)
+    return destination
 
 
 def _result_payload(
@@ -141,37 +118,64 @@ def _result_payload(
     )
     qpos = np.zeros((2, 7), dtype=np.float64)
     qpos[:, 3] = 1.0
-    payload = _valid_payload()
-    payload.update(
+    config_json = json.dumps(
         {
+            "config": {
+                "data_format": "gvhmr",
+                "task_type": "robot_only",
+                "robot_config": {"robot_type": "g1"},
+                "task_config": {"object_name": "ground"},
+            },
+            "run_kind": "single",
+            "variant": {"name": variant},
+            "experiment_name": None,
+            "dataset_partition": "gvhmr",
+            "sequence_key": "sequence",
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    payload: dict[str, object] = {
             "variant": np.asarray(variant),
+            "run_kind": np.asarray("single"),
             "dataset_partition": np.asarray("gvhmr"),
             "sequence_key": np.asarray("sequence"),
             "experiment_name": np.asarray(""),
             "source_path": np.asarray("/dataset/sequence.npz"),
+            "config_json": np.asarray(config_json),
             "source_data_format": np.asarray("gvhmr"),
             "robot_type": np.asarray("g1"),
             "task_type": np.asarray("robot_only"),
             "object_name": np.asarray("ground"),
             "object_urdf": np.asarray(""),
             "qpos": qpos,
-            "human_joints": human_joints,
-            "human_joint_names": np.asarray(("Hips", "Spine", "LeftHand")),
+            "human_joints": human_joints[:, (0, 2)],
+            "human_joint_names": np.asarray(("Hips", "LeftHand")),
             "human_joint_parent_indices": np.asarray(
-                (-1, 0, 1),
+                (-1, 0),
                 dtype=np.int32,
             ),
             "mapped_human_joints": human_joints[:, (0, 2)],
             "mapped_human_joint_names": np.asarray(("Hips", "LeftHand")),
             "mapped_robot_joints": robot_link_positions[:, (0, 2)],
             "mapped_robot_link_names": np.asarray(("base", "left_hand")),
-            "robot_link_positions": robot_link_positions,
-            "robot_link_quaternions_wxyz": _identity_quaternions(2, 3),
-            "robot_link_names": np.asarray(("base", "torso", "left_hand")),
+            "human_points_world": human_joints[:, (0, 2)],
+            "robot_points_world": robot_link_positions[:, (0, 2)],
+            "terrain_points_world": np.empty((2, 0, 3), dtype=np.float32),
+            "robot_link_positions": robot_link_positions[:, (0, 2)],
+            "robot_link_quaternions_wxyz": _identity_quaternions(2, 2),
+            "robot_link_names": np.asarray(("base", "left_hand")),
             "robot_link_parent_indices": np.asarray(
-                (-1, 0, 1),
+                (-1, 0),
                 dtype=np.int32,
             ),
+            "object_poses_demo": np.zeros((2, 7), dtype=np.float32),
+            "object_poses_target": np.zeros((2, 7), dtype=np.float32),
+            "object_pose_layout": np.asarray("xyz_wxyz"),
+            "foot_sticking_side_names": np.asarray(("left", "right")),
+            "foot_sticking_states": np.zeros((2, 2), dtype=bool),
+            "foot_sticking_tolerance": np.asarray(1e-3),
+            "foot_sticking_enabled_for_saved_trajectory": np.asarray(False),
             "interaction_source_vertices_w": human_joints[:, (0, 2)],
             "interaction_target_vertices_w": (robot_link_positions[:, (0, 2)]),
             "interaction_tetrahedra": np.empty(
@@ -185,8 +189,12 @@ def _result_payload(
             "interaction_num_human_vertices": np.int32(2),
             "interaction_num_object_vertices": np.int32(0),
             "interaction_mesh_edges_default": np.asarray("cross"),
+            "contains_object_in_qpos": np.asarray(False),
+            "fps": np.asarray(30.0),
+            "cost": np.asarray(0.5),
+            "source_human_height": np.asarray(1.78),
+            "human_position_scale": np.asarray(1.0),
         }
-    )
     if include_source_orientations:
         payload.update(
             {
@@ -195,11 +203,9 @@ def _result_payload(
                 "orientation_source": np.asarray("direct_local_rotation_fk"),
             }
         )
-        _refresh_human_orientation_identity(payload)
     else:
         payload.pop("human_orientation_joint_names", None)
         payload.pop("human_orientation_quaternions_wxyz", None)
-        payload.pop("human_orientation_sha256", None)
         payload["orientation_source"] = np.asarray("absent")
     if include_diagnostics:
         payload.update(
@@ -355,10 +361,9 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                 payload = _result_payload(variant=variant)
                 payload["task_type"] = np.asarray("climbing")
                 payload["object_name"] = np.asarray("multi_boxes")
-                payload["object_non_penetration_eligible_for_saved_trajectory"] = np.asarray(True)
                 _set_real_object_asset_manifest(payload, object_urdf)
                 _refresh_config_identity(payload)
-                write_result_artifact(root / f"{variant}.npz", payload)
+                write_loose_result(root / f"{variant}.npz", payload)
 
             resolved = resolve_multi_config(MultiViserConfig(family=root))
             labels, results = load_comparison_results(resolved)
@@ -382,7 +387,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             )
             for path in paths:
                 path.parent.mkdir()
-                write_result_artifact(path, _result_payload())
+                write_loose_result(path, _result_payload())
 
             labels, _results = load_comparison_results(
                 MultiResultViserConfig(qpos_npzs=paths),
@@ -395,7 +400,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             root = Path(tmpdir)
             result_path = root / "identity.npz"
             alias_path = root / "identity_alias.npz"
-            write_result_artifact(result_path, _result_payload())
+            write_loose_result(result_path, _result_payload())
             alias_path.symlink_to(result_path)
 
             with self.assertRaisesRegex(
@@ -420,46 +425,35 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                 )
             )
 
-    def test_strict_family_rejects_requested_and_saved_variant_mismatch(self):
+    def test_family_discovery_uses_filenames_without_a_metadata_audit(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            write_result_artifact(
+            write_loose_result(
                 root / "identity.npz",
                 _result_payload(variant="identity"),
             )
-            write_result_artifact(
+            write_loose_result(
                 root / "rot_0.npz",
                 _result_payload(variant="trans_0"),
             )
-            family_config = AugmentationViserConfig(
-                qpos_npz=root,
-                variants=("identity", "rot_0"),
-            )
-            multi_config = MultiViserConfig(
-                family=root,
-                variants=("identity", "rot_0"),
+            resolved = resolve_multi_config(MultiViserConfig(family=root))
+            results = load_result_family(
+                AugmentationViserConfig(
+                    qpos_npz=root,
+                    variants=("identity", "rot_0"),
+                )
             )
 
-            with self.assertRaisesRegex(
-                ValueError,
-                "filename must be 'trans_0.npz'",
-            ):
-                resolve_multi_config(MultiViserConfig(family=root))
-            with self.assertRaisesRegex(
-                ValueError,
-                "family variant identity mismatch",
-            ):
-                load_result_family(family_config)
-            with self.assertRaisesRegex(
-                ValueError,
-                "family variant identity mismatch",
-            ):
-                make_multi_result_player(multi_config)
+        self.assertEqual(
+            resolved.qpos_npzs,
+            (root / "identity.npz", root / "rot_0.npz"),
+        )
+        self.assertEqual([result.variant for result in results], ["identity", "rot_0"])
 
     def test_strict_family_accepts_original_as_identity_alias(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            write_result_artifact(
+            write_loose_result(
                 root / "identity.npz",
                 _result_payload(variant="identity"),
             )
@@ -480,18 +474,8 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             foot_states = np.asarray(payload["foot_sticking_states"]).copy()
             foot_states[0, 0] = True
             payload["foot_sticking_states"] = foot_states
-            payload["constraint_mode_foot_sticking"] = np.asarray(
-                ("normal", "inactive"),
-            )
-            payload["constraint_mode_trust_region_released"] = np.asarray(
-                (True, False),
-            )
-            payload["foot_sticking_violation"] = np.asarray(
-                (5e-7, 0.0),
-                dtype=np.float64,
-            )
             payload["interaction_mesh_edges_default"] = np.asarray("all")
-            write_result_artifact(path, payload)
+            write_loose_result(path, payload)
 
             result = load_variant_result("requested-label", path)
             qpos, fps, human_joints, metadata, interaction_mesh = load_npz(str(path))
@@ -502,12 +486,8 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(result.schema_version, RESULT_SCHEMA_VERSION)
-        self.assertEqual(result.variant, "identity")
-        self.assertEqual(result.source_path, "/dataset/sequence.npz")
-        self.assertEqual(result.source_sha256, "a" * 64)
+        self.assertEqual(result.variant, "requested-label")
         self.assertIsNotNone(result.config_json)
-        self.assertRegex(result.config_sha256 or "", r"^[0-9a-f]{64}$")
         self.assertEqual(result.dataset_partition, "gvhmr")
         self.assertEqual(result.sequence_key, "sequence")
         self.assertIsNone(result.experiment_name)
@@ -519,7 +499,6 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             result.orientation_source,
             "direct_local_rotation_fk",
         )
-        self.assertIsNotNone(result.human_orientation_sha256)
         self.assertEqual(result.robot_actuated_joint_names, ())
         self.assertEqual(
             result.human_orientation_joint_names,
@@ -547,69 +526,16 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
         self.assertEqual(result.terrain_points_world.shape, (2, 0, 3))
         self.assertIsNotNone(result.interaction_mesh)
         self.assertEqual(result.interaction_mesh_edges_default, "all")
-        np.testing.assert_array_equal(
-            result.constraint_mode_foot_sticking,
-            np.asarray(("normal", "inactive")),
-        )
-        np.testing.assert_array_equal(
-            result.constraint_mode_object_non_penetration_released,
-            np.asarray((False, False)),
-        )
-        np.testing.assert_array_equal(
-            result.constraint_mode_trust_region_released,
-            np.asarray((True, False)),
-        )
-        np.testing.assert_array_equal(
-            result.foot_sticking_violation,
-            np.asarray((5e-7, 0.0), dtype=np.float64),
-        )
-        for residual in (
-            result.ground_non_penetration_violation,
-            result.object_non_penetration_violation,
-            result.foot_lock_violation,
-            result.self_collision_violation,
-            result.joint_limits_violation,
-        ):
-            np.testing.assert_array_equal(
-                residual,
-                np.zeros(2, dtype=np.float64),
-            )
-        np.testing.assert_array_equal(
-            result.object_non_penetration_release_frames,
-            np.empty(0, dtype=np.int32),
-        )
-        self.assertFalse(
-            result.release_object_non_penetration_on_infeasible,
-        )
-        self.assertFalse(
-            result.object_non_penetration_eligible_for_saved_trajectory,
-        )
-        self.assertEqual(
-            result.frame_zero_ground_retry,
-            {
-                "policy": "robot_only_frame_zero_horizontal_ground_lift_v1",
-                "eligible": True,
-                "triggered": False,
-                "initial_min_distance_m": 0.0,
-                "corrected_min_distance_m": 0.0,
-                "lift_m": 0.0,
-                "interior_margin_m": 0.0,
-                "initial_sqp_iterations": 0,
-            },
-        )
         self.assertEqual(qpos.shape, (2, 7))
         self.assertEqual(human_joints.shape, (2, 2, 3))
         self.assertEqual(fps, 30.0)
-        self.assertEqual(metadata["schema_version"], RESULT_SCHEMA_VERSION)
-        self.assertEqual(metadata["source_sha256"], "a" * 64)
-        self.assertEqual(metadata["config_sha256"], result.config_sha256)
         self.assertEqual(metadata["dataset_partition"], "gvhmr")
         self.assertEqual(metadata["sequence_key"], "sequence")
         self.assertEqual(
             metadata["orientation_source"],
             "direct_local_rotation_fk",
         )
-        self.assertEqual(metadata["robot_actuated_joint_names"], [])
+        self.assertIsNone(metadata["robot_actuated_joint_names"])
         np.testing.assert_array_equal(
             metadata["human_joint_parent_indices"],
             np.asarray((-1, 0), dtype=np.int32),
@@ -625,39 +551,9 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
         )
         self.assertEqual(metadata["terrain_points_world"].shape, (2, 0, 3))
         self.assertEqual(metadata["interaction_mesh_edges_default"], "all")
-        np.testing.assert_array_equal(
-            metadata["constraint_mode_foot_sticking"],
-            np.asarray(("normal", "inactive")),
-        )
-        np.testing.assert_array_equal(
-            metadata["constraint_mode_trust_region_released"],
-            np.asarray((True, False)),
-        )
-        np.testing.assert_array_equal(
-            metadata["foot_sticking_violation"],
-            np.asarray((5e-7, 0.0), dtype=np.float64),
-        )
-        np.testing.assert_array_equal(
-            metadata["object_non_penetration_release_frames"],
-            np.empty(0, dtype=np.int32),
-        )
         self.assertEqual(metadata["foot_sticking"]["tolerance"], 1e-3)
-        self.assertEqual(
-            metadata["foot_sticking"]["fallback_tolerance"],
-            0.02,
-        )
-        self.assertTrue(metadata["foot_sticking"]["release_on_infeasible"])
-        self.assertEqual(
-            metadata["foot_sticking"]["full_sequence_retry_frame"],
-            -1,
-        )
-        self.assertEqual(
-            metadata["frame_zero_ground_retry"],
-            result.frame_zero_ground_retry,
-        )
         self.assertIsNotNone(interaction_mesh)
         self.assertEqual(labels, ("baseline",))
-        self.assertEqual(comparison_results[0].schema_version, RESULT_SCHEMA_VERSION)
         np.testing.assert_array_equal(
             comparison_results[0].robot_link_quaternions_wxyz,
             result.robot_link_quaternions_wxyz,
@@ -674,14 +570,11 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             payload = _result_payload()
             payload["task_type"] = np.asarray("climbing")
             payload["object_name"] = np.asarray("multi_boxes")
-            payload["object_non_penetration_eligible_for_saved_trajectory"] = np.asarray(
-                True,
-            )
             _set_real_object_asset_manifest(payload, object_urdf)
             _refresh_config_identity(payload)
             result_path = root / "identity.npz"
 
-            write_result_artifact(result_path, payload)
+            write_loose_result(result_path, payload)
             result = load_variant_result("identity", result_path)
             metadata = variant_result_metadata(result)
 
@@ -694,25 +587,10 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             payload["object_poses_target"],
         )
         self.assertEqual(result.object_pose_layout, "xyz_wxyz")
-        self.assertEqual(
-            result.object_urdf_sha256,
-            str(np.asarray(payload["object_urdf_sha256"]).item()),
-        )
-        self.assertEqual(
-            result.object_asset_manifest_json,
-            str(np.asarray(payload["object_asset_manifest_json"]).item()),
-        )
-        self.assertEqual(
-            result.object_asset_manifest_sha256,
-            str(np.asarray(payload["object_asset_manifest_sha256"]).item()),
-        )
         for field in (
             "object_poses_demo",
             "object_poses_target",
             "object_pose_layout",
-            "object_urdf_sha256",
-            "object_asset_manifest_json",
-            "object_asset_manifest_sha256",
         ):
             if isinstance(metadata[field], np.ndarray):
                 np.testing.assert_array_equal(
@@ -750,9 +628,6 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                         "task_type": np.asarray("climbing"),
                         "object_name": np.asarray("multi_boxes"),
                         "contains_object_in_qpos": np.asarray(False),
-                        "object_non_penetration_eligible_for_saved_trajectory": np.asarray(
-                            True,
-                        ),
                     }
                 )
                 _set_real_object_asset_manifest(payload, asset_path)
@@ -766,7 +641,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                     )
                 )
                 _refresh_config_identity(payload)
-                write_result_artifact(result_path, payload)
+                write_loose_result(result_path, payload)
             results = [
                 load_variant_result(label, path)
                 for label, path in zip(
@@ -801,13 +676,9 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
         self.assertEqual(overridden, (override, override))
         self.assertEqual(len(family), 2)
         self.assertEqual(len(comparison), 2)
-        self.assertNotEqual(
-            family[0].config_sha256,
-            family[1].config_sha256,
-        )
         self.assertNotEqual(family[0].object_urdf, family[1].object_urdf)
 
-    def test_strict_loader_validates_saved_asset_closure_before_honoring_override(self):
+    def test_visualization_loader_does_not_audit_saved_asset_closure(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             mesh = root / "mesh.obj"
@@ -829,181 +700,55 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             payload = _result_payload()
             payload["task_type"] = np.asarray("climbing")
             payload["object_name"] = np.asarray("multi_boxes")
-            payload["object_non_penetration_eligible_for_saved_trajectory"] = np.asarray(
-                True,
-            )
             _set_real_object_asset_manifest(payload, object_urdf)
             _refresh_config_identity(payload)
-            write_result_artifact(result_path, payload)
+            write_loose_result(result_path, payload)
 
             load_variant_result("identity", result_path)
             mesh.write_bytes(b"tampered mesh")
 
-            with self.assertRaisesRegex(
-                ValueError,
-                "dependency closure differs",
-            ):
-                load_variant_result("identity", result_path)
-            with self.assertRaisesRegex(
-                ValueError,
-                "dependency closure differs",
-            ):
-                load_result_family(
-                    AugmentationViserConfig(
-                        qpos_npz=result_path,
-                        variants=("identity",),
-                        object_urdf=override,
-                    )
+            result = load_variant_result("identity", result_path)
+            family = load_result_family(
+                AugmentationViserConfig(
+                    qpos_npz=result_path,
+                    variants=("identity",),
+                    object_urdf=override,
                 )
-
-    def test_strict_family_and_comparison_reject_identity_mismatches(self):
-        def change_human_names(payload: dict[str, object]) -> None:
-            human_joints = np.asarray(payload["human_joints"]).copy()
-            payload["human_joints"] = human_joints[:, (2, 0, 1)]
-            payload["human_joint_names"] = np.asarray(("LeftHand", "Hips", "Spine"))
-            payload["human_joint_parent_indices"] = np.asarray(
-                (-1, 0, 1),
-                dtype=np.int32,
             )
 
-        def change_orientation_names(payload: dict[str, object]) -> None:
-            payload["human_orientation_joint_names"] = np.asarray(("LeftHand", "Hips"))
-            payload["human_orientation_quaternions_wxyz"] = np.asarray(payload["human_orientation_quaternions_wxyz"])[
-                :, ::-1
-            ].copy()
-            _refresh_human_orientation_identity(payload)
+            self.assertEqual(result.variant, "identity")
+            self.assertEqual(len(family), 1)
 
-        def change_orientation_tensor(payload: dict[str, object]) -> None:
-            quaternions = np.asarray(payload["human_orientation_quaternions_wxyz"]).copy()
-            quaternions[0, 0] = (0.0, 0.0, 0.0, 1.0)
-            payload["human_orientation_quaternions_wxyz"] = quaternions
-            _refresh_human_orientation_identity(payload)
-
-        def change_robot_topology_names(payload: dict[str, object]) -> None:
-            positions = np.asarray(payload["robot_link_positions"]).copy()
-            quaternions = np.asarray(
-                payload["robot_link_quaternions_wxyz"],
-            ).copy()
-            payload["robot_link_positions"] = positions[:, (2, 0, 1)]
-            payload["robot_link_quaternions_wxyz"] = quaternions[:, (2, 0, 1)]
-            payload["robot_link_names"] = np.asarray(("left_hand", "base", "torso"))
-            payload["robot_link_parent_indices"] = np.asarray(
-                (-1, 0, 1),
-                dtype=np.int32,
-            )
-
-        def change_task_type(payload: dict[str, object]) -> None:
-            payload["task_type"] = np.asarray("climbing")
-            payload["object_name"] = np.asarray("multi_boxes")
-            payload["object_non_penetration_eligible_for_saved_trajectory"] = np.asarray(
-                True,
-            )
-
-        mutations = (
-            (
-                "source_path",
-                lambda payload: payload.__setitem__(
-                    "source_path",
-                    np.asarray("/dataset/other-sequence.npz"),
-                ),
-            ),
-            (
-                "source_sha256",
-                lambda payload: payload.__setitem__(
-                    "source_sha256",
-                    np.asarray("b" * 64),
-                ),
-            ),
-            ("human_joint_names", change_human_names),
-            (
-                "human_orientation_joint_names",
-                change_orientation_names,
-            ),
-            (
-                "human_orientation_(sha256|quaternions_wxyz)",
-                change_orientation_tensor,
-            ),
-            ("robot_link_names", change_robot_topology_names),
-            (
-                "source_data_format",
-                lambda payload: payload.__setitem__(
-                    "source_data_format",
-                    np.asarray("amass"),
-                ),
-            ),
-            ("task_type", change_task_type),
-            (
-                "dataset_partition",
-                lambda payload: payload.__setitem__(
-                    "dataset_partition",
-                    np.asarray("other-partition"),
-                ),
-            ),
-            (
-                "sequence_key",
-                lambda payload: payload.__setitem__(
-                    "sequence_key",
-                    np.asarray("other-sequence"),
-                ),
-            ),
-        )
-
+    def test_family_and_comparison_ignore_result_identity_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            for index, (expected_field, mutate) in enumerate(mutations):
-                case_root = root / f"case_{index}"
-                case_root.mkdir()
-                identity_path = case_root / "identity.npz"
-                variant_path = case_root / "rot_0.npz"
-                identity_payload = _result_payload(variant="identity")
-                variant_payload = _result_payload(variant="rot_0")
-                mutate(variant_payload)
-                if expected_field == "task_type":
-                    object_urdf = case_root / "multi_boxes.urdf"
-                    object_urdf.write_text(
-                        "<robot name='object'><link name='object'/></robot>",
-                        encoding="utf-8",
-                    )
-                    _set_real_object_asset_manifest(
-                        variant_payload,
-                        object_urdf,
-                    )
-                _refresh_config_identity(variant_payload)
-                write_result_artifact(identity_path, identity_payload)
-                write_result_artifact(variant_path, variant_payload)
+            identity_path = root / "identity.npz"
+            variant_path = root / "rot_0.npz"
+            identity_payload = _result_payload(variant="identity")
+            variant_payload = _result_payload(variant="rot_0")
+            variant_payload["source_path"] = np.asarray("/dataset/other-sequence.npz")
+            variant_payload["dataset_partition"] = np.asarray("other-partition")
+            variant_payload["sequence_key"] = np.asarray("other-sequence")
+            _refresh_config_identity(variant_payload)
+            write_loose_result(identity_path, identity_payload)
+            write_loose_result(variant_path, variant_payload)
 
-                with self.subTest(
-                    field=expected_field,
-                    entry_point="family",
-                ):
-                    with self.assertRaisesRegex(
-                        ValueError,
-                        expected_field,
-                    ):
-                        load_result_family(
-                            AugmentationViserConfig(
-                                qpos_npz=identity_path,
-                                variants=("identity", "rot_0"),
-                            )
-                        )
-                with self.subTest(
-                    field=expected_field,
-                    entry_point="comparison",
-                ):
-                    with self.assertRaisesRegex(
-                        ValueError,
-                        expected_field,
-                    ):
-                        load_comparison_results(
-                            MultiResultViserConfig(
-                                qpos_npzs=(
-                                    identity_path,
-                                    variant_path,
-                                )
-                            )
-                        )
+            family = load_result_family(
+                AugmentationViserConfig(
+                    qpos_npz=identity_path,
+                    variants=("identity", "rot_0"),
+                )
+            )
+            _, comparison = load_comparison_results(
+                MultiResultViserConfig(
+                    qpos_npzs=(identity_path, variant_path),
+                )
+            )
 
-    def test_strict_family_rejects_saved_actuated_order_mismatch(self):
+        self.assertEqual([result.variant for result in family], ["identity", "rot_0"])
+        self.assertEqual(len(comparison), 2)
+
+    def test_family_loads_each_saved_actuated_order_independently(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             identity_path = root / "identity.npz"
@@ -1022,33 +767,28 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                 qpos[:, 3] = 1.0
                 payload["qpos"] = qpos
                 payload["robot_actuated_joint_names"] = np.asarray(names)
-                write_result_artifact(path, payload)
+                write_loose_result(path, payload)
 
-            with self.assertRaisesRegex(
-                ValueError,
-                "robot_actuated_joint_names",
-            ):
-                load_result_family(
-                    AugmentationViserConfig(
-                        qpos_npz=identity_path,
-                        variants=("identity", "rot_0"),
-                    )
+            family = load_result_family(
+                AugmentationViserConfig(
+                    qpos_npz=identity_path,
+                    variants=("identity", "rot_0"),
                 )
-            with self.assertRaisesRegex(
-                ValueError,
-                "robot_actuated_joint_names",
-            ):
-                load_comparison_results(MultiResultViserConfig(qpos_npzs=(identity_path, variant_path)))
+            )
+            _, comparison = load_comparison_results(MultiResultViserConfig(qpos_npzs=(identity_path, variant_path)))
 
-    def test_saved_joint_order_drives_strict_single_and_multi_mapping(self):
-        strict_indices = resolve_qpos_to_viser_joint_indices(
-            result_path="strict.npz",
-            schema_version=RESULT_SCHEMA_VERSION,
+        self.assertEqual(family[0].robot_actuated_joint_names, ("joint_a", "joint_b"))
+        self.assertEqual(family[1].robot_actuated_joint_names, ("joint_b", "joint_a"))
+        self.assertEqual(len(comparison), 2)
+
+    def test_saved_joint_order_drives_single_and_multi_mapping(self):
+        saved_indices = resolve_qpos_to_viser_joint_indices(
+            result_path="result.npz",
             saved_joint_names=("joint_b", "joint_a"),
             viser_joint_names=("joint_a", "joint_b"),
-            legacy_mujoco_xml=None,
+            fallback_mujoco_xml=None,
         )
-        np.testing.assert_array_equal(strict_indices, (1, 0))
+        np.testing.assert_array_equal(saved_indices, (1, 0))
 
         config = ViserConfig(
             qpos_npz="strict.npz",
@@ -1058,7 +798,6 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             config,
             ["joint_a", "joint_b"],
             {
-                "schema_version": RESULT_SCHEMA_VERSION,
                 "robot_actuated_joint_names": [
                     "joint_b",
                     "joint_a",
@@ -1069,11 +808,10 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "missing_from_result"):
             resolve_qpos_to_viser_joint_indices(
-                result_path="strict.npz",
-                schema_version=RESULT_SCHEMA_VERSION,
+                result_path="result.npz",
                 saved_joint_names=("joint_a",),
                 viser_joint_names=("joint_a", "joint_b"),
-                legacy_mujoco_xml=None,
+                fallback_mujoco_xml=None,
             )
 
     def test_packaged_robot_joint_orders_map_by_saved_names(self):
@@ -1085,10 +823,9 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             viser_names = tuple(actuated_joint_names_from_urdf(robot_urdf))
             mapping = resolve_qpos_to_viser_joint_indices(
                 result_path=f"{robot_type}.npz",
-                schema_version=RESULT_SCHEMA_VERSION,
                 saved_joint_names=saved_names,
                 viser_joint_names=viser_names,
-                legacy_mujoco_xml=None,
+                fallback_mujoco_xml=None,
             )
             mappings[robot_type] = mapping
             reordered = saved_names if mapping is None else tuple(saved_names[int(index)] for index in mapping)
@@ -1097,7 +834,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
         self.assertIsNone(mappings["g1"])
         self.assertIsNotNone(mappings["e1"])
 
-    def test_legacy_joint_order_recovery_is_explicit_and_not_strict(self):
+    def test_joint_order_falls_back_to_mujoco_xml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             xml_path = Path(tmpdir) / "robot.xml"
             xml_path.write_text(
@@ -1105,42 +842,39 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             recovered = resolve_qpos_to_viser_joint_indices(
-                result_path="legacy.npz",
-                schema_version=None,
+                result_path="result.npz",
                 saved_joint_names=(),
                 viser_joint_names=("joint_a", "joint_b"),
-                legacy_mujoco_xml=xml_path,
+                fallback_mujoco_xml=xml_path,
             )
 
         np.testing.assert_array_equal(recovered, (1, 0))
         with self.assertRaisesRegex(
             FileNotFoundError,
-            "legacy result.*robot-mujoco-xml",
+            "no robot_actuated_joint_names",
         ):
             resolve_qpos_to_viser_joint_indices(
-                result_path="legacy.npz",
-                schema_version=None,
+                result_path="result.npz",
                 saved_joint_names=(),
                 viser_joint_names=("joint_a", "joint_b"),
-                legacy_mujoco_xml=None,
+                fallback_mujoco_xml=None,
             )
 
-    def test_strict_and_legacy_results_cannot_share_a_comparison(self):
+    def test_schema_metadata_does_not_gate_a_comparison(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             strict_path = root / "strict.npz"
             legacy_path = root / "legacy.npz"
             payload = _result_payload()
-            write_result_artifact(strict_path, payload)
+            payload["schema_version"] = np.asarray(999, dtype=np.int32)
+            write_loose_result(strict_path, payload)
             legacy_payload = copy.deepcopy(payload)
             legacy_payload.pop("schema_version")
             np.savez_compressed(legacy_path, **legacy_payload)
 
-            with self.assertRaisesRegex(
-                ValueError,
-                "strict and legacy",
-            ):
-                load_comparison_results(MultiResultViserConfig(qpos_npzs=(strict_path, legacy_path)))
+            _, results = load_comparison_results(MultiResultViserConfig(qpos_npzs=(strict_path, legacy_path)))
+
+        self.assertEqual(len(results), 2)
 
     def test_source_orientation_is_never_fabricated_from_diagnostics(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1149,7 +883,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                 include_source_orientations=False,
                 include_diagnostics=True,
             )
-            payload.pop("schema_version")
+            payload.pop("schema_version", None)
             np.savez_compressed(path, **payload)
             result = load_variant_result("identity", path)
 
@@ -1213,7 +947,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
     def test_explicit_source_subset_and_compact_robot_axes_are_rendered(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "identity.npz"
-            write_result_artifact(path, _result_payload())
+            write_loose_result(path, _result_payload())
             result = load_variant_result("identity", path)
 
         server = SimpleNamespace(scene=_FakeScene())
@@ -1235,10 +969,46 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             result.robot_link_positions,
         )
 
+    def test_orientation_scope_switches_between_retargeting_and_all_saved_links(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "identity.npz"
+            payload = _result_payload()
+            payload["human_joints"] = np.zeros((2, 3, 3), dtype=np.float32)
+            payload["human_joint_names"] = np.asarray(("Hips", "Spine", "LeftHand"))
+            payload["human_joint_parent_indices"] = np.asarray((-1, 0, 1), dtype=np.int32)
+            payload["human_orientation_joint_names"] = np.asarray(("Hips", "Spine", "LeftHand"))
+            payload["human_orientation_quaternions_wxyz"] = _identity_quaternions(2, 3)
+            payload["robot_link_positions"] = np.zeros((2, 3, 3), dtype=np.float32)
+            payload["robot_link_quaternions_wxyz"] = _identity_quaternions(2, 3)
+            payload["robot_link_names"] = np.asarray(("base", "waist", "left_hand"))
+            payload["robot_link_parent_indices"] = np.asarray((-1, 0, 1), dtype=np.int32)
+            write_loose_result(path, payload)
+            result = load_variant_result("identity", path)
+
+        overlays = _build_orientation_overlay(
+            ViserConfig(
+                show_source_orientation_axes=True,
+                show_robot_orientation_axes=True,
+                orientation_scope="retargeting",
+            ),
+            SimpleNamespace(scene=_FakeScene()),
+            result.human_joints,
+            variant_result_metadata(result),
+            result.qpos.shape[0],
+        )
+
+        self.assertEqual(overlays.source.names, ("Hips", "LeftHand"))
+        self.assertEqual(overlays.robot.names, ("base", "left_hand"))
+        overlays.set_scope("all")
+        self.assertEqual(overlays.source.names, ("Hips", "Spine", "LeftHand"))
+        self.assertEqual(overlays.robot.names, ("base", "waist", "left_hand"))
+        self.assertTrue(overlays.source.enabled)
+        self.assertTrue(overlays.robot.enabled)
+
     def test_full_saved_robot_skeleton_does_not_require_mujoco_xml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "identity.npz"
-            write_result_artifact(path, _result_payload())
+            write_loose_result(path, _result_payload())
             result = load_variant_result("identity", path)
 
         overlay = _build_mapped_skeleton_overlay(
@@ -1253,6 +1023,42 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
         np.testing.assert_array_equal(
             overlay.robot_skeleton_joints,
             result.robot_link_positions,
+        )
+
+    def test_mapped_robot_skeleton_uses_semantic_edges_before_compact_body_tree(self):
+        joint_names = [
+            "Pelvis",
+            "L_Knee",
+            "L_Ankle",
+            "L_Foot",
+            "L_Shoulder",
+            "R_Shoulder",
+        ]
+        mapped_positions = np.arange(18, dtype=np.float32).reshape(1, 6, 3)
+        compact_positions = np.arange(21, dtype=np.float32).reshape(1, 7, 3)
+        overlay = MappedSkeletonOverlay(
+            server=SimpleNamespace(scene=_FakeScene()),
+            human_joints=np.zeros((1, 6, 3), dtype=np.float32),
+            demo_joints=joint_names,
+            joints_mapping={name: f"robot_{name.lower()}" for name in joint_names},
+            robot_xml_path=None,
+            point_radius=0.02,
+            line_width=2.0,
+            mapped_robot_joints=mapped_positions,
+            robot_skeleton_joints=compact_positions,
+            robot_skeleton_parent_indices=np.asarray(
+                (-1, 0, 1, 1, 0, 0, 0),
+                dtype=np.int32,
+            ),
+        )
+
+        self.assertEqual(
+            overlay.robot_edges,
+            [(0, 1), (1, 2), (1, 3), (0, 4), (0, 5), (0, 6)],
+        )
+        np.testing.assert_array_equal(
+            overlay._robot_points(np.empty(0), 0.0),
+            compact_positions[0],
         )
 
 
