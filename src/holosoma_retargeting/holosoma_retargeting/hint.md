@@ -127,14 +127,14 @@ python examples/robot_retarget.py \
 默认结果路径为：
 
 ```text
-demo_results/<robot>/<task>/<dataset>/<motion>/identity.npz
+demo_results/<robot>/<task>/<dataset>/<motion>.npz
 ```
 
 例如上述 E2/LAFAN 命令完成后，直接查看结果：
 
 ```bash
 python viser_player.py \
-  --input-path demo_results/e2/robot_only/lafan/walk2_subject3/identity.npz
+  --input-path demo_results/e2/robot_only/lafan/walk2_subject3.npz
 ```
 
 ## 增强任务重定向
@@ -167,7 +167,28 @@ python examples/parallel_robot_retarget.py \
 变体完成后都会等待 Enter，便于逐个检查。默认结果路径为：
 
 ```text
-demo_results_parallel/<robot>/<task>/<dataset>/<motion>/<variant>.npz
+demo_results_parallel/<robot>/<task>/<dataset>/<motion>.npz
+demo_results_parallel/<robot>/<task>/<dataset>/<motion>_<variant>.npz
+```
+
+## NPZ 转 CSV
+
+单文件转换会在 NPZ 旁生成同名 CSV。CSV 不包含表头或索引，每帧顺序为
+根节点 `xyz`、根节点四元数 `xyzw`，以及按 URDF 顺序重排的机器人关节角：
+
+```bash
+python -m holosoma_retargeting.data_utils.npz_to_csv \
+  demo_results/e2/robot_only/lafan/walk2_subject3.npz \
+  models/e2/e2_23dof.urdf
+```
+
+批量转换递归读取输入目录，并在输出目录中保持相对路径：
+
+```bash
+python -m holosoma_retargeting.data_utils.batch_npz_to_csv \
+  demo_results/e2/robot_only/lafan \
+  models/e2/e2_23dof.urdf \
+  demo_results_csv/e2/robot_only/lafan
 ```
 
 ## 查看单个结果
@@ -176,14 +197,14 @@ demo_results_parallel/<robot>/<task>/<dataset>/<motion>/<variant>.npz
 
 ```bash
 python viser_player.py \
-  --input-path demo_results/e2/robot_only/lafan/walk2_subject3/identity.npz
+  --input-path demo_results/e2/robot_only/lafan/walk2_subject3.npz
 ```
 
 需要完整检查重定向辅助信息时：
 
 ```bash
 python viser_player.py \
-  --input-path demo_results/g1/object_interaction/OMOMO_new/sub3_largebox_003/identity.npz \
+  --input-path demo_results/g1/object_interaction/OMOMO_new/sub3_largebox_003.npz \
   --show-point-clouds \
   --show-interaction-mesh \
   --show-source-orientation-axes \
@@ -208,11 +229,11 @@ python viser_player.py \
 
 ## 对比增强结果
 
-传入包含多个 `<variant>.npz` 的动作目录，即可自动加载并排显示：
+传入动作的 `<motion>.npz`，即可自动发现同目录下的增广文件并排显示：
 
 ```bash
 python multi_viser_player.py \
-  --family demo_results_parallel/g1/object_interaction/OMOMO_new/sub3_largebox_003
+  --family demo_results_parallel/g1/object_interaction/OMOMO_new/sub3_largebox_003.npz
 ```
 
 常用可选参数：

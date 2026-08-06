@@ -11,6 +11,8 @@ from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.config_types.retargeter import RetargeterConfig
 from holosoma_retargeting.config_types.retargeting import RetargetingConfig
 from holosoma_retargeting.config_types.robot import RobotConfig
+from holosoma_retargeting.data_utils.batch_npz_to_csv import convert_npz_directory
+from holosoma_retargeting.data_utils.npz_to_csv import convert_npz_to_csv
 from holosoma_retargeting.retargeting_pipeline import (
     IDENTITY_VARIANT,
     RetargetVariant,
@@ -36,6 +38,20 @@ def _robot_only_config(source: Path) -> RetargetingConfig:
     )
 
 
+def _write_two_joint_urdf(path: Path) -> None:
+    path.write_text(
+        """<robot name="test">
+  <link name="base"/>
+  <link name="one"/>
+  <link name="two"/>
+  <joint name="joint_b" type="revolute"><parent link="base"/><child link="one"/></joint>
+  <joint name="fixed_joint" type="fixed"><parent link="one"/><child link="two"/></joint>
+  <joint name="joint_a" type="revolute"><parent link="one"/><child link="two"/></joint>
+</robot>""",
+        encoding="utf-8",
+    )
+
+
 def test_job_contract_is_compact_and_colocated(tmp_path: Path) -> None:
     source = tmp_path / "walk.npy"
     np.save(source, np.zeros((2, 22, 3), dtype=np.float32))
@@ -52,6 +68,43 @@ def test_job_contract_is_compact_and_colocated(tmp_path: Path) -> None:
     assert job.generated_assets_dir == job.output_path.parent / ".assets" / "walk"
     assert decoded["experiment_name"] is None
     assert "solver_identity" not in decoded
+
+
+def test_npz_to_csv_reorders_joints_and_writes_only_robot_numeric_data(tmp_path: Path) -> None:
+    urdf = tmp_path / "robot.urdf"
+    _write_two_joint_urdf(urdf)
+    source = tmp_path / "motion.npz"
+    qpos = np.arange(32, dtype=np.float64).reshape(2, 16)
+    np.savez(
+        source,
+        qpos=qpos,
+        robot_actuated_joint_names=np.asarray(("joint_a", "joint_b")),
+    )
+
+    destination = convert_npz_to_csv(source, urdf)
+
+    assert destination == tmp_path / "motion.csv"
+    np.testing.assert_allclose(
+        np.loadtxt(destination, delimiter=","),
+        np.concatenate((qpos[:, (0, 1, 2, 4, 5, 6, 3)], qpos[:, (8, 7)]), axis=1),
+    )
+    assert all(character not in destination.read_text() for character in "abcdefghijklmnopqrstuvwxyz")
+
+
+def test_batch_npz_to_csv_preserves_relative_paths(tmp_path: Path) -> None:
+    urdf = tmp_path / "robot.urdf"
+    _write_two_joint_urdf(urdf)
+    source = tmp_path / "input" / "nested" / "motion.npz"
+    source.parent.mkdir(parents=True)
+    np.savez(
+        source,
+        qpos=np.zeros((1, 9), dtype=np.float64),
+        robot_actuated_joint_names=np.asarray(("joint_a", "joint_b")),
+    )
+
+    outputs = convert_npz_directory(tmp_path / "input", urdf, tmp_path / "output")
+
+    assert outputs == (tmp_path / "output" / "nested" / "motion.csv",)
 
 
 def test_live_display_options_do_not_change_result_identity(tmp_path: Path) -> None:

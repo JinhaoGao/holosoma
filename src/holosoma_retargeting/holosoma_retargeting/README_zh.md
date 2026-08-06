@@ -192,7 +192,25 @@ python viser_player.py \
 
 ```bash
 python multi_viser_player.py \
-  --family demo_results_parallel/g1/object_interaction/OMOMO_new/sub3_largebox_003
+  --family demo_results_parallel/g1/object_interaction/OMOMO_new/sub3_largebox_003.npz
+```
+
+单个结果转换为无表头、无索引的纯数值 CSV。每帧依次保存根节点 `xyz`、
+根节点四元数 `xyzw`，以及按 URDF 顺序排列的机器人关节角：
+
+```bash
+python -m holosoma_retargeting.data_utils.npz_to_csv \
+  demo_results/e2/robot_only/lafan/walk2_subject3.npz \
+  models/e2/e2_23dof.urdf
+```
+
+批量转换并保持输入目录的相对结构：
+
+```bash
+python -m holosoma_retargeting.data_utils.batch_npz_to_csv \
+  demo_results/e2/robot_only/lafan \
+  models/e2/e2_23dof.urdf \
+  demo_results_csv/e2/robot_only/lafan
 ```
 
 ## 验证

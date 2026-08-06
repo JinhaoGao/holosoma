@@ -170,6 +170,29 @@ the source/target Interaction Mesh. These fields are saved by default without
 schema, hash, manifest, or cross-field artifact validation. Unused full-body
 and full-link trajectories are omitted.
 
+## NPZ to CSV
+
+The CSV contains numeric data only, without a header or index. Each row stores
+root position `xyz`, root quaternion `xyzw`, and robot joint angles reordered
+to match the URDF joint order.
+
+Convert one motion and write `tennis.csv` beside `tennis.npz`:
+
+```bash
+python -m holosoma_retargeting.data_utils.npz_to_csv \
+  demo_results/g1/robot_only/gvhmr/tennis.npz \
+  models/g1/g1_29dof.urdf
+```
+
+Convert a directory recursively while preserving its relative structure:
+
+```bash
+python -m holosoma_retargeting.data_utils.batch_npz_to_csv \
+  demo_results/g1/robot_only/gvhmr \
+  models/g1/g1_29dof.urdf \
+  demo_results_csv/g1/robot_only/gvhmr
+```
+
 ## Visualization
 
 ```bash
