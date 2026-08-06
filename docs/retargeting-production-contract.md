@@ -104,11 +104,12 @@ output path that already exists.
 
 Identity results use:
 
-`demo_results/<robot>/<task>/<dataset>/<motion>/identity.npz`
+`demo_results/<robot>/<task>/<dataset>/<motion>.npz`
 
 Augmented results use:
 
-`demo_results_parallel/<robot>/<task>/<dataset>/<motion>/<variant>.npz`
+`demo_results_parallel/<robot>/<task>/<dataset>/<motion>.npz` for identity and
+`demo_results_parallel/<robot>/<task>/<dataset>/<motion>_<variant>.npz` for augmentations.
 
 No other `demo_results_*` tree belongs to the production result set.
 

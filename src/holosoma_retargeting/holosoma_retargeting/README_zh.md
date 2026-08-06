@@ -157,13 +157,14 @@ object-interaction 的增强族包含 `identity`、三个 object translation 变
 普通结果只写入：
 
 ```text
-demo_results/<robot>/<task>/<dataset>/<motion>/identity.npz
+demo_results/<robot>/<task>/<dataset>/<motion>.npz
 ```
 
 增强结果只写入：
 
 ```text
-demo_results_parallel/<robot>/<task>/<dataset>/<motion>/<variant>.npz
+demo_results_parallel/<robot>/<task>/<dataset>/<motion>.npz
+demo_results_parallel/<robot>/<task>/<dataset>/<motion>_<variant>.npz
 ```
 
 默认结果根已经按 `g1`、`e1`、`e2` 分层。仓库不再维护 ablation、orientation、search、comparison 或全数据 rebuild 结果树。
@@ -182,7 +183,7 @@ demo_results_parallel/<robot>/<task>/<dataset>/<motion>/<variant>.npz
 
 ```bash
 python viser_player.py \
-  --input-path demo_results/e2/robot_only/lafan/walk2_subject3/identity.npz
+  --input-path demo_results/e2/robot_only/lafan/walk2_subject3.npz
 ```
 
 可视化脚本默认加载结果中所有可用的辅助数据。Interaction Mesh、人体/机器人骨架、人体/机器人/地形/object 点云、object keypoints 与三维朝向轴都在 Viser 的 Layers 面板中独立开关，不需要在启动命令中逐项列出。若某项源数据不存在，对应图层会显示为不可用，而不会生成虚假数据。

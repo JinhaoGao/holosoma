@@ -34,7 +34,7 @@ DEFAULT_VARIANTS: tuple[str, ...] = (
 )
 
 _RESULT_SUFFIX_PATTERN = re.compile(
-    r"^(?P<sequence>.+)_(?P<variant>identity|original|augmented|trans_[0-9]+|rot_[0-9]+|z_scale_[0-9.]+)$"
+    r"^(?P<sequence>.+)_(?P<variant>augmented|trans_[0-9]+|rot_[0-9]+|z_scale_[0-9]+(?:p|\.)[0-9]+)$"
 )
 
 
@@ -46,7 +46,7 @@ class AugmentationViserConfig:
     """
 
     qpos_npz: Path
-    """Any result in the augmentation family, normally ``*_original.npz``."""
+    """Any result in the flat ``motion.npz`` augmentation family."""
 
     variants: tuple[str, ...] = DEFAULT_VARIANTS
     """Variant suffixes to load and display."""
@@ -141,8 +141,6 @@ def split_result_family(path: str | Path) -> tuple[str, str | None]:
 
     result_path = Path(path)
     stem = result_path.stem
-    if stem == "identity" and result_path.parent.name:
-        return result_path.parent.name, "identity"
     match = _RESULT_SUFFIX_PATTERN.fullmatch(stem)
     if match is None:
         return stem, None
@@ -167,14 +165,23 @@ def _canonical_variant_sort_key(variant: str) -> tuple[int, float, str]:
     return (4, 0.0, variant)
 
 
-def _discover_canonical_variant_paths(sequence_directory: Path) -> dict[str, Path]:
-    """Discover result siblings from their canonical filenames."""
+def _result_path_for_variant(directory: Path, sequence: str, variant: str) -> Path:
+    suffix = "" if variant in {"identity", "original"} else f"_{variant}"
+    return directory / f"{sequence}{suffix}.npz"
 
-    discovered = {path.stem: path for path in sorted(sequence_directory.glob("*.npz")) if path.is_file()}
-    if "identity" not in discovered:
-        raise FileNotFoundError(
-            f"No identity.npz result was found in {sequence_directory}",
-        )
+
+def _discover_variant_paths(reference: Path) -> dict[str, Path]:
+    """Discover a flat ``motion.npz`` augmentation family."""
+
+    sequence, _ = split_result_family(reference)
+    identity_path = _result_path_for_variant(reference.parent, sequence, "identity")
+    if not identity_path.is_file():
+        raise FileNotFoundError(f"No identity result was found for {reference}: {identity_path}")
+    discovered = {"identity": identity_path}
+    for path in sorted(reference.parent.glob("*.npz")):
+        sibling_sequence, variant = split_result_family(path)
+        if sibling_sequence == sequence and variant is not None:
+            discovered[variant] = path
     return dict(
         sorted(
             discovered.items(),
@@ -187,7 +194,7 @@ def discover_variant_paths(
     reference_path: str | Path,
     variants: tuple[str, ...] | None = DEFAULT_VARIANTS,
 ) -> dict[str, Path]:
-    """Resolve canonical directory or legacy flat-file variant families."""
+    """Resolve one flat ``motion.npz`` augmentation family."""
 
     reference = Path(reference_path).expanduser()
     if variants is not None and not variants:
@@ -195,34 +202,25 @@ def discover_variant_paths(
     if variants is not None and len(set(variants)) != len(variants):
         raise ValueError(f"Duplicate augmentation variants are not allowed: {variants}")
 
-    sequence, _ = split_result_family(reference)
-    sequence_directory = reference if reference.is_dir() else reference.parent
-    is_canonical_directory = (
-        reference.is_dir() or reference.stem == "identity" or (reference.parent / "identity.npz").is_file()
-    )
-    if variants is None:
-        if not is_canonical_directory:
+    if reference.is_dir():
+        identities = [
+            path
+            for path in sorted(reference.glob("*.npz"))
+            if path.is_file() and split_result_family(path)[1] is None
+        ]
+        if len(identities) != 1:
             raise ValueError(
-                "Automatic variant discovery requires a canonical result "
-                "directory; pass --variants for a legacy flat family.",
+                "A family directory must contain exactly one motion identity "
+                f"NPZ, found {len(identities)} in {reference}"
             )
-        return _discover_canonical_variant_paths(sequence_directory)
-    if is_canonical_directory:
-        paths = {
-            variant: sequence_directory / f"{'identity' if variant == 'original' else variant}.npz"
-            for variant in variants
-        }
-    else:
-        paths = {}
-        for variant in variants:
-            legacy_variant_name = "original" if variant == "identity" else variant
-            candidate = reference.parent / f"{sequence}_{legacy_variant_name}.npz"
-            identity_alias = reference.parent / f"{sequence}_identity.npz"
-            paths[variant] = (
-                identity_alias
-                if variant == "identity" and not candidate.is_file() and identity_alias.is_file()
-                else candidate
-            )
+        reference = identities[0]
+    sequence, _ = split_result_family(reference)
+    if variants is None:
+        return _discover_variant_paths(reference)
+    paths = {
+        variant: _result_path_for_variant(reference.parent, sequence, variant)
+        for variant in variants
+    }
     missing = [path for path in paths.values() if not path.is_file()]
     if missing:
         formatted = "\n".join(f"  {path}" for path in missing)

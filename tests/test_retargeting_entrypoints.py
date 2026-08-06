@@ -120,7 +120,7 @@ class RetargetingEntrypointTests(unittest.TestCase):
         self.assertEqual(
             result,
             Path(
-                "/results/e2/robot_only/noetix_mocap/session/walk/translated.npz",
+                "/results/e2/robot_only/noetix_mocap/session/walk_translated.npz",
             ),
         )
         self.assertNotIn("canonical", result.parts)

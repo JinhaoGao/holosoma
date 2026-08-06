@@ -64,20 +64,20 @@ python examples/parallel_robot_retarget.py \
 普通 Noetix mocap 结果示例：
 
 ```text
-demo_results/e1/robot_only/noetix_mocap/run_to_the_right/identity.npz
+demo_results/e1/robot_only/noetix_mocap/run_to_the_right.npz
 ```
 
 Noetix CSV climbing 增强族示例：
 
 ```text
-demo_results_parallel/g1/climbing/noetix_csv_climb/actor_170/yuezhanggaotai-dongzuo2-man-box-170/
+demo_results_parallel/g1/climbing/noetix_csv_climb/actor_170/yuezhanggaotai-dongzuo2-man-box-170.npz
 ```
 
 结果保留实际映射的人体与机器人关键点、可用手关键点、实际映射 link 的朝向、人体/机器人/地形/object 点云、source/target Interaction Mesh 和攀爬场景资产信息。查看时可以同时打开点云、Interaction Mesh 和朝向轴：
 
 ```bash
 python viser_player.py \
-  --input-path demo_results/e1/robot_only/noetix_mocap/run_to_the_right/identity.npz \
+  --input-path demo_results/e1/robot_only/noetix_mocap/run_to_the_right.npz \
   --show-point-clouds \
   --show-interaction-mesh \
   --show-source-orientation-axes \

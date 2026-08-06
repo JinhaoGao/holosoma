@@ -48,8 +48,8 @@ def test_job_contract_is_compact_and_colocated(tmp_path: Path) -> None:
     decoded = json.loads(job.config_json)
 
     assert job.variant == IDENTITY_VARIANT
-    assert job.output_path == results_root / "g1" / "robot_only" / "lafan" / "walk" / "identity.npz"
-    assert job.generated_assets_dir == job.output_path.parent / ".assets" / "identity"
+    assert job.output_path == results_root / "g1" / "robot_only" / "lafan" / "walk.npz"
+    assert job.generated_assets_dir == job.output_path.parent / ".assets" / "walk"
     assert decoded["experiment_name"] is None
     assert "solver_identity" not in decoded
 

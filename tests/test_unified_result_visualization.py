@@ -316,38 +316,28 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             all(not handle.visible for handle in server.scene.point_clouds.values()),
         )
 
-    def test_canonical_directory_and_legacy_flat_families_are_discovered(self):
+    def test_flat_motion_family_is_discovered_from_directory_or_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            canonical = root / "sequence"
-            canonical.mkdir()
-            (canonical / "identity.npz").touch()
-            (canonical / "rot_0.npz").touch()
+            (root / "sequence.npz").touch()
+            (root / "sequence_rot_0.npz").touch()
 
             from_directory = discover_variant_paths(
-                canonical,
+                root,
                 variants=("identity", "rot_0"),
             )
             from_identity = discover_variant_paths(
-                canonical / "identity.npz",
+                root / "sequence.npz",
                 variants=("identity", "rot_0"),
             )
             from_sibling = discover_variant_paths(
-                canonical / "rot_0.npz",
-                variants=("identity", "rot_0"),
-            )
-
-            (root / "clip_original.npz").touch()
-            (root / "clip_rot_0.npz").touch()
-            legacy = discover_variant_paths(
-                root / "clip_rot_0.npz",
+                root / "sequence_rot_0.npz",
                 variants=("identity", "rot_0"),
             )
 
         self.assertEqual(from_directory, from_identity)
         self.assertEqual(from_directory, from_sibling)
-        self.assertEqual(from_directory["identity"].name, "identity.npz")
-        self.assertEqual(legacy["identity"].name, "clip_original.npz")
+        self.assertEqual(from_directory["identity"].name, "sequence.npz")
 
     def test_family_without_variants_discovers_climbing_scale_results(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -363,14 +353,15 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                 payload["object_name"] = np.asarray("multi_boxes")
                 _set_real_object_asset_manifest(payload, object_urdf)
                 _refresh_config_identity(payload)
-                write_loose_result(root / f"{variant}.npz", payload)
+                suffix = "" if variant == "identity" else f"_{variant}"
+                write_loose_result(root / f"climb{suffix}.npz", payload)
 
             resolved = resolve_multi_config(MultiViserConfig(family=root))
             labels, results = load_comparison_results(resolved)
 
         self.assertEqual(
             tuple(path.name for path in resolved.qpos_npzs),
-            ("identity.npz", "z_scale_1p2.npz"),
+            ("climb.npz", "climb_z_scale_1p2.npz"),
         )
         self.assertEqual(labels, ("identity", "z_scale_1p2"))
         self.assertEqual(
@@ -382,8 +373,8 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             paths = (
-                root / "first" / "identity.npz",
-                root / "second" / "identity.npz",
+                root / "first" / "motion.npz",
+                root / "second" / "motion.npz",
             )
             for path in paths:
                 path.parent.mkdir()
@@ -398,8 +389,8 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
     def test_comparison_rejects_symlink_aliases_of_the_same_result(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            result_path = root / "identity.npz"
-            alias_path = root / "identity_alias.npz"
+            result_path = root / "motion.npz"
+            alias_path = root / "motion_alias.npz"
             write_loose_result(result_path, _result_payload())
             alias_path.symlink_to(result_path)
 
@@ -429,11 +420,11 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             write_loose_result(
-                root / "identity.npz",
+                root / "motion.npz",
                 _result_payload(variant="identity"),
             )
             write_loose_result(
-                root / "rot_0.npz",
+                root / "motion_rot_0.npz",
                 _result_payload(variant="trans_0"),
             )
             resolved = resolve_multi_config(MultiViserConfig(family=root))
@@ -446,7 +437,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
 
         self.assertEqual(
             resolved.qpos_npzs,
-            (root / "identity.npz", root / "rot_0.npz"),
+            (root / "motion.npz", root / "motion_rot_0.npz"),
         )
         self.assertEqual([result.variant for result in results], ["identity", "rot_0"])
 
@@ -454,7 +445,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             write_loose_result(
-                root / "identity.npz",
+                root / "motion.npz",
                 _result_payload(variant="identity"),
             )
 
@@ -469,7 +460,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
 
     def test_production_fields_flow_through_single_and_multi_viewers(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "identity.npz"
+            path = Path(tmpdir) / "motion.npz"
             payload = _result_payload()
             foot_states = np.asarray(payload["foot_sticking_states"]).copy()
             foot_states[0, 0] = True
@@ -572,7 +563,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
             payload["object_name"] = np.asarray("multi_boxes")
             _set_real_object_asset_manifest(payload, object_urdf)
             _refresh_config_identity(payload)
-            result_path = root / "identity.npz"
+            result_path = root / "motion.npz"
 
             write_loose_result(result_path, payload)
             result = load_variant_result("identity", result_path)
@@ -608,8 +599,8 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                 root / "z_scale_1p2.urdf",
             )
             result_paths = (
-                root / "identity.npz",
-                root / "z_scale_1.2.npz",
+                root / "motion.npz",
+                root / "motion_z_scale_1.2.npz",
             )
             variants = ("identity", "z_scale_1.2")
             for variant, asset_path, result_path in zip(
@@ -696,7 +687,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
                 "<robot name='override'><link name='override'/></robot>",
                 encoding="utf-8",
             )
-            result_path = root / "identity.npz"
+            result_path = root / "motion.npz"
             payload = _result_payload()
             payload["task_type"] = np.asarray("climbing")
             payload["object_name"] = np.asarray("multi_boxes")
@@ -722,8 +713,8 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
     def test_family_and_comparison_ignore_result_identity_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            identity_path = root / "identity.npz"
-            variant_path = root / "rot_0.npz"
+            identity_path = root / "motion.npz"
+            variant_path = root / "motion_rot_0.npz"
             identity_payload = _result_payload(variant="identity")
             variant_payload = _result_payload(variant="rot_0")
             variant_payload["source_path"] = np.asarray("/dataset/other-sequence.npz")
@@ -751,8 +742,8 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
     def test_family_loads_each_saved_actuated_order_independently(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            identity_path = root / "identity.npz"
-            variant_path = root / "rot_0.npz"
+            identity_path = root / "motion.npz"
+            variant_path = root / "motion_rot_0.npz"
             payloads = (
                 _result_payload(variant="identity"),
                 _result_payload(variant="rot_0"),
@@ -878,7 +869,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
 
     def test_source_orientation_is_never_fabricated_from_diagnostics(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "identity.npz"
+            path = Path(tmpdir) / "motion.npz"
             payload = _result_payload(
                 include_source_orientations=False,
                 include_diagnostics=True,
@@ -946,7 +937,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
 
     def test_explicit_source_subset_and_compact_robot_axes_are_rendered(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "identity.npz"
+            path = Path(tmpdir) / "motion.npz"
             write_loose_result(path, _result_payload())
             result = load_variant_result("identity", path)
 
@@ -971,7 +962,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
 
     def test_orientation_scope_switches_between_retargeting_and_all_saved_links(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "identity.npz"
+            path = Path(tmpdir) / "motion.npz"
             payload = _result_payload()
             payload["human_joints"] = np.zeros((2, 3, 3), dtype=np.float32)
             payload["human_joint_names"] = np.asarray(("Hips", "Spine", "LeftHand"))
@@ -1007,7 +998,7 @@ class UnifiedResultVisualizationTests(unittest.TestCase):
 
     def test_full_saved_robot_skeleton_does_not_require_mujoco_xml(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = Path(tmpdir) / "identity.npz"
+            path = Path(tmpdir) / "motion.npz"
             write_loose_result(path, _result_payload())
             result = load_variant_result("identity", path)
 

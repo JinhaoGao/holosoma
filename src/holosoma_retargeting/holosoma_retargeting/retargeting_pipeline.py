@@ -370,15 +370,17 @@ def _canonical_result_path(
         Path(_encode_path_component(robot, "robot"))
         / _encode_path_component(task_type, "task_type")
         / _encode_path_component(dataset_partition, "dataset_partition")
-        / Path(*sequence_parts)
     )
-    return results_root / common / f"{variant.name}.npz"
+    sequence_parent = Path(*sequence_parts[:-1])
+    sequence_name = sequence_parts[-1]
+    suffix = "" if variant.is_identity else f"_{variant.name}"
+    return results_root / common / sequence_parent / f"{sequence_name}{suffix}.npz"
 
 
-def _generated_assets_dir_for_job(output_path: Path, variant: RetargetVariant) -> Path:
+def _generated_assets_dir_for_job(output_path: Path) -> Path:
     """Place generated scenes with the selected motion instead of in a global cache."""
 
-    return output_path.parent / ".assets" / variant.name
+    return output_path.parent / ".assets" / output_path.stem
 
 
 def _default_sequence_key(
@@ -483,7 +485,7 @@ def build_retarget_job(
         dataset_partition=partition,
         sequence_key=key,
     )
-    generated_assets_dir = _generated_assets_dir_for_job(output_path, variant)
+    generated_assets_dir = _generated_assets_dir_for_job(output_path)
     return RetargetJob(
         config=normalized,
         source_path=resolved_source_path,

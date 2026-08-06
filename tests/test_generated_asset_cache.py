@@ -73,7 +73,7 @@ class JobAssetPathTests(unittest.TestCase):
             )
             self.assertEqual(
                 identity_job.generated_assets_dir,
-                identity_job.output_path.parent / ".assets" / "identity",
+                identity_job.output_path.parent / ".assets" / "sub1_tripod_001",
             )
             self.assertTrue(identity_job.generated_assets_dir.is_relative_to(results_root))
             self.assertFalse(identity_job.generated_assets_dir.is_relative_to(source_dir))
@@ -90,7 +90,7 @@ class JobAssetPathTests(unittest.TestCase):
             )
             self.assertEqual(
                 augmented_job.generated_assets_dir,
-                augmented_job.output_path.parent / ".assets" / "trans_0",
+                augmented_job.output_path.parent / ".assets" / "sub1_tripod_001_trans_0",
             )
 
 

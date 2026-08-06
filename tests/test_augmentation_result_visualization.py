@@ -504,7 +504,7 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            baseline_path = Path(tmpdir) / "identity.npz"
+            baseline_path = Path(tmpdir) / "motion.npz"
             np.savez(baseline_path, qpos=q_baseline)
             with mock.patch(
                 "holosoma_retargeting.retargeting_pipeline.augment_object_poses",
@@ -539,14 +539,15 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             directory = Path(tmpdir)
             for variant in DEFAULT_VARIANTS:
-                self._write_result(directory / f"sub3_largebox_003_{variant}.npz")
+                suffix = "" if variant == "identity" else f"_{variant}"
+                self._write_result(directory / f"sub3_largebox_003{suffix}.npz")
 
             paths = discover_variant_paths(
                 directory / "sub3_largebox_003_rot_1.npz",
             )
 
         self.assertEqual(tuple(paths), DEFAULT_VARIANTS)
-        self.assertEqual(paths["identity"].name, "sub3_largebox_003_identity.npz")
+        self.assertEqual(paths["identity"].name, "sub3_largebox_003.npz")
         self.assertEqual(
             split_result_family("sub3_largebox_003_trans_0.npz"),
             ("sub3_largebox_003", "trans_0"),
@@ -555,13 +556,13 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
     def test_load_family_does_not_require_matching_result_metadata(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             directory = Path(tmpdir)
-            self._write_result(directory / "sub3_largebox_003_original.npz")
+            self._write_result(directory / "sub3_largebox_003.npz")
             self._write_result(
                 directory / "sub3_largebox_003_trans_0.npz",
                 robot_type="e1",
             )
             config = AugmentationViserConfig(
-                qpos_npz=directory / "sub3_largebox_003_original.npz",
+                qpos_npz=directory / "sub3_largebox_003.npz",
                 variants=("original", "trans_0"),
             )
 
@@ -764,7 +765,7 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
 
     def test_missing_variant_reports_exact_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            reference = Path(tmpdir) / "sub3_largebox_003_original.npz"
+            reference = Path(tmpdir) / "sub3_largebox_003.npz"
             self._write_result(reference)
 
             with self.assertRaisesRegex(FileNotFoundError, "trans_0"):

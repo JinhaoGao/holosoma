@@ -152,13 +152,14 @@ exclusive. A zero uniform or table weight removes the corresponding cost.
 Single-motion results:
 
 ```text
-demo_results/<robot>/<task>/<dataset>/<motion>/identity.npz
+demo_results/<robot>/<task>/<dataset>/<motion>.npz
 ```
 
 Augmented results:
 
 ```text
-demo_results_parallel/<robot>/<task>/<dataset>/<motion>/<variant>.npz
+demo_results_parallel/<robot>/<task>/<dataset>/<motion>.npz
+demo_results_parallel/<robot>/<task>/<dataset>/<motion>_<variant>.npz
 ```
 
 Each NPZ retains float64 qpos, solver metadata, the human and robot points used
@@ -173,7 +174,7 @@ and full-link trajectories are omitted.
 
 ```bash
 python viser_player.py \
-  --input-path demo_results/g1/robot_only/gvhmr/tennis/identity.npz
+  --input-path demo_results/g1/robot_only/gvhmr/tennis.npz
 ```
 
 The viewer loads every available saved layer by default. Interaction Mesh,
@@ -182,7 +183,7 @@ are independently controlled from the Viser Layers tab; no layer list is
 required on the command line. The Playback tab also provides a joint selector
 with the complete angle trajectory and URDF lower/upper limits for each
 actuated joint.
-Use `multi_viser_player.py --family <motion-directory>` to inspect one saved
+Use `multi_viser_player.py --family <motion.npz>` to inspect one saved
 augmentation family on a synchronized timeline.
 
 See `README_zh.md` for the full Chinese guide,

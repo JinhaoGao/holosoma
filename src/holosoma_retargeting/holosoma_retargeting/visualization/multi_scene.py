@@ -48,6 +48,7 @@ from holosoma_retargeting.visualization.result_loader import (
     interpolate_qpos,
     load_variant_result,
     resolve_qpos_to_viser_joint_indices,
+    split_result_family,
 )
 
 
@@ -804,7 +805,7 @@ def load_comparison_results(
     paths = _comparison_paths(config)
     results = [
         load_variant_result(
-            path.stem,
+            split_result_family(path)[1] or "identity",
             path,
         )
         for path in paths

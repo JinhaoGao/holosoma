@@ -167,7 +167,7 @@ class OmomoDownstreamInferenceTests(unittest.TestCase):
                 }
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            result_path = Path(tmpdir) / "sub1_suitcase_001" / "identity.npz"
+            result_path = Path(tmpdir) / "sub1_suitcase_001.npz"
             _write_strict_evaluation_result(
                 result_path,
                 sequence_key="sub1_suitcase_001",
@@ -245,21 +245,19 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
     def test_recursive_canonical_identity_takes_precedence_over_other_results(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            sequence_dir = (
-                root / "canonical" / "e1" / "robot_object" / "omomo" / "OMOMO_new" / "nested" / "sub1_suitcase_001"
-            )
+            sequence_dir = root / "canonical" / "e1" / "robot_object" / "omomo" / "OMOMO_new" / "nested"
             sequence_dir.mkdir(parents=True)
-            identity_path = sequence_dir / "identity.npz"
+            identity_path = sequence_dir / "sub1_suitcase_001.npz"
             self._write_canonical_result(
                 identity_path,
                 sequence_key="nested/sub1_suitcase_001",
             )
             np.savez(
-                sequence_dir / "trans_0.npz",
+                sequence_dir / "sub1_suitcase_001_trans_0.npz",
                 sequence_key=np.asarray("nested/sub1_suitcase_001"),
             )
             self._write_canonical_result(
-                root / "canonical" / "g1" / "robot_only" / "sequence" / "identity.npz",
+                root / "canonical" / "g1" / "robot_only" / "sequence.npz",
                 sequence_key="must_not_include_other_task",
                 task_type="robot_only",
             )
@@ -284,7 +282,7 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
     def test_unrecognized_metadata_does_not_gate_evaluation_discovery(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            identity_path = root / "canonical" / "sequence" / "identity.npz"
+            identity_path = root / "canonical" / "sequence.npz"
             _write_strict_evaluation_result(
                 identity_path,
                 sequence_key="sequence",
@@ -304,12 +302,12 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             self._write_canonical_result(
-                root / "partition_a" / "sequence" / "identity.npz",
+                root / "partition_a" / "sequence.npz",
                 sequence_key="sequence",
                 dataset_partition="partition_a",
             )
             self._write_canonical_result(
-                root / "partition_b" / "sequence" / "identity.npz",
+                root / "partition_b" / "sequence.npz",
                 sequence_key="sequence",
                 dataset_partition="partition_b",
             )
@@ -319,7 +317,7 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
 
     def test_evaluation_result_is_bound_to_requested_robot_and_format(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            result_path = Path(tmpdir) / "walk" / "identity.npz"
+            result_path = Path(tmpdir) / "walk.npz"
             _write_strict_evaluation_result(
                 result_path,
                 sequence_key="walk",
@@ -343,8 +341,7 @@ class EvaluationTaskDiscoveryTests(unittest.TestCase):
 
     def test_incomplete_v2_identity_is_not_treated_as_discoverable(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            identity_path = Path(tmpdir) / "walk" / "identity.npz"
-            identity_path.parent.mkdir(parents=True)
+            identity_path = Path(tmpdir) / "walk.npz"
             np.savez(
                 identity_path,
                 run_kind=np.asarray("single"),
@@ -531,7 +528,8 @@ class OmomoAcceptanceHarnessTests(unittest.TestCase):
         self.assertEqual(qpos_dtypes, [np.dtype(np.float64), np.dtype(np.float64)])
         self.assertTrue(
             all(
-                "/canonical/" not in result["result_path"] and result["result_path"].endswith("/identity.npz")
+                "/canonical/" not in result["result_path"]
+                and Path(result["result_path"]).name == "sub1_tripod_001.npz"
                 for result in report["results"]
             ),
         )

@@ -848,7 +848,16 @@ def _canonical_evaluation_results(
 ) -> list[tuple[str, Path]]:
     """Discover identity results that contain the requested evaluation data."""
 
-    identity_paths = sorted(path for path in data_path.rglob("identity.npz") if path.is_file())
+    identity_paths = []
+    for path in sorted(data_path.rglob("*.npz")):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        try:
+            with np.load(path, allow_pickle=False) as data:
+                if "variant" in data and str(np.asarray(data["variant"]).item()) == "identity":
+                    identity_paths.append(path)
+        except (OSError, TypeError, ValueError):
+            continue
     if not identity_paths:
         return []
 
@@ -925,7 +934,7 @@ def get_task_names(
         raise ValueError(
             "Evaluation no longer accepts legacy *_original.npz files because "
             "they do not provide the saved skeletons, contact state, FPS, and "
-            "cost required by the evaluator. Regenerate them as identity.npz results first.",
+            "cost required by the evaluator. Regenerate them as motion.npz results first.",
         )
     return [], []
 
