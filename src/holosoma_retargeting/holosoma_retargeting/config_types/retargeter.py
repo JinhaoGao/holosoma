@@ -59,6 +59,9 @@ class RetargeterConfig:
     debug: bool = False
     """Whether to draw human, robot, hand, and object diagnostic overlays."""
 
+    dynamic_ground_window: bool = True
+    """Whether robot-only ground points follow the robot root each frame."""
+
     q_a_init_idx: int = -7
     """Offset used to select the first optimized qpos address as ``7 + offset``.
     For example, -7 starts at qpos[0] (the full floating base), -3 starts at

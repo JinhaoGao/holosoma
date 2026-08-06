@@ -520,6 +520,7 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 "save_dir",
                 "overwrite",
                 "foot_sticking",
+                "dynamic_ground_window",
                 "retargeter",
                 "orientation_weights",
                 "orientation_config",

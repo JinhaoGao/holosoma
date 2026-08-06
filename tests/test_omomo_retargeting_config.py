@@ -308,6 +308,32 @@ class ObjectPointPayloadTests(unittest.TestCase):
 
 
 class RetargeterRuntimeTests(unittest.TestCase):
+    def test_ground_points_follow_robot_root_in_xy(self):
+        ground_template = np.asarray(
+            [
+                [-1.0, -1.0, 0.0],
+                [1.0, 1.0, 0.0],
+            ]
+        )
+        original_template = ground_template.copy()
+        q = np.asarray([2.5, -3.0, 0.8, 1.0, 0.0, 0.0, 0.0])
+
+        translated = InteractionMeshRetargeter._ground_points_at_robot_root(
+            ground_template,
+            q,
+        )
+
+        np.testing.assert_allclose(
+            translated,
+            np.asarray(
+                [
+                    [1.5, -4.0, 0.0],
+                    [3.5, -2.0, 0.0],
+                ]
+            ),
+        )
+        np.testing.assert_array_equal(ground_template, original_template)
+
     def test_sticking_states_are_packed_in_canonical_side_order(self):
         states = InteractionMeshRetargeter._foot_sticking_states_array(
             [
@@ -354,6 +380,22 @@ class RetargeterRuntimeTests(unittest.TestCase):
 
         self.assertTrue(kwargs["visualize"])
         self.assertTrue(kwargs["debug"])
+
+    def test_config_can_disable_dynamic_ground_window(self):
+        constants = create_task_constants(
+            RobotConfig(robot_type="e2"),
+            MotionDataConfig(data_format="fbx_mocap", robot_type="e2"),
+            TaskConfig(),
+            "robot_only",
+        )
+        kwargs = build_retargeter_kwargs_from_config(
+            RetargeterConfig(dynamic_ground_window=False),
+            constants,
+            None,
+            "robot_only",
+        )
+
+        self.assertFalse(kwargs["dynamic_ground_window"])
 
     def test_live_frame_updates_robot_without_debug_overlays(self):
         retargeter = InteractionMeshRetargeter.__new__(

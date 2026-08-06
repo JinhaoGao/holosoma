@@ -72,6 +72,7 @@ class InteractionMeshRetargeter:
         visualize: bool = False,
         mesh_opacity: float = 1.0,
         debug: bool = False,
+        dynamic_ground_window: bool = True,
         show_interaction_mesh: bool = False,
         save_interaction_mesh: bool = True,
         interaction_mesh_mode: str = "both",
@@ -155,6 +156,7 @@ class InteractionMeshRetargeter:
         self.visualize = visualize
         self.mesh_opacity = float(mesh_opacity)
         self.debug = debug
+        self.dynamic_ground_window = dynamic_ground_window
         self.show_interaction_mesh = show_interaction_mesh
         if not save_interaction_mesh:
             raise ValueError("Canonical retargeting artifacts require Interaction Mesh data")
@@ -963,6 +965,14 @@ class InteractionMeshRetargeter:
             "object_points_target_world": np.asarray(obj_pts_list, dtype=np.float32),
         }
 
+    @staticmethod
+    def _ground_points_at_robot_root(
+        ground_points: np.ndarray,
+        q: np.ndarray,
+    ) -> np.ndarray:
+        """Translate a ground-point template to the robot root in XY."""
+        return np.asarray(ground_points) + np.asarray([q[0], q[1], 0.0])
+
     def _apply_dynamic_object_poses(
         self,
         q_locked_list: np.ndarray,
@@ -1752,6 +1762,18 @@ class InteractionMeshRetargeter:
                 object_quat_demo = object_poses[i, 3:]
                 object_trans_demo = object_poses[i, :3]
 
+                object_points_local_demo_frame = object_points_local_demo
+                object_points_local_frame = object_points_local
+                if self.object_name == "ground" and self.dynamic_ground_window:
+                    object_points_local_demo_frame = self._ground_points_at_robot_root(
+                        object_points_local_demo,
+                        q,
+                    )
+                    object_points_local_frame = self._ground_points_at_robot_root(
+                        object_points_local,
+                        q,
+                    )
+
                 # Get human joint positions and create interaction mesh in object frame
                 human_mapped_joints = human_joint_motions[i, self.mapped_joint_indices]
 
@@ -1763,19 +1785,19 @@ class InteractionMeshRetargeter:
                     )
 
                 source_vertices, source_tetrahedra = create_interaction_mesh(
-                    np.vstack([human_mapped_joints_in_object, object_points_local_demo])
+                    np.vstack([human_mapped_joints_in_object, object_points_local_demo_frame])
                 )
                 tetrahedra.append(source_tetrahedra)
 
                 object_quat = object_poses_augmented[i, 3:]
                 object_trans = object_poses_augmented[i, :3]
                 obj_pts_demo = transform_points_local_to_world(
-                    object_quat_demo, object_trans_demo, object_points_local_demo
+                    object_quat_demo, object_trans_demo, object_points_local_demo_frame
                 )
                 obj_pts = transform_points_local_to_world(
                     object_quat,
                     object_trans,
-                    object_points_local,
+                    object_points_local_frame,
                 )
                 if collect_object_point_trajectories:
                     obj_pts_demo_list.append(obj_pts_demo.astype(np.float32))
@@ -1821,7 +1843,7 @@ class InteractionMeshRetargeter:
                     q_t_last=retargeted_motions[-1],
                     target_laplacian=target_laplacian,
                     adj_list=adj_list,
-                    obj_pts_local=object_points_local,
+                    obj_pts_local=object_points_local_frame,
                     foot_sticking=foot_sticking_sequences[i],
                     w_nominal_tracking=w_nominal_tracking,
                     q_a_nominal=(q_nominal_list[i, self.q_a_indices] if q_nominal_list is not None else None),

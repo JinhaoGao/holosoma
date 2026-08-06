@@ -115,6 +115,9 @@ class RetargetingCommand:
     foot_sticking: Literal[True, False] = True
     """Enable or completely disable the foot-sticking XY hard constraints."""
 
+    dynamic_ground_window: bool = True
+    """Move the robot-only ground sampling window with the robot root."""
+
     retargeter: RetargeterRuntimeOptions = field(
         default_factory=RetargeterRuntimeOptions,
     )
@@ -190,6 +193,7 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         retargeter=RetargeterConfig(
             visualize=command.retargeter.visualize,
             debug=command.retargeter.debug,
+            dynamic_ground_window=command.dynamic_ground_window,
             activate_foot_sticking=command.foot_sticking,
             orientation_weights=orientation_weights,
             orientation_preview=command.orientation_preview,

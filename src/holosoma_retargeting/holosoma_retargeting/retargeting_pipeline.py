@@ -1085,6 +1085,7 @@ def build_retargeter_kwargs_from_config(
         "visualize": retargeter_config.visualize,
         "mesh_opacity": 1.0,
         "debug": retargeter_config.debug,
+        "dynamic_ground_window": retargeter_config.dynamic_ground_window,
         "show_interaction_mesh": False,
         "save_interaction_mesh": True,
         "interaction_mesh_mode": "both",
