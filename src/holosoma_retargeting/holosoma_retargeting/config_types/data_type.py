@@ -11,6 +11,7 @@ from holosoma_retargeting.config_types.robot import (
     RobotDefaults,
     _default_robot_defaults,
     _validate_robot_type,
+    robot_family,
 )
 from holosoma_retargeting.orientation_calibration import (
     ORIENTATION_ALIGNMENT_QUATERNIONS_WXYZ,
@@ -314,7 +315,7 @@ JOINTS_MAPPINGS = {
         "RightHand": "r_hand_sphere_link",
     },
     ("fbx_mocap", "g1"): {
-        "Hips": "pelvis",
+        "Spine": "pelvis",
         "LeftUpLeg": "left_hip_pitch_link",
         "RightUpLeg": "right_hip_pitch_link",
         "LeftLeg": "left_knee_link",
@@ -331,7 +332,7 @@ JOINTS_MAPPINGS = {
         "RightHand": "right_rubber_hand_link",
     },
     ("fbx_mocap", "e1"): {
-        "Hips": "base_link",
+        "Spine": "base_link",
         "LeftUpLeg": "l_leg_hip_pitch_link",
         "RightUpLeg": "r_leg_hip_pitch_link",
         "LeftLeg": "l_leg_knee_link",
@@ -348,7 +349,7 @@ JOINTS_MAPPINGS = {
         "RightHand": "r_hand_sphere_link",
     },
     ("fbx_mocap", "e2"): {
-        "Hips": "base_link",
+        "Spine": "base_link",
         "LeftUpLeg": "l_leg_hip_pitch_link",
         "RightUpLeg": "r_leg_hip_pitch_link",
         "LeftLeg": "l_leg_knee_link",
@@ -1359,7 +1360,7 @@ class MotionDataConfig:
         if self.joints_mapping is not None:
             return self.joints_mapping
 
-        key = (self.data_format, self.robot_type)
+        key = (self.data_format, robot_family(self.robot_type))
         if key in JOINTS_MAPPINGS:
             return JOINTS_MAPPINGS[key]
 
@@ -1370,7 +1371,10 @@ class MotionDataConfig:
         """Get the human-joint to robot-body mapping used by orientation tracking."""
         if self.orientation_joints_mapping is not None:
             return self.orientation_joints_mapping
-        return ORIENTATION_JOINTS_MAPPINGS.get((self.data_format, self.robot_type), {})
+        return ORIENTATION_JOINTS_MAPPINGS.get(
+            (self.data_format, robot_family(self.robot_type)),
+            {},
+        )
 
     @property
     def resolved_orientation_t_pose_human_quaternions_wxyz(
@@ -1381,7 +1385,7 @@ class MotionDataConfig:
         if self.orientation_t_pose_human_quaternions_wxyz is not None:
             return self.orientation_t_pose_human_quaternions_wxyz
         return ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ.get(
-            (self.data_format, self.robot_type),
+            (self.data_format, robot_family(self.robot_type)),
             {},
         )
 
@@ -1393,7 +1397,9 @@ class MotionDataConfig:
 
         if self.orientation_t_pose_robot_base_quaternion_wxyz is not None:
             return self.orientation_t_pose_robot_base_quaternion_wxyz
-        return ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ.get((self.data_format, self.robot_type))
+        return ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ.get(
+            (self.data_format, robot_family(self.robot_type))
+        )
 
     @property
     def resolved_orientation_t_pose_robot_joint_positions(
@@ -1404,7 +1410,7 @@ class MotionDataConfig:
         if self.orientation_t_pose_robot_joint_positions is not None:
             return self.orientation_t_pose_robot_joint_positions
         return ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS.get(
-            (self.data_format, self.robot_type),
+            (self.data_format, robot_family(self.robot_type)),
             {},
         )
 
@@ -1417,7 +1423,7 @@ class MotionDataConfig:
         if self.orientation_alignment_quaternions_wxyz is not None:
             return self.orientation_alignment_quaternions_wxyz
         return ORIENTATION_ALIGNMENT_QUATERNIONS_WXYZ.get(
-            (self.data_format, self.robot_type),
+            (self.data_format, robot_family(self.robot_type)),
             {},
         )
 

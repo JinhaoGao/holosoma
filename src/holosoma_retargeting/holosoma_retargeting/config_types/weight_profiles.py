@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
-from holosoma_retargeting.config_types.robot import RobotConfig
+from holosoma_retargeting.config_types.robot import RobotConfig, robot_family
 
 ORIENTATION_PROFILE_DATASETS = (
     "fbx_mocap",
@@ -238,12 +238,13 @@ def resolve_orientation_weights(
         return dict.fromkeys(mapping, weight) if weight > 0.0 else {}
 
     assert config_path is not None
+    profile_robot = robot_family(robot)
     path = _profile_path(
         config_path,
-        robot=robot,
+        robot=profile_robot,
         option="orientation_config",
     )
-    resolved = _orientation_profile_tables(path, robot=robot)[dataset]
+    resolved = _orientation_profile_tables(path, robot=profile_robot)[dataset]
     return resolved if any(weight > 0.0 for weight in resolved.values()) else {}
 
 
@@ -316,8 +317,13 @@ def resolve_natural_pose(
         return NaturalPoseProfile(references={}, weights={})
 
     selected_path = config_path or _DEFAULT_NATURE_PROFILE_DIR
-    path = _profile_path(selected_path, robot=robot, option="nature_config")
-    profile = _load_nature_profile(path, robot=robot)
+    profile_robot = "e1_23dof" if robot == "e1" else robot
+    path = _profile_path(
+        selected_path,
+        robot=profile_robot,
+        option="nature_config",
+    )
+    profile = _load_nature_profile(path, robot=profile_robot)
     if uniform_weight is None:
         return profile
 

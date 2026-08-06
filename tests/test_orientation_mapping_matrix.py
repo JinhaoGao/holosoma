@@ -114,7 +114,7 @@ class OrientationMappingMatrixTest(unittest.TestCase):
                     "l_arm_shoulder_yaw_link",
                 )
 
-    def test_only_e2_shoulder_links_differ_between_position_and_orientation(self) -> None:
+    def test_position_and_orientation_mapping_differences_are_explicit(self) -> None:
         for data_format in self.DATA_FORMATS:
             for robot in self.ROBOTS:
                 with self.subTest(data_format=data_format, robot=robot):
@@ -125,18 +125,26 @@ class OrientationMappingMatrixTest(unittest.TestCase):
                     position_mapping = motion.resolved_joints_mapping
                     orientation_mapping = motion.resolved_orientation_joints_mapping
                     self.assertIsNot(position_mapping, orientation_mapping)
-                    differing_joints = {
-                        name for name in position_mapping if position_mapping[name] != orientation_mapping[name]
+                    position_only = set(position_mapping).difference(orientation_mapping)
+                    orientation_only = set(orientation_mapping).difference(position_mapping)
+                    shared_differences = {
+                        name
+                        for name in set(position_mapping).intersection(orientation_mapping)
+                        if position_mapping[name] != orientation_mapping[name]
                     }
+                    expected_position_only = {"Spine"} if data_format == "fbx_mocap" else set()
+                    expected_orientation_only = {"Hips"} if data_format == "fbx_mocap" else set()
+                    self.assertEqual(position_only, expected_position_only)
+                    self.assertEqual(orientation_only, expected_orientation_only)
                     if robot == "e2":
                         shoulder_names = (
                             {"L_Shoulder", "R_Shoulder"}
                             if data_format in {"amass", "gvhmr", "omomo"}
                             else {"LeftArm", "RightArm"}
                         )
-                        self.assertEqual(differing_joints, shoulder_names)
+                        self.assertEqual(shared_differences, shoulder_names)
                     else:
-                        self.assertEqual(differing_joints, set())
+                        self.assertEqual(shared_differences, set())
 
     def test_fbx_uses_roll_position_shoulders_and_dynamic_source_bind_frames(self) -> None:
         for robot in self.ROBOTS:
@@ -154,9 +162,17 @@ class OrientationMappingMatrixTest(unittest.TestCase):
                     fbx.resolved_orientation_joints_mapping,
                     noetix.resolved_orientation_joints_mapping,
                 )
-                differing_position_joints = {
+                fbx_only = set(fbx.resolved_joints_mapping).difference(
+                    noetix.resolved_joints_mapping,
+                )
+                noetix_only = set(noetix.resolved_joints_mapping).difference(
+                    fbx.resolved_joints_mapping,
+                )
+                differing_shared_joints = {
                     name
-                    for name in fbx.resolved_joints_mapping
+                    for name in set(fbx.resolved_joints_mapping).intersection(
+                        noetix.resolved_joints_mapping,
+                    )
                     if fbx.resolved_joints_mapping[name] != noetix.resolved_joints_mapping[name]
                 }
                 expected_differences = (
@@ -165,8 +181,14 @@ class OrientationMappingMatrixTest(unittest.TestCase):
                     else set()
                 )
                 self.assertEqual(
-                    differing_position_joints,
+                    differing_shared_joints,
                     expected_differences,
+                )
+                self.assertEqual(fbx_only, {"Spine"})
+                self.assertEqual(noetix_only, {"Hips"})
+                self.assertEqual(
+                    fbx.resolved_joints_mapping["Spine"],
+                    noetix.resolved_joints_mapping["Hips"],
                 )
                 self.assertIn(
                     "shoulder_roll_link",

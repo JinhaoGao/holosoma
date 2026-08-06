@@ -12,6 +12,11 @@ Run commands from this directory:
 cd src/holosoma_retargeting/holosoma_retargeting
 ```
 
+E1 robot-only runs accept `--robot e1_23dof` and `--robot e1_24dof`.
+The historical `--robot e1` name remains an alias of `e1_23dof`. Both explicit
+variants use the same human-data mappings; the 24DOF model adds the actuated
+`waist_roll_joint` and loads its URDF and MuJoCo XML from `models/e1`.
+
 ## Quick start
 
 Retarget one LAFAN motion to E2:
@@ -63,13 +68,13 @@ python examples/robot_retarget.py \
 
 | Dataset preset | Internal format | Direct source orientation | `robot_only` |
 | --- | --- | --- | --- |
-| `climbing` | `mocap` | No; the legacy source is position-only NPY | G1, E1, E2 |
-| `fbx_mocap` | `fbx_mocap` | Yes; direct FBX local-rotation FK | G1, E1, E2 |
-| `gvhmr` | `gvhmr` | Yes; direct SMPL-X rotation FK | G1, E1, E2 |
-| `lafan` | `lafan` | Yes; BVH rotation-channel FK | G1, E1, E2 |
-| `noetix_csv_climb` | `mocap` | Yes; converted bone-rotation FK | G1, E1, E2 |
-| `noetix_mocap` | `noetix_mocap` | Yes; BVH rotation-channel FK | G1, E1, E2 |
-| `OMOMO_new` | `omomo` | Yes; InterMimic global orientation tensor | G1, E1, E2 |
+| `climbing` | `mocap` | No; the legacy source is position-only NPY | G1, E1 23/24DOF, E2 |
+| `fbx_mocap` | `fbx_mocap` | Yes; direct FBX local-rotation FK | G1, E1 23/24DOF, E2 |
+| `gvhmr` | `gvhmr` | Yes; direct SMPL-X rotation FK | G1, E1 23/24DOF, E2 |
+| `lafan` | `lafan` | Yes; BVH rotation-channel FK | G1, E1 23/24DOF, E2 |
+| `noetix_csv_climb` | `mocap` | Yes; converted bone-rotation FK | G1, E1 23/24DOF, E2 |
+| `noetix_mocap` | `noetix_mocap` | Yes; BVH rotation-channel FK | G1, E1 23/24DOF, E2 |
+| `OMOMO_new` | `omomo` | Yes; InterMimic global orientation tensor | G1, E1 23/24DOF, E2 |
 
 `object_interaction` accepts only `OMOMO_new` on G1. `climbing` accepts only
 `climbing` and `noetix_csv_climb` on G1. The augmentation command accepts only
@@ -101,7 +106,8 @@ python examples/robot_retarget.py \
   --orientation_config examples/orientation_weights/g1.json
 ```
 
-The repository provides `g1.json`, `e1.json`, and `e2.json`. Each contains
+The orientation directory provides `g1.json`, `e1.json`, and `e2.json`. Both
+explicit E1 variants use the E1 orientation table. Each profile contains
 complete tables for `gvhmr`, `lafan`, `noetix_csv_climb`, `noetix_mocap`, and
 `OMOMO_new`; the current `--dataset` selects the table. Every mapped key must
 appear and may name either its human keypoint or robot link. Set a value to
@@ -116,8 +122,9 @@ inferred from positions or bone vectors.
 Natural-posture regularization is also disabled by default. Use
 `--nature_weights WEIGHT` to assign one non-negative weight to every actuated
 joint. The fixed natural reference angles are read from the bundled
-`examples/nature_weights/g1.json`, `e1.json`, or `e2.json` profile selected by
-`--robot`:
+matching file in `examples/nature_weights`. The explicit E1 variants use
+independent `e1_23dof.json` and `e1_24dof.json` tables; the latter defines all
+24 joints, including `waist_roll_joint`:
 
 ```bash
 python examples/robot_retarget.py \
@@ -129,7 +136,7 @@ python examples/robot_retarget.py \
 ```
 
 For independent joint weights, pass a robot-specific JSON file or a directory
-containing the three corresponding files through `--nature_config`. Each table
+containing the corresponding files through `--nature_config`. Each table
 contains direct absolute weights and its natural reference angles in radians:
 
 ```bash

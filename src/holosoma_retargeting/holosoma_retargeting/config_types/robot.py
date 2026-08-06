@@ -20,8 +20,22 @@ _ROBOT_DEFAULTS: dict[str, RobotDefaults] = {
     "g1": {"robot_dof": 29, "robot_height": 1.32, "object_name": "ground"},
     "t1": {"robot_dof": 23, "robot_height": 1.2, "object_name": "ground"},
     "e1": {"robot_dof": 23, "robot_height": 1.4, "object_name": "ground"},
+    "e1_23dof": {"robot_dof": 23, "robot_height": 1.4, "object_name": "ground"},
+    "e1_24dof": {"robot_dof": 24, "robot_height": 1.4, "object_name": "ground"},
     "e2": {"robot_dof": 23, "robot_height": 1.6, "object_name": "ground"},
 }
+
+_ROBOT_URDF_FILES = {
+    "e1_23dof": "models/e1/e1_23dof.urdf",
+    "e1_24dof": "models/e1/e1_24dof.urdf",
+}
+
+
+def robot_family(robot_type: str) -> str:
+    """Return the shared mapping family for a concrete robot variant."""
+    if robot_type in {"e1", "e1_23dof", "e1_24dof"}:
+        return "e1"
+    return robot_type
 
 
 def _default_robot_defaults() -> dict[str, RobotDefaults]:
@@ -113,6 +127,8 @@ class RobotConfig:
         """Get robot name - use override if provided, else compute from robot_type and DOF."""
         if self.robot_name is not None:
             return self.robot_name
+        if self.robot_type in _ROBOT_URDF_FILES:
+            return self.robot_type
         return f"{self.robot_type}_{self.ROBOT_DOF}dof"
 
     ROBOT_NAME = property(
@@ -124,6 +140,8 @@ class RobotConfig:
         """Get robot URDF file path."""
         if self.robot_urdf_file is not None:
             return self.robot_urdf_file
+        if self.robot_type in _ROBOT_URDF_FILES:
+            return _ROBOT_URDF_FILES[self.robot_type]
         return f"models/{self.robot_type}/{self.ROBOT_NAME}.urdf"
 
     ROBOT_URDF_FILE = property(_robot_urdf_file, doc="Get robot URDF file path.")
@@ -133,7 +151,8 @@ class RobotConfig:
         if self.foot_sticking_links is not None:
             return self.foot_sticking_links
 
-        if self.robot_type == "g1":
+        family = robot_family(self.robot_type)
+        if family == "g1":
             return [
                 "left_ankle_roll_sphere_1_link",
                 "right_ankle_roll_sphere_1_link",
@@ -144,7 +163,7 @@ class RobotConfig:
                 "left_ankle_roll_sphere_4_link",
                 "right_ankle_roll_sphere_4_link",
             ]
-        if self.robot_type == "t1":
+        if family == "t1":
             return [
                 "left_foot_sphere_1_link",
                 "right_foot_sphere_1_link",
@@ -157,7 +176,7 @@ class RobotConfig:
                 "left_foot_sphere_5_link",
                 "right_foot_sphere_5_link",
             ]
-        if self.robot_type == "e1":
+        if family == "e1":
             return [
                 "l_foot_sphere_1_link",
                 "r_foot_sphere_1_link",
@@ -170,7 +189,7 @@ class RobotConfig:
                 "l_foot_sphere_5_link",
                 "r_foot_sphere_5_link",
             ]
-        if self.robot_type == "e2":
+        if family == "e2":
             return [
                 "l_foot_sphere_1_link",
                 "r_foot_sphere_1_link",
@@ -257,13 +276,16 @@ class RobotConfig:
         if self.nominal_tracking_indices is not None:
             return self.nominal_tracking_indices
 
-        if self.robot_type == "g1":
+        family = robot_family(self.robot_type)
+        if family == "g1":
             return np.arange(19)
-        if self.robot_type == "t1":
+        if family == "t1":
             return np.concatenate([np.arange(7), np.arange(11, 23)])
-        if self.robot_type == "e1":
+        if self.robot_type == "e1_24dof":
+            return np.arange(21)
+        if family == "e1":
             return np.arange(20)
-        if self.robot_type == "e2":
+        if family == "e2":
             # Floating base, both six-DoF legs, and all three waist joints.
             # The arms remain free to follow the interaction and orientation
             # objectives without a competing nominal-pose penalty.

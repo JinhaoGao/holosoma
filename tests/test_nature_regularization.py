@@ -41,7 +41,7 @@ ORIENTATION_PROFILE_DIR = PACKAGE_ROOT / "holosoma_retargeting" / "examples" / "
 
 
 def _command(
-    robot: Literal["g1", "e1", "e2"],
+    robot: Literal["g1", "e1", "e1_23dof", "e1_24dof", "e2"],
     *,
     dataset: str = "noetix_mocap",
     nature_weights: float | None = None,
@@ -94,15 +94,17 @@ class NatureProfileTests(unittest.TestCase):
         self.assertEqual(set(config.retargeter.natural_pose_weights.values()), {0.25})
         self.assertEqual(len(retargeter.natural_pose_joint_names), 29)
 
-    def test_profiles_correspond_to_all_three_robot_models(self) -> None:
-        expected_joint_counts: dict[Literal["g1", "e1", "e2"], int] = {
+    def test_profiles_correspond_to_every_explicit_robot_model(self) -> None:
+        expected_joint_counts = {
             "g1": 29,
-            "e1": 23,
+            "e1_23dof": 23,
+            "e1_24dof": 24,
             "e2": 23,
         }
-        expected_active_joint_counts: dict[Literal["g1", "e1", "e2"], int] = {
+        expected_active_joint_counts = {
             "g1": 2,
-            "e1": 2,
+            "e1_23dof": 2,
+            "e1_24dof": 2,
             "e2": 2,
         }
         for robot, expected_joint_count in expected_joint_counts.items():
@@ -139,7 +141,11 @@ class NatureProfileTests(unittest.TestCase):
                 "left_shoulder_pitch_joint",
                 "right_shoulder_pitch_joint",
             },
-            "e1": {
+            "e1_23dof": {
+                "l_arm_shoulder_pitch_joint",
+                "r_arm_shoulder_pitch_joint",
+            },
+            "e1_24dof": {
                 "l_arm_shoulder_pitch_joint",
                 "r_arm_shoulder_pitch_joint",
             },
@@ -150,7 +156,8 @@ class NatureProfileTests(unittest.TestCase):
         }
         expected_weights = {
             "g1": 2.0,
-            "e1": 0.5,
+            "e1_23dof": 0.5,
+            "e1_24dof": 0.5,
             "e2": 0.5,
         }
         for robot, pitch_joints in expected_pitch_joints.items():
@@ -172,7 +179,7 @@ class NatureProfileTests(unittest.TestCase):
                 )
 
     def test_fbx_mocap_selects_each_robot_natural_pose_table(self) -> None:
-        for robot in ("g1", "e1", "e2"):
+        for robot in ("g1", "e1_23dof", "e1_24dof", "e2"):
             with self.subTest(robot=robot):
                 profile = json.loads(
                     (NATURE_PROFILE_DIR / f"{robot}.json").read_text(
@@ -211,7 +218,7 @@ class NatureProfileTests(unittest.TestCase):
                 _command(
                     "e1",
                     nature_weights=1.0,
-                    nature_config=NATURE_PROFILE_DIR / "e1.json",
+                    nature_config=NATURE_PROFILE_DIR / "e1_23dof.json",
                 ),
             )
 
@@ -225,15 +232,15 @@ class NatureProfileTests(unittest.TestCase):
 
     def test_nature_profile_rejects_mismatched_tables(self) -> None:
         profile = json.loads(
-            (NATURE_PROFILE_DIR / "e1.json").read_text(encoding="utf-8"),
+            (NATURE_PROFILE_DIR / "e1_23dof.json").read_text(encoding="utf-8"),
         )
         profile["weights"].pop("l_arm_shoulder_yaw_joint")
         with tempfile.TemporaryDirectory() as temporary_dir:
-            profile_path = Path(temporary_dir) / "e1.json"
+            profile_path = Path(temporary_dir) / "e1_23dof.json"
             profile_path.write_text(json.dumps(profile), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "exactly the same joint names"):
                 internal_config_from_command(
-                    _command("e1", nature_config=profile_path),
+                    _command("e1_23dof", nature_config=profile_path),
                 )
 
     def test_underscore_cli_aliases_are_supported(self) -> None:

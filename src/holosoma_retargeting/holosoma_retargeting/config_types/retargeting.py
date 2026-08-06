@@ -94,7 +94,7 @@ class RetargetingCommand:
     task: TaskType = "object_interaction"
     """Retargeting task."""
 
-    robot: Literal["g1", "e1", "e2"] = "g1"
+    robot: Literal["g1", "e1", "e1_23dof", "e1_24dof", "e2"] = "g1"
     """Target robot."""
 
     dataset: DatasetName = "OMOMO_new"
