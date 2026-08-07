@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import mujoco
@@ -272,6 +273,45 @@ class ObjectNonPenetrationToggleTests(unittest.TestCase):
                 "ground",
             )
         )
+
+    def test_candidates_exclude_robot_self_collision_without_running_mj_collision(self):
+        retargeter = InteractionMeshRetargeter.__new__(InteractionMeshRetargeter)
+        retargeter.object_name = "largebox"
+        retargeter.activate_obj_non_penetration = True
+        retargeter.robot_model = SimpleNamespace(
+            ngeom=5,
+            geom_contype=np.asarray([1, 1, 1, 1, 0], dtype=np.int32),
+            geom_conaffinity=np.asarray([1, 1, 1, 1, 0], dtype=np.int32),
+        )
+        geom_names = (
+            "ground",
+            "left_ankle_collision",
+            "right_ankle_collision",
+            "largebox_collision_000",
+            "visual_only",
+        )
+
+        with patch(
+            "holosoma_retargeting.src.interaction_mesh_retargeter.mujoco.mj_id2name",
+            side_effect=lambda _model, _object_type, geom_id: geom_names[geom_id],
+        ), patch(
+            "holosoma_retargeting.src.interaction_mesh_retargeter.mujoco.mj_collision",
+            side_effect=AssertionError("environment candidate generation must not run mj_collision"),
+        ):
+            candidates = retargeter._environment_collision_candidates()
+
+        self.assertEqual(
+            candidates,
+            frozenset(
+                {
+                    (0, 1),
+                    (0, 2),
+                    (1, 3),
+                    (2, 3),
+                }
+            ),
+        )
+        self.assertNotIn((1, 2), candidates)
 
 
 class ObjectPointPayloadTests(unittest.TestCase):

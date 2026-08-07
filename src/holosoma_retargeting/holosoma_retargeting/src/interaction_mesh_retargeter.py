@@ -2710,7 +2710,7 @@ class InteractionMeshRetargeter:
 
         if not hasattr(self, "_geom_names"):
             raise RuntimeError(
-                "[SelfCollision] _geom_names not initialized. Please run _prefilter_pairs_with_mj_collision first."
+                "[SelfCollision] _geom_names not initialized. Please build environment collision candidates first."
             )
 
         _first_iter = self._sc_last_vis_frame != frame_idx
@@ -3088,34 +3088,45 @@ class InteractionMeshRetargeter:
 
         return nhat_BA_W @ Jc
 
-    def _prefilter_pairs_with_mj_collision(self, threshold: float):
-        m, d = self.robot_model, self.robot_data
+    def _environment_collision_candidates(self):
+        """Return collision-mask-compatible ground and object geom pairs.
+
+        The candidate set depends only on the compiled model and retargeter
+        configuration, so build it once instead of running MuJoCo's complete
+        collision pipeline during every SQP iteration.  In particular, this
+        avoids generating contact manifolds for robot self-collision pairs
+        that are discarded by the environment constraints anyway.
+        """
+
+        cached_candidates = getattr(self, "_environment_collision_candidates_cache", None)
+        if cached_candidates is not None:
+            return cached_candidates
+
+        m = self.robot_model
         ngeom = m.ngeom
 
         self._geom_names = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g) or "" for g in range(ngeom)]
-
-        if not hasattr(self, "_saved_margins"):
-            self._saved_margins = np.empty_like(m.geom_margin)
-        self._saved_margins[:] = m.geom_margin
-
-        m.geom_margin[:] = threshold
-
-        # Run collision. This runs broad→narrow and fills d.contact.
-        mujoco.mj_collision(m, d)
-
-        # Collect unique candidate pairs that involve at least one masked geom
         candidates = set()
-        for k in range(d.ncon):
-            c = d.contact[k]
-            g1, g2 = int(c.geom1), int(c.geom2)
-            if g1 < 0 or g2 < 0:
+        contype, conaff = m.geom_contype, m.geom_conaffinity
+        for g1 in range(ngeom):
+            if contype[g1] == 0 and conaff[g1] == 0:
                 continue
-            candidates.add((min(g1, g2), max(g1, g2)))
+            for g2 in range(g1 + 1, ngeom):
+                if contype[g2] == 0 and conaff[g2] == 0:
+                    continue
+                masks_match = (int(contype[g1]) & int(conaff[g2])) or (
+                    int(contype[g2]) & int(conaff[g1])
+                )
+                if not masks_match:
+                    continue
+                if self._environment_collision_pair_is_active(
+                    self._geom_names[g1],
+                    self._geom_names[g2],
+                ):
+                    candidates.add((g1, g2))
 
-        # Restore margins to keep physics untouched
-        m.geom_margin[:] = self._saved_margins
-
-        return candidates
+        self._environment_collision_candidates_cache = frozenset(candidates)
+        return self._environment_collision_candidates_cache
 
     def _update_jacobians_and_phis_from_q(self, q: np.ndarray):
         self.robot_data.qpos[:] = q
@@ -3125,30 +3136,14 @@ class InteractionMeshRetargeter:
         m, d = self.robot_model, self.robot_data
         threshold = float(self.collision_detection_threshold)
 
-        # 1) Fast prefilter via mj_collision with temporary margins
-        candidates = self._prefilter_pairs_with_mj_collision(threshold)
+        # Candidate topology is static; precise distances are evaluated below.
+        candidates = self._environment_collision_candidates()
 
         Js, phis = {}, {}
         fromto = np.zeros(6, dtype=float)
 
-        # 2) Precise distance only on candidates (early-exit at threshold)
-        contype, conaff = m.geom_contype, m.geom_conaffinity
-
-        def masks_ok(g1, g2):
-            if contype[g1] == 0 and conaff[g1] == 0:
-                return False
-            if contype[g2] == 0 and conaff[g2] == 0:
-                return False
-            return self._environment_collision_pair_is_active(
-                self._geom_names[g1],
-                self._geom_names[g2],
-            )
-
+        # Compute precise distances only for relevant environment pairs.
         for g1, g2 in candidates:
-            # Optional: keep your own filters here (e.g., skip object-ground, only keep interaction with object/ground)
-            if not masks_ok(g1, g2):
-                continue
-
             fromto[:] = 0.0
             dist = mujoco.mj_geomDistance(m, d, g1, g2, threshold, fromto)
             if dist <= threshold:
