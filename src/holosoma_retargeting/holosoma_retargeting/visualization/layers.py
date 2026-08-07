@@ -16,6 +16,7 @@ class LayerId(StrEnum):
     ROBOT_MESH = "robot_mesh"
     OBJECT_MESH = "object_mesh"
     HUMAN_SKELETON = "human_skeleton"
+    ORIGINAL_HUMAN_SKELETON = "original_human_skeleton"
     ROBOT_SKELETON = "robot_skeleton"
     HUMAN_HANDS = "human_hands"
     OBJECT_KEYPOINTS = "object_keypoints"
@@ -62,6 +63,13 @@ LAYER_SPECS: tuple[LayerSpec, ...] = (
         "Human skeleton",
         "Source-human keypoints and connecting bones.",
         "h",
+    ),
+    LayerSpec(
+        LayerId.ORIGINAL_HUMAN_SKELETON,
+        "Skeleton",
+        "Original FBX skeletons",
+        "Both unretargeted FBX actor skeletons restored in their shared source-scene frame.",
+        "g",
     ),
     LayerSpec(
         LayerId.ROBOT_SKELETON,

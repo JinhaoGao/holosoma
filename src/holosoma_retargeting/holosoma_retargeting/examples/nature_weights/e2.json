@@ -43,11 +43,11 @@
     "waist_yaw_joint": 0,
     "waist_roll_joint": 0,
     "waist_pitch_joint": 0,
-    "l_arm_shoulder_pitch_joint": 0.5,
+    "l_arm_shoulder_pitch_joint": 0.8,
     "l_arm_shoulder_roll_joint": 0,
     "l_arm_shoulder_yaw_joint": 0,
     "l_arm_elbow_joint": 0,
-    "r_arm_shoulder_pitch_joint": 0.5,
+    "r_arm_shoulder_pitch_joint": 0.8,
     "r_arm_shoulder_roll_joint": 0,
     "r_arm_shoulder_yaw_joint": 0,
     "r_arm_elbow_joint": 0

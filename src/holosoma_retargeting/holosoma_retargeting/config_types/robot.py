@@ -21,8 +21,8 @@ _ROBOT_DEFAULTS: dict[str, RobotDefaults] = {
     "t1": {"robot_dof": 23, "robot_height": 1.2, "object_name": "ground"},
     "e1": {"robot_dof": 23, "robot_height": 1.4, "object_name": "ground"},
     "e1_23dof": {"robot_dof": 23, "robot_height": 1.4, "object_name": "ground"},
-    "e1_24dof": {"robot_dof": 24, "robot_height": 1.4, "object_name": "ground"},
-    "e2": {"robot_dof": 23, "robot_height": 1.6, "object_name": "ground"},
+    "e1_24dof": {"robot_dof": 24, "robot_height": 1.5, "object_name": "ground"},
+    "e2": {"robot_dof": 23, "robot_height": 1.65, "object_name": "ground"},
 }
 
 _ROBOT_URDF_FILES = {

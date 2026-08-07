@@ -1216,6 +1216,7 @@ def _build_orientation_overlay(
     mapped_joint_names = npz_metadata.get("mapped_human_joint_names")
     mapped_robot_link_names = npz_metadata.get("mapped_robot_link_names")
     mapped_robot_joints = npz_metadata.get("mapped_robot_joints")
+    diagnostics = npz_metadata.get("orientation_diagnostics")
     human_index = (
         {name: index for index, name in enumerate(human_joint_names)} if isinstance(human_joint_names, list) else {}
     )
@@ -1236,7 +1237,11 @@ def _build_orientation_overlay(
         retargeting_human_names = (
             preview.human_joint_names
             if isinstance(preview, OrientationPreview)
-            else tuple(mapped_joint_names or ())
+            else (
+                diagnostics.human_joint_names
+                if isinstance(diagnostics, OrientationDiagnostics)
+                else tuple(mapped_joint_names or ())
+            )
         )
         selected_retargeting = _requested_saved_orientation_indices(
             source_names,
@@ -1310,43 +1315,22 @@ def _build_orientation_overlay(
                 f"per-link frames ({preview.alignment_mode}); no SO(3) errors are loaded.",
             )
 
-    diagnostics = npz_metadata.get("orientation_diagnostics")
-    if (
-        isinstance(diagnostics, OrientationDiagnostics)
-        and human_joints is not None
-        and isinstance(mapped_joint_names, list)
-        and isinstance(mapped_robot_link_names, list)
-        and mapped_robot_joints is not None
-    ):
-        missing = [name for name in mapped_joint_names if name not in human_index]
+    if isinstance(diagnostics, OrientationDiagnostics) and human_joints is not None:
+        missing = [name for name in diagnostics.human_joint_names if name not in human_index]
         if missing:
-            raise ValueError(f"Mapped human joints are absent from human_joint_names: {missing}")
-        human_points = np.asarray(human_joints)[
-            :,
-            [human_index[name] for name in mapped_joint_names],
-        ]
-        robot_points = np.asarray(mapped_robot_joints, dtype=np.float32)
-        expected_shape = (num_frames, len(mapped_joint_names), 3)
-        if human_points.shape != expected_shape or robot_points.shape != expected_shape:
-            raise ValueError(
-                "Orientation skeleton trajectories must both have shape "
-                f"{expected_shape}; got human={human_points.shape}, "
-                f"robot={robot_points.shape}"
-            )
+            raise ValueError(f"Orientation joints are absent from human_joint_names: {missing}")
         selected = orientation_joint_indices(
             diagnostics,
             config.orientation_joints,
         )
-        point_indices = orientation_skeleton_point_indices(
-            diagnostics,
-            tuple(mapped_joint_names),
-            tuple(mapped_robot_link_names),
-        )[selected]
         target_overlay = SavedOrientationAxesOverlay(
             server=server,
             namespace="/overlays/orientation/target",
             names=tuple(diagnostics.human_joint_names[int(index)] for index in selected),
-            positions=human_points[:, point_indices],
+            positions=np.asarray(human_joints)[
+                :,
+                [human_index[diagnostics.human_joint_names[int(index)]] for index in selected],
+            ],
             quaternions_wxyz=diagnostics.target_quaternions_wxyz[
                 :,
                 selected,
@@ -1359,6 +1343,27 @@ def _build_orientation_overlay(
             loop=config.loop,
         )
         if npz_metadata.get("robot_link_quaternions_wxyz") is None:
+            if (
+                not isinstance(mapped_joint_names, list)
+                or not isinstance(mapped_robot_link_names, list)
+                or mapped_robot_joints is None
+            ):
+                raise ValueError(
+                    "Orientation robot axes require either complete robot-link trajectories "
+                    "or mapped robot skeleton trajectories",
+                )
+            robot_points = np.asarray(mapped_robot_joints, dtype=np.float32)
+            expected_shape = (num_frames, len(mapped_joint_names), 3)
+            if robot_points.shape != expected_shape:
+                raise ValueError(
+                    "Mapped robot skeleton trajectory must have shape "
+                    f"{expected_shape}; got {robot_points.shape}",
+                )
+            point_indices = orientation_skeleton_point_indices(
+                diagnostics,
+                tuple(mapped_joint_names),
+                tuple(mapped_robot_link_names),
+            )[selected]
             robot_retargeting_overlay = SavedOrientationAxesOverlay(
                 server=server,
                 namespace="/overlays/orientation/robot/retargeting",
@@ -1390,6 +1395,14 @@ def _build_orientation_overlay(
             if isinstance(mapped_joint_names, list) and isinstance(mapped_robot_link_names, list)
             else {}
         )
+        if isinstance(diagnostics, OrientationDiagnostics):
+            aliases.update(
+                zip(
+                    diagnostics.human_joint_names,
+                    diagnostics.robot_link_names,
+                    strict=True,
+                ),
+            )
         selected_all = _requested_saved_orientation_indices(
             robot_link_names,
             config.orientation_joints,
@@ -1398,7 +1411,15 @@ def _build_orientation_overlay(
         retargeting_robot_names = (
             preview.robot_link_names
             if isinstance(preview, OrientationPreview)
-            else tuple(mapped_robot_link_names or ())
+            else (
+                tuple(
+                    dict.fromkeys(
+                        (*tuple(mapped_robot_link_names or ()), *diagnostics.robot_link_names),
+                    ),
+                )
+                if isinstance(diagnostics, OrientationDiagnostics)
+                else tuple(mapped_robot_link_names or ())
+            )
         )
         selected_retargeting = _requested_saved_orientation_indices(
             robot_link_names,

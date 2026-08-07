@@ -43,10 +43,10 @@ ORIENTATION_PROFILE_DIR = PACKAGE_ROOT / "holosoma_retargeting" / "examples" / "
 
 
 class RetargetingEntrypointTests(unittest.TestCase):
-    def test_only_two_production_commands_are_registered(self):
+    def test_all_production_commands_are_registered(self):
         self.assertEqual(
             PUBLIC_RETARGETING_COMMANDS,
-            ("robot_retarget", "parallel_robot_retarget"),
+            ("robot_retarget", "parallel_robot_retarget", "paired_retargeting.robot_refine"),
         )
 
     def test_single_entry_forces_identity_and_uses_single_result_root(self):
@@ -124,6 +124,51 @@ class RetargetingEntrypointTests(unittest.TestCase):
             ),
         )
         self.assertNotIn("canonical", result.parts)
+
+    def test_output_name_replaces_only_the_artifact_filename(self):
+        identity = _canonical_result_path(
+            results_root=Path("/results"),
+            robot="e2",
+            task_type="robot_only",
+            dataset_partition="fbx_mocap",
+            sequence_key="session/Take_38_003_R__nan",
+            variant=RetargetVariant(),
+            output_name="Take_38_003_R__nan_o0.npz",
+        )
+        augmented = _canonical_result_path(
+            results_root=Path("/results"),
+            robot="e2",
+            task_type="robot_only",
+            dataset_partition="fbx_mocap",
+            sequence_key="session/Take_38_003_R__nan",
+            variant=RetargetVariant(
+                name="translated",
+                translation=(0.2, 0.0, 0.0),
+            ),
+            output_name="Take_38_003_R__nan_o0",
+        )
+
+        self.assertEqual(
+            identity,
+            Path("/results/e2/robot_only/fbx_mocap/session/Take_38_003_R__nan_o0.npz"),
+        )
+        self.assertEqual(
+            augmented,
+            Path("/results/e2/robot_only/fbx_mocap/session/Take_38_003_R__nan_o0_translated.npz"),
+        )
+
+    def test_output_name_rejects_paths_and_non_npz_suffixes(self):
+        for output_name in ("nested/result.npz", "/tmp/result.npz", "result.csv", ".npz"):
+            with self.subTest(output_name=output_name), self.assertRaises(ValueError):
+                _canonical_result_path(
+                    results_root=Path("/results"),
+                    robot="e2",
+                    task_type="robot_only",
+                    dataset_partition="fbx_mocap",
+                    sequence_key="motion",
+                    variant=RetargetVariant(),
+                    output_name=output_name,
+                )
 
     def test_compact_command_resolves_dataset_defaults(self):
         command = RetargetingCommand(
@@ -233,6 +278,16 @@ class RetargetingEntrypointTests(unittest.TestCase):
         )
 
         self.assertFalse(command.retargeter.visualize)
+
+    def test_output_name_cli_maps_to_internal_config(self):
+        command = tyro.cli(
+            RetargetingCommand,
+            args=["--output-name", "Take_38_003_R__nan_o0.npz"],
+        )
+        config = internal_config_from_command(command)
+
+        self.assertEqual(command.output_name, "Take_38_003_R__nan_o0.npz")
+        self.assertEqual(config.output_name, "Take_38_003_R__nan_o0.npz")
 
     def test_foot_sticking_is_on_by_default(self):
         command = tyro.cli(RetargetingCommand, args=[])
@@ -383,18 +438,24 @@ class RetargetingEntrypointTests(unittest.TestCase):
                         ),
                     )
                     expected = profile["datasets"][dataset]["weights"]
-                    if dataset == "fbx_mocap":
+                    if set(expected.values()) == {0.0}:
                         self.assertEqual(config.retargeter.orientation_weights, {})
-                        self.assertEqual(set(expected.values()), {0.0})
                     else:
                         self.assertEqual(len(config.retargeter.orientation_weights), 15)
                         self.assertEqual(config.retargeter.orientation_weights, expected)
 
-    def test_fbx_e2_orientation_weights_are_disabled(self):
+    def test_fbx_e2_orientation_profile_tracks_hips_legs_and_forearms(self):
         profile = json.loads(
             (ORIENTATION_PROFILE_DIR / "e2.json").read_text(encoding="utf-8"),
         )
-        self.assertEqual(set(profile["datasets"]["fbx_mocap"]["weights"].values()), {0.0})
+        weights = profile["datasets"]["fbx_mocap"]["weights"]
+        self.assertEqual(weights["Hips"], 20.0)
+        self.assertEqual(weights["LeftUpLeg"], 1.0)
+        self.assertEqual(weights["RightUpLeg"], 1.0)
+        self.assertEqual(weights["LeftForeArm"], 0.3)
+        self.assertEqual(weights["RightForeArm"], 0.3)
+        self.assertEqual(weights["LeftArm"], 0.0)
+        self.assertEqual(weights["RightArm"], 0.0)
 
     def test_orientation_profile_accepts_keypoint_and_link_weight_names(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -518,6 +579,7 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 "motion",
                 "data_path",
                 "save_dir",
+                "output_name",
                 "overwrite",
                 "foot_sticking",
                 "dynamic_ground_window",

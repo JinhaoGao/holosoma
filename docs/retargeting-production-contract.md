@@ -7,7 +7,7 @@ upstream or remote `dev` branch is explicitly outside this work.
 
 ## Public interfaces
 
-The package exposes exactly two retargeting commands.
+The package exposes three retargeting commands.
 
 `robot_retarget.py` retargets one explicitly selected motion without dataset
 discovery. It writes the identity result under `demo_results`.
@@ -16,6 +16,10 @@ discovery. It writes the identity result under `demo_results`.
 configured augmentation variants. Parallelism is an implementation detail; the
 command must not walk a dataset directory. It writes results under
 `demo_results_parallel`.
+
+`paired_retargeting/robot_refine.py` jointly refines two synchronized
+robot-only results. Its implementation and player are isolated under the
+`paired_retargeting` package.
 
 Ablation runners, weight searches, comparison batches, full-dataset traversal,
 result rebuilding, and result promotion are not production interfaces. Both
@@ -105,6 +109,10 @@ output path that already exists.
 Identity results use:
 
 `demo_results/<robot>/<task>/<dataset>/<motion>.npz`
+
+`--output-name NAME.npz` replaces only the final identity filename. It cannot
+contain a directory component and does not alter the canonical directory
+partitioning.
 
 Augmented results use:
 

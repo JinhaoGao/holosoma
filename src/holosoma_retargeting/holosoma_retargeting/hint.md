@@ -51,6 +51,7 @@ python examples/robot_retarget.py \
 ```bash
 # --data-path PATH               覆盖数据集的默认根目录
 # --save-dir PATH                覆盖默认输出目录 demo_results
+# --output-name NAME.npz         只修改最终 NPZ 文件名，不改变结果目录层级
 # --overwrite                    覆盖已有结果
 # --foot-sticking True|False     开启或完全关闭足底粘连 XY 硬约束，默认 True
 # --retargeter.debug             显示诊断图层，并在完成后等待 Enter

@@ -70,6 +70,21 @@ def test_job_contract_is_compact_and_colocated(tmp_path: Path) -> None:
     assert "solver_identity" not in decoded
 
 
+def test_job_output_name_is_not_part_of_solver_identity(tmp_path: Path) -> None:
+    source = tmp_path / "walk.npy"
+    np.save(source, np.zeros((2, 22, 3), dtype=np.float32))
+    default_config = _robot_only_config(source)
+    renamed_config = _robot_only_config(source)
+    renamed_config.output_name = "custom_result.npz"
+
+    default_job = build_retarget_job(default_config, results_root=tmp_path / "results")
+    renamed_job = build_retarget_job(renamed_config, results_root=tmp_path / "results")
+
+    assert renamed_job.output_path.name == "custom_result.npz"
+    assert renamed_job.baseline_path == renamed_job.output_path
+    assert renamed_job.config_json == default_job.config_json
+
+
 def test_npz_to_csv_reorders_joints_and_writes_only_robot_numeric_data(tmp_path: Path) -> None:
     urdf = tmp_path / "robot.urdf"
     _write_two_joint_urdf(urdf)

@@ -154,9 +154,15 @@ class OrientationMappingMatrixTest(unittest.TestCase):
                     data_format="noetix_mocap",
                     robot_type=robot,
                 )
+                expected_orientation_differences = {"Hips"} if robot in {"e1", "e2"} else set()
                 self.assertEqual(
-                    fbx.resolved_orientation_joints_mapping,
-                    noetix.resolved_orientation_joints_mapping,
+                    {
+                        name
+                        for name in fbx.resolved_orientation_joints_mapping
+                        if fbx.resolved_orientation_joints_mapping[name]
+                        != noetix.resolved_orientation_joints_mapping[name]
+                    },
+                    expected_orientation_differences,
                 )
                 self.assertIsNot(
                     fbx.resolved_orientation_joints_mapping,
@@ -175,11 +181,7 @@ class OrientationMappingMatrixTest(unittest.TestCase):
                     )
                     if fbx.resolved_joints_mapping[name] != noetix.resolved_joints_mapping[name]
                 }
-                expected_differences = (
-                    {"LeftArm", "RightArm"}
-                    if robot in {"g1", "e1"}
-                    else set()
-                )
+                expected_differences = {"LeftArm", "RightArm"} if robot in {"g1", "e1"} else set()
                 self.assertEqual(
                     differing_shared_joints,
                     expected_differences,
@@ -188,7 +190,7 @@ class OrientationMappingMatrixTest(unittest.TestCase):
                 self.assertEqual(noetix_only, {"Hips"})
                 self.assertEqual(
                     fbx.resolved_joints_mapping["Spine"],
-                    noetix.resolved_joints_mapping["Hips"],
+                    fbx.resolved_orientation_joints_mapping["Hips"],
                 )
                 self.assertIn(
                     "shoulder_roll_link",

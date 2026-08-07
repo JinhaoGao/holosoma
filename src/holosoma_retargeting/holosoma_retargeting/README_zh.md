@@ -1,6 +1,8 @@
 # Holosoma 人体到机器人重定向
 
-当前生产设计只保留两个重定向入口。`examples/robot_retarget.py` 对一个明确指定的动作执行普通重定向，`examples/parallel_robot_retarget.py` 对一个明确指定的 object-interaction 或 climbing 动作执行 identity 与增强变体。第二个入口名称中的 `parallel` 是历史名称，不表示遍历数据集；两个入口都不会自动扫描并重定向全部动作。
+当前生产设计包含三个重定向入口。`examples/robot_retarget.py` 对一个明确指定的动作执行普通重定向，`examples/parallel_robot_retarget.py` 对一个明确指定的 object-interaction 或 climbing 动作执行 identity 与增强变体。第二个入口名称中的 `parallel` 是历史名称，不表示遍历数据集；两个入口都不会自动扫描并重定向全部动作。`paired_retargeting/robot_refine.py` 读取两份同步的 robot-only 结果，在保留两条 nominal 轨迹的同时执行跨 actor 联合 refinement；双人部分的配置、求解、结果、场景和可视化均集中在 `paired_retargeting/`，完整契约见 [paired_retargeting/README.md](paired_retargeting/README.md)。
+
+对于来自同一个多 actor FBX 的结果，联合 refinement 会恢复转换阶段保存的 `source_xy_origin_m` 相对偏移，将恢复后的相对 root 位置和跨 actor Interaction Mesh 一起纳入优化。联合结果使用项目现有的 Viser 播放控件和图层系统显示两个机器人、源人体骨架、优化后的机器人映射骨架以及 Interaction Mesh，不使用 MuJoCo viewer，也不会为了排版给任一 actor 添加额外显示偏移。播放器还会从两份单机器人结果追溯到 actor 级 FBX 转换数据，并提供独立的 `Original FBX skeletons` 图层；该图层不进行任何尺度变换，只通过一个共同平移恢复原始 actor XY 和共享地面，因此保留 FBX 的原始人体尺寸、两人间距和高度差，两幅骨架统一显示为黑色。现有 `Human skeleton` 图层继续保留各 actor 经过机器人尺度预处理后的参考骨架。
 
 命令默认从本目录执行：
 
@@ -55,7 +57,9 @@ python examples/parallel_robot_retarget.py \
 手骨架和 object 点云等诊断图层，并在完成后等待 Enter；
 `--retargeter.no-visualize` 用于无界面或批处理环境。数据不在仓库默认
 目录时增加 `--data-path /path/to/dataset`；需要覆盖结果根时增加
-`--save-dir /path/to/results`；只有确定要替换同一路径中的旧结果时才使用
+`--save-dir /path/to/results`；需要只修改最终文件名时增加
+`--output-name custom.npz`，该参数只接受文件名并保留
+`<robot>/<task>/<dataset>` 目录层级；只有确定要替换同一路径中的旧结果时才使用
 `--overwrite`。已有结果被直接续用时不会重新进入实时求解，可增加
 `--overwrite` 重跑，或使用结果可视化脚本。全数据遍历仍不属于公开参数。
 
@@ -160,12 +164,18 @@ object-interaction 的增强族包含 `identity`、三个 object translation 变
 demo_results/<robot>/<task>/<dataset>/<motion>.npz
 ```
 
+传入 `--output-name custom.npz` 后，只会把末尾的 `<motion>.npz` 替换为
+`custom.npz`。
+
 增强结果只写入：
 
 ```text
 demo_results_parallel/<robot>/<task>/<dataset>/<motion>.npz
 demo_results_parallel/<robot>/<task>/<dataset>/<motion>_<variant>.npz
 ```
+
+增强入口使用自定义名称时，identity 写为 `custom.npz`，各增强变体写为
+`custom_<variant>.npz`。
 
 默认结果根已经按 `g1`、`e1`、`e2` 分层。仓库不再维护 ablation、orientation、search、comparison 或全数据 rebuild 结果树。
 

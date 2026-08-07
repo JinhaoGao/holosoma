@@ -102,6 +102,22 @@ def test_e1_variants_cover_every_registered_human_format() -> None:
             ).issubset(body_names)
 
 
+def test_fbx_e1_variants_share_the_waist_roll_torso_mapping() -> None:
+    e1_23 = MotionDataConfig(
+        data_format="fbx_mocap",
+        robot_type="e1_23dof",
+    )
+    e1_24 = MotionDataConfig(
+        data_format="fbx_mocap",
+        robot_type="e1_24dof",
+    )
+
+    assert e1_23.resolved_joints_mapping["Spine"] == "waist_roll_link"
+    assert e1_23.resolved_orientation_joints_mapping["Hips"] == "waist_roll_link"
+    assert e1_24.resolved_joints_mapping["Spine"] == "waist_roll_link"
+    assert e1_24.resolved_orientation_joints_mapping["Hips"] == "waist_roll_link"
+
+
 def test_e1_variants_have_independent_natural_pose_profiles() -> None:
     for robot, joint_count in (("e1_23dof", 23), ("e1_24dof", 24)):
         profile = json.loads(

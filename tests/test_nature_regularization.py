@@ -104,7 +104,7 @@ class NatureProfileTests(unittest.TestCase):
         expected_active_joint_counts = {
             "g1": 2,
             "e1_23dof": 2,
-            "e1_24dof": 2,
+            "e1_24dof": 0,
             "e2": 2,
         }
         for robot, expected_joint_count in expected_joint_counts.items():
@@ -135,7 +135,7 @@ class NatureProfileTests(unittest.TestCase):
                     profile["weights"],
                 )
 
-    def test_profiles_regularize_only_both_shoulder_pitch_joints(self) -> None:
+    def test_profiles_regularize_only_configured_shoulder_pitch_joints(self) -> None:
         expected_pitch_joints = {
             "g1": {
                 "left_shoulder_pitch_joint",
@@ -145,10 +145,7 @@ class NatureProfileTests(unittest.TestCase):
                 "l_arm_shoulder_pitch_joint",
                 "r_arm_shoulder_pitch_joint",
             },
-            "e1_24dof": {
-                "l_arm_shoulder_pitch_joint",
-                "r_arm_shoulder_pitch_joint",
-            },
+            "e1_24dof": set(),
             "e2": {
                 "l_arm_shoulder_pitch_joint",
                 "r_arm_shoulder_pitch_joint",
@@ -157,8 +154,8 @@ class NatureProfileTests(unittest.TestCase):
         expected_weights = {
             "g1": 2.0,
             "e1_23dof": 0.5,
-            "e1_24dof": 0.5,
-            "e2": 0.5,
+            "e1_24dof": None,
+            "e2": 0.8,
         }
         for robot, pitch_joints in expected_pitch_joints.items():
             with self.subTest(robot=robot):
@@ -167,15 +164,12 @@ class NatureProfileTests(unittest.TestCase):
                         encoding="utf-8",
                     ),
                 )
-                active_weights = {
-                    joint_name: weight
-                    for joint_name, weight in profile["weights"].items()
-                    if weight > 0
-                }
+                active_weights = {joint_name: weight for joint_name, weight in profile["weights"].items() if weight > 0}
                 self.assertEqual(set(active_weights), pitch_joints)
+                expected_weight = expected_weights[robot]
                 self.assertEqual(
                     set(active_weights.values()),
-                    {expected_weights[robot]},
+                    set() if expected_weight is None else {expected_weight},
                 )
 
     def test_fbx_mocap_selects_each_robot_natural_pose_table(self) -> None:

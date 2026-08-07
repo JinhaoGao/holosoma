@@ -332,7 +332,7 @@ JOINTS_MAPPINGS = {
         "RightHand": "right_rubber_hand_link",
     },
     ("fbx_mocap", "e1"): {
-        "Spine": "base_link",
+        "Spine": "waist_roll_link",
         "LeftUpLeg": "l_leg_hip_pitch_link",
         "RightUpLeg": "r_leg_hip_pitch_link",
         "LeftLeg": "l_leg_knee_link",
@@ -349,7 +349,7 @@ JOINTS_MAPPINGS = {
         "RightHand": "r_hand_sphere_link",
     },
     ("fbx_mocap", "e2"): {
-        "Spine": "base_link",
+        "Spine": "waist_roll_link",
         "LeftUpLeg": "l_leg_hip_pitch_link",
         "RightUpLeg": "r_leg_hip_pitch_link",
         "LeftLeg": "l_leg_knee_link",
@@ -627,7 +627,7 @@ ORIENTATION_JOINTS_MAPPINGS: dict[tuple[str, str], dict[str, str]] = {
         "RightHand": "right_rubber_hand_link",
     },
     ("fbx_mocap", "e1"): {
-        "Hips": "base_link",
+        "Hips": "waist_roll_link",
         "LeftUpLeg": "l_leg_hip_pitch_link",
         "RightUpLeg": "r_leg_hip_pitch_link",
         "LeftLeg": "l_leg_knee_link",
@@ -644,7 +644,7 @@ ORIENTATION_JOINTS_MAPPINGS: dict[tuple[str, str], dict[str, str]] = {
         "RightHand": "r_hand_sphere_link",
     },
     ("fbx_mocap", "e2"): {
-        "Hips": "base_link",
+        "Hips": "waist_roll_link",
         "LeftUpLeg": "l_leg_hip_pitch_link",
         "RightUpLeg": "r_leg_hip_pitch_link",
         "LeftLeg": "l_leg_knee_link",

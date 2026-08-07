@@ -98,6 +98,21 @@ class E2RetargetingConfigTest(unittest.TestCase):
         self.assertEqual(amass_mapping["R_Hip"], "r_leg_hip_roll_link")
         self.assertIsNot(gvhmr_mapping, amass_mapping)
 
+    def test_fbx_e2_torso_position_and_orientation_use_waist_roll_link(self) -> None:
+        motion = MotionDataConfig(
+            data_format="fbx_mocap",
+            robot_type="e2",
+        )
+
+        self.assertEqual(
+            motion.resolved_joints_mapping["Spine"],
+            "waist_roll_link",
+        )
+        self.assertEqual(
+            motion.resolved_orientation_joints_mapping["Hips"],
+            "waist_roll_link",
+        )
+
     def test_top_level_e2_selection_normalizes_nested_configs_for_every_format(self) -> None:
         for data_format in self.DATA_FORMATS:
             with self.subTest(data_format=data_format):
@@ -111,7 +126,7 @@ class E2RetargetingConfigTest(unittest.TestCase):
                     ),
                 )
                 self.assertEqual(config.robot_config.robot_type, "e2")
-                self.assertEqual(config.robot_config.ROBOT_HEIGHT, 1.6)
+                self.assertEqual(config.robot_config.ROBOT_HEIGHT, 1.65)
                 self.assertEqual(config.motion_data_config.robot_type, "e2")
                 self.assertEqual(
                     config.motion_data_config.data_format,
@@ -130,7 +145,7 @@ class E2RetargetingConfigTest(unittest.TestCase):
         )
 
         self.assertEqual(robot.ROBOT_DOF, 23)
-        self.assertEqual(robot.ROBOT_HEIGHT, 1.6)
+        self.assertEqual(robot.ROBOT_HEIGHT, 1.65)
         self.assertEqual(robot.ROBOT_URDF_FILE, "models/e2/e2_23dof.urdf")
         self.assertEqual(len(robot.FOOT_STICKING_LINKS), 10)
         self.assertEqual(robot.NOMINAL_TRACKING_INDICES.tolist(), list(range(22)))

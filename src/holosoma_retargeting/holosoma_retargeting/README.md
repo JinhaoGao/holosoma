@@ -1,10 +1,14 @@
 # Holosoma human-to-robot retargeting
 
-The production surface has exactly two retargeting commands.
+The production surface has three retargeting commands.
 `examples/robot_retarget.py` retargets one selected motion without
 augmentation. `examples/parallel_robot_retarget.py` retargets one selected
 object-interaction or climbing motion and its augmentation variants. Despite
 its historical filename, the second command never walks a dataset.
+`paired_retargeting/robot_refine.py` consumes two synchronized robot-only results
+and performs cross-actor joint refinement while preserving both nominal
+trajectories. Its full input, contact, collision, output, and visualization
+contract is documented in [paired_retargeting/README.md](paired_retargeting/README.md).
 
 Run commands from this directory:
 
@@ -40,8 +44,10 @@ python examples/parallel_robot_retarget.py \
 ```
 
 Use `--data-path` only when the dataset is outside its repository default,
-`--save-dir` to override the result root, and `--overwrite` to replace an
-existing result at the same path. Live Viser visualization is enabled by
+`--save-dir` to override the result root, `--output-name NAME.npz` to replace
+the final artifact filename, and `--overwrite` to replace an existing result
+at the same path. `--output-name` accepts one filename rather than a path and
+preserves the `<robot>/<task>/<dataset>` directory layout. Live Viser visualization is enabled by
 default. `--retargeter.debug` adds mapped human/robot keypoints, hand
 skeletons, and object-point diagnostics and waits for Enter after solving.
 Use `--retargeter.no-visualize` for headless runs. An existing result does not
@@ -162,12 +168,17 @@ Single-motion results:
 demo_results/<robot>/<task>/<dataset>/<motion>.npz
 ```
 
+With `--output-name custom.npz`, `<motion>.npz` is replaced by `custom.npz`.
+
 Augmented results:
 
 ```text
 demo_results_parallel/<robot>/<task>/<dataset>/<motion>.npz
 demo_results_parallel/<robot>/<task>/<dataset>/<motion>_<variant>.npz
 ```
+
+For augmented families, a custom identity name such as `custom.npz` produces
+`custom.npz`, `custom_trans_0.npz`, and the remaining canonical variant names.
 
 Each NPZ retains float64 qpos, solver metadata, the human and robot points used
 by position or orientation retargeting, compact skeleton connectivity, mapped

@@ -109,6 +109,9 @@ class RetargetingCommand:
     save_dir: Path | None = None
     """Optional result-root override."""
 
+    output_name: str | None = None
+    """Optional output filename. The .npz suffix may be omitted."""
+
     overwrite: bool = False
     """Replace an existing result for the exact same motion and configuration."""
 
@@ -189,6 +192,7 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         task_name=command.motion,
         data_path=command.data_path or default_data_path,
         save_dir=command.save_dir,
+        output_name=command.output_name,
         overwrite_existing=command.overwrite,
         retargeter=RetargeterConfig(
             visualize=command.retargeter.visualize,
@@ -234,6 +238,9 @@ class RetargetingConfig:
 
     save_dir: Path | None = None
     """Directory to save results. Auto-determined if None."""
+
+    output_name: str | None = None
+    """Optional filename override for the saved NPZ artifact."""
 
     augmentation: bool = False
     """Whether to use augmentation."""

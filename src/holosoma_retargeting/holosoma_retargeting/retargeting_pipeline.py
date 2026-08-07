@@ -249,6 +249,7 @@ def _normalized_job_payload(
     solver_config["augmentation"] = False
     solver_config["overwrite_existing"] = False
     solver_config["save_dir"] = None
+    solver_config["output_name"] = None
     motion_config = normalized.motion_data_config
     solver_config["resolved_motion_data_contract"] = {
         "demo_joints": motion_config.resolved_demo_joints,
@@ -358,6 +359,7 @@ def _canonical_result_path(
     dataset_partition: str,
     sequence_key: str,
     variant: RetargetVariant,
+    output_name: str | None = None,
 ) -> Path:
     sequence_path = Path(sequence_key)
     if sequence_path.is_absolute():
@@ -373,6 +375,16 @@ def _canonical_result_path(
     )
     sequence_parent = Path(*sequence_parts[:-1])
     sequence_name = sequence_parts[-1]
+    if output_name is not None:
+        output_path = Path(output_name)
+        if output_path.is_absolute() or len(output_path.parts) != 1:
+            raise ValueError("output_name must be a filename, not a path")
+        if output_path.name.lower() == ".npz":
+            raise ValueError("output_name must contain a non-empty filename stem")
+        if output_path.suffix and output_path.suffix.lower() != ".npz":
+            raise ValueError("output_name must use the .npz suffix or omit the suffix")
+        sequence_name = output_path.stem if output_path.suffix else output_path.name
+        sequence_name = _encode_path_component(sequence_name, "output_name")
     suffix = "" if variant.is_identity else f"_{variant.name}"
     return results_root / common / sequence_parent / f"{sequence_name}{suffix}.npz"
 
@@ -469,6 +481,7 @@ def build_retarget_job(
         dataset_partition=partition,
         sequence_key=key,
         variant=variant,
+        output_name=normalized.output_name,
     )
     baseline_path = _canonical_result_path(
         results_root=root,
@@ -477,6 +490,7 @@ def build_retarget_job(
         dataset_partition=partition,
         sequence_key=key,
         variant=IDENTITY_VARIANT,
+        output_name=normalized.output_name,
     )
     config_json = _normalized_job_payload(
         normalized,
@@ -1482,6 +1496,23 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
             else "ground_align_and_uniform_scale"
         ),
     }
+    if data_format == "fbx_mocap":
+        with np.load(job.source_path, allow_pickle=False) as source_data:
+            source_scene_fields = (
+                "source_fbx",
+                "source_actor",
+                "source_xy_origin_m",
+                "position_coordinate_transform",
+            )
+            missing_source_scene_fields = [name for name in source_scene_fields if name not in source_data]
+            if missing_source_scene_fields:
+                raise ValueError(
+                    "FBX motion is missing source-scene metadata required for paired refinement: "
+                    f"{missing_source_scene_fields}"
+                )
+            result_metadata.update(
+                {name: np.asarray(source_data[name]).copy() for name in source_scene_fields}
+            )
     logger.info(
         "Retargeting %s/%s for %s -> %s",
         job.run_kind,
