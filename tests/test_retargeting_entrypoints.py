@@ -587,6 +587,7 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 "orientation_weights",
                 "orientation_config",
                 "orientation_preview",
+                "shoulder_direction_tracking",
                 "nature_weights",
                 "nature_config",
             ),

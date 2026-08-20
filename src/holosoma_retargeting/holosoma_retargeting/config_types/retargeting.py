@@ -11,7 +11,10 @@ from typing import Annotated, Literal, cast
 import tyro
 
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
-from holosoma_retargeting.config_types.retargeter import RetargeterConfig
+from holosoma_retargeting.config_types.retargeter import (
+    RetargeterConfig,
+    ShoulderDirectionConfig,
+)
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.task import TaskConfig
 from holosoma_retargeting.config_types.weight_profiles import (
@@ -142,6 +145,9 @@ class RetargetingCommand:
     orientation_preview: bool = False
     """Save per-link frame-alignment overlays without enabling orientation costs."""
 
+    shoulder_direction_tracking: bool = False
+    """Use sequence-aware upper-arm directions instead of upper-limb SO(3)."""
+
     nature_weights: Annotated[
         float | None,
         tyro.conf.arg(aliases=("--nature_weights",)),
@@ -201,6 +207,9 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
             activate_foot_sticking=command.foot_sticking,
             orientation_weights=orientation_weights,
             orientation_preview=command.orientation_preview,
+            shoulder_direction=ShoulderDirectionConfig(
+                enable=command.shoulder_direction_tracking,
+            ),
             natural_pose_joint_positions=natural_pose.references,
             natural_pose_weights=natural_pose.weights,
         ),

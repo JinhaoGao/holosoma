@@ -123,6 +123,42 @@ exclusive. G1, E1, and E2 each use their own robot FK T-pose; each
 direct-orientation format supplies its source T-pose frame. No orientation is
 inferred from positions or bone vectors.
 
+## Sequence-aware shoulder direction tracking
+
+E1 and E2 robot-only Noetix/FBX motions can replace the generic full-SO(3)
+Arm, ForeArm, and Hand objectives with a shoulder task that tracks the
+torso-local upper-arm unit direction:
+
+```bash
+python examples/robot_retarget.py \
+  --task robot_only \
+  --robot e2 \
+  --dataset noetix_mocap \
+  --motion sequence/name \
+  --orientation_config examples/orientation_weights \
+  --shoulder-direction-tracking
+```
+
+The offline reference stage samples the one-dimensional shoulder solution
+manifold, preserves descendants of every retained branch, and selects a full
+sequence path with direction, elbow-plane compatibility, joint-limit,
+velocity, and acceleration costs. Candidate graph edges and final SQP shoulder
+motion also have explicit per-frame joint-step limits, preventing an optimizer
+from treating a distant equivalent Euler branch as an adjacent solution. The
+reference only resolves the local direction-Jacobian null space; the unit
+direction remains a direct SQP objective. E1 Hand orientation is projected
+onto its single elbow-yaw axis, while E2 has no wrist orientation task.
+Generic full-SO(3) upper-limb terms are disabled in this mode; lower-body and
+torso entries in the selected orientation profile continue to work normally.
+
+The result stores the complete candidate graph, selected path, actual shoulder
+angles, direction errors, and Jacobian singular values. Render these as a
+trajectory dashboard and three-dimensional candidate-branch view with:
+
+```bash
+python -m holosoma_retargeting.visualization.shoulder_direction result.npz
+```
+
 ## Natural-posture regularization
 
 Natural-posture regularization is also disabled by default. Use

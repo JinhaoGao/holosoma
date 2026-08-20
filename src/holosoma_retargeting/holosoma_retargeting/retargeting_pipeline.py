@@ -1123,6 +1123,7 @@ def build_retargeter_kwargs_from_config(
                 {},
             )
         ),
+        "shoulder_direction": retargeter_config.shoulder_direction,
         "natural_pose_joint_positions": retargeter_config.natural_pose_joint_positions,
         "natural_pose_weights": retargeter_config.natural_pose_weights,
     }

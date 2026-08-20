@@ -4,7 +4,10 @@
 
 from holosoma_retargeting.config_types.data_conversion import DataConversionConfig
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
-from holosoma_retargeting.config_types.retargeter import RetargeterConfig
+from holosoma_retargeting.config_types.retargeter import (
+    RetargeterConfig,
+    ShoulderDirectionConfig,
+)
 from holosoma_retargeting.config_types.retargeting import (
     RetargetingCommand,
     RetargetingConfig,
@@ -36,6 +39,7 @@ __all__ = [
     "RetargetingCommand",
     "RetargetingConfig",
     "RobotConfig",
+    "ShoulderDirectionConfig",
     "TaskConfig",
     "ViserConfig",
 ]

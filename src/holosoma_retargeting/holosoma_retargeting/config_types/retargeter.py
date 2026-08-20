@@ -47,6 +47,65 @@ class SelfCollisionConfig:
 
 
 @dataclass(frozen=True)
+class ShoulderDirectionConfig:
+    """Sequence-aware upper-arm direction tracking for serial shoulders."""
+
+    enable: bool = False
+    """Replace upper-limb SO(3) costs with direction and branch tasks."""
+
+    direction_weight: float = 100.0
+    """SQP weight for each upper-arm unit-direction residual."""
+
+    branch_weight: float = 50.0
+    """SQP weight that keeps the solution on the planned null-space branch."""
+
+    candidate_count: int = 12
+    """Maximum shoulder-manifold samples retained per side and frame."""
+
+    seed_count: int = 32
+    """Deterministic multi-start seeds used to discover the first-frame branches."""
+
+    global_seed_stride: int = 30
+    """Frame stride for refreshing the manifold with global multi-start seeds."""
+
+    refresh_candidate_count: int = 4
+    """Candidate slots reserved for non-continuation branch recovery samples."""
+
+    max_nfev: int = 30
+    """Maximum bounded least-squares evaluations for one candidate projection."""
+
+    direction_tolerance_rad: float = 0.12
+    """Direction-error scale used by the candidate node cost."""
+
+    forearm_selection_weight: float = 0.25
+    """Node-cost weight used to select an elbow-plane-compatible shoulder branch."""
+
+    joint_limit_weight: float = 0.02
+    """Node-cost weight for keeping planned upper-limb joints away from limits."""
+
+    velocity_weight: float = 10.0
+    """Temporal graph weight for normalized joint velocity."""
+
+    acceleration_weight: float = 100.0
+    """Temporal graph weight for normalized joint acceleration."""
+
+    reference_tracking_weight: float = 20.0
+    """Tracking weight used when smoothing the selected discrete branch path."""
+
+    joint_reference_weight: float = 10.0
+    """Low SQP weight for traversing smoothed off-manifold branch transitions."""
+
+    max_candidate_step_rad: float = 0.75
+    """Largest step used to propagate one candidate branch to the next frame."""
+
+    max_frame_step_rad: float = 0.45
+    """Largest per-frame shoulder joint change allowed in the final SQP."""
+
+    wrist_axis_weight_scale: float = 1.0
+    """Scale applied to E1 Hand weights after projection onto elbow yaw."""
+
+
+@dataclass(frozen=True)
 class RetargeterConfig:
     """Configuration for retargeter parameters.
 
@@ -126,6 +185,11 @@ class RetargeterConfig:
     ) = None
     """Explicit per-human-joint alignment quaternions used when
     orientation_alignment_mode is 'explicit'."""
+
+    shoulder_direction: ShoulderDirectionConfig = field(
+        default_factory=ShoulderDirectionConfig,
+    )
+    """Optional sequence-aware shoulder direction and branch tracking."""
 
     natural_pose_joint_positions: dict[str, float] = field(
         default_factory=dict,
