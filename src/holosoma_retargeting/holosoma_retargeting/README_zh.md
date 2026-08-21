@@ -124,6 +124,30 @@ python examples/robot_retarget.py \
 
 配置使用人体 T-pose 与机器人 FK T-pose 计算固定 frame offset，再比较目标 frame 与实际机器人 link frame。G1、E1、E2 都有独立机器人 T-pose；GVHMR、LAFAN、mocap/Noetix CSV、Noetix mocap 和 OMOMO 均有数据格式对应的人体 frame 定义。实现不会从关键点位置或骨向量伪造朝向。若源动作没有直接朝向，例如旧 `climbing` NPY，显式开启朝向损失会清晰报错，位置重定向仍可正常使用。
 
+## 序列感知的肩部方向跟踪
+
+G1、E1 和 E2 的 robot-only Noetix/FBX 动作可以使用
+`--shoulder-direction-tracking`，将 Arm、ForeArm 和 Hand 的通用完整 SO(3)
+目标替换为躯干局部坐标系中的上臂单位方向目标。离线 reference 阶段会采样
+肩部的一维可行解流形，并以方向、肘平面兼容性、关节限位、速度和加速度
+代价选择整段连续支路；最终 SQP 仍直接跟踪上臂方向，reference 只用于消除
+方向雅可比的零空间歧义。
+
+```bash
+python examples/robot_retarget.py \
+  --task robot_only \
+  --robot g1 \
+  --dataset noetix_mocap \
+  --motion sequence/name \
+  --orientation_config examples/orientation_weights \
+  --shoulder-direction-tracking
+```
+
+在该模式中，G1 的 Hand 朝向误差只能驱动三个腕关节，E1 的 Hand 朝向只投影
+到单个 elbow-yaw 轴，E2 不启用腕部朝向任务，因而手部朝向不会反向选择另一组
+肩肘解。上肢的通用完整 SO(3) 项被禁用，朝向权重表里的下肢和躯干项仍照常
+工作。
+
 ## 自然姿态正则项
 
 自然姿态正则项同样默认关闭。使用 `--nature_weights WEIGHT` 时，全部 actuated joint 统一使用该非负权重；各关节的固定自然参考角按 `--robot` 从 `examples/nature_weights/g1.json`、`e1.json` 或 `e2.json` 读取。三张表与 `orientation_weights` 目录逐机器人对应，并以弧度保存自然参考角。

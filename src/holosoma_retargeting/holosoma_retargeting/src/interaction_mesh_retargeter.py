@@ -391,7 +391,8 @@ class InteractionMeshRetargeter:
         self.shoulder_elbow_qpos_addresses = np.empty((0,), dtype=np.int32)
         self.shoulder_elbow_lower = np.empty((0,), dtype=np.float64)
         self.shoulder_elbow_upper = np.empty((0,), dtype=np.float64)
-        self.shoulder_wrist_reduced_indices = np.empty((0,), dtype=np.int32)
+        self.shoulder_wrist_reduced_indices = np.empty((0, 3), dtype=np.int32)
+        self.shoulder_wrist_dof_counts = np.empty((0,), dtype=np.int32)
         self.shoulder_wrist_orientation_indices = np.empty((0,), dtype=np.int32)
         self.shoulder_wrist_weights = np.empty((0,), dtype=np.float64)
         self.shoulder_reserved_orientation_indices = np.empty((0,), dtype=np.int32)
@@ -438,42 +439,72 @@ class InteractionMeshRetargeter:
 
         is_e1 = _joint_exists("l_arm_elbow_pitch_joint")
         is_e2 = _joint_exists("l_arm_elbow_joint")
-        if is_e1 == is_e2:
+        is_g1 = _joint_exists("left_elbow_joint") and _joint_exists(
+            "left_wrist_roll_joint",
+        )
+        if sum((is_e1, is_e2, is_g1)) != 1:
             raise ValueError(
-                "Shoulder direction tracking supports the E1 and E2 arm chains only",
+                "Shoulder direction tracking supports the G1, E1, and E2 arm chains only",
             )
         specs: list[ShoulderSideSpec] = []
-        for prefix, human_prefix in (("l", "Left"), ("r", "Right")):
-            elbow_link = (
-                f"{prefix}_arm_elbow_pitch_link"
-                if is_e1
-                else f"{prefix}_arm_elbow_link"
-            )
-            elbow_joint = (
-                f"{prefix}_arm_elbow_pitch_joint"
-                if is_e1
-                else f"{prefix}_arm_elbow_joint"
-            )
-            wrist_joint = f"{prefix}_arm_elbow_yaw_joint" if is_e1 else None
+        sides = (("l", "left", "Left"), ("r", "right", "Right"))
+        for short_prefix, long_prefix, human_prefix in sides:
+            if is_g1:
+                shoulder_joint_names = (
+                    f"{long_prefix}_shoulder_pitch_joint",
+                    f"{long_prefix}_shoulder_roll_joint",
+                    f"{long_prefix}_shoulder_yaw_joint",
+                )
+                torso_basis_link = f"{long_prefix}_shoulder_pitch_link"
+                shoulder_anchor_link = f"{long_prefix}_shoulder_roll_link"
+                elbow_link = f"{long_prefix}_elbow_link"
+                elbow_joint = f"{long_prefix}_elbow_joint"
+                hand_link = f"{long_prefix}_rubber_hand_link"
+                wrist_joint_names = (
+                    f"{long_prefix}_wrist_roll_joint",
+                    f"{long_prefix}_wrist_pitch_joint",
+                    f"{long_prefix}_wrist_yaw_joint",
+                )
+            else:
+                shoulder_joint_names = (
+                    f"{short_prefix}_arm_shoulder_pitch_joint",
+                    f"{short_prefix}_arm_shoulder_roll_joint",
+                    f"{short_prefix}_arm_shoulder_yaw_joint",
+                )
+                torso_basis_link = f"{short_prefix}_arm_shoulder_pitch_link"
+                shoulder_anchor_link = f"{short_prefix}_arm_shoulder_roll_link"
+                elbow_link = (
+                    f"{short_prefix}_arm_elbow_pitch_link"
+                    if is_e1
+                    else f"{short_prefix}_arm_elbow_link"
+                )
+                elbow_joint = (
+                    f"{short_prefix}_arm_elbow_pitch_joint"
+                    if is_e1
+                    else f"{short_prefix}_arm_elbow_joint"
+                )
+                hand_link = f"{short_prefix}_hand_sphere_link"
+                wrist_joint_names = (
+                    (f"{short_prefix}_arm_elbow_yaw_joint",)
+                    if is_e1
+                    else ()
+                )
             spec = ShoulderSideSpec(
                 human_arm_name=f"{human_prefix}Arm",
                 human_forearm_name=f"{human_prefix}ForeArm",
                 human_hand_name=f"{human_prefix}Hand",
-                shoulder_joint_names=(
-                    f"{prefix}_arm_shoulder_pitch_joint",
-                    f"{prefix}_arm_shoulder_roll_joint",
-                    f"{prefix}_arm_shoulder_yaw_joint",
-                ),
-                torso_basis_link_name=f"{prefix}_arm_shoulder_pitch_link",
-                shoulder_anchor_link_name=f"{prefix}_arm_shoulder_roll_link",
+                shoulder_joint_names=shoulder_joint_names,
+                torso_basis_link_name=torso_basis_link,
+                shoulder_anchor_link_name=shoulder_anchor_link,
                 elbow_link_name=elbow_link,
-                hand_link_name=f"{prefix}_hand_sphere_link",
+                hand_link_name=hand_link,
                 elbow_joint_name=elbow_joint,
-                wrist_joint_name=wrist_joint,
+                wrist_joint_names=wrist_joint_names,
             )
             model_names = (
                 *spec.shoulder_joint_names,
                 spec.elbow_joint_name,
+                *spec.wrist_joint_names,
             )
             missing_joints = [name for name in model_names if not _joint_exists(name)]
             body_names = (
@@ -516,7 +547,8 @@ class InteractionMeshRetargeter:
         elbow_qpos: list[int] = []
         elbow_lower: list[float] = []
         elbow_upper: list[float] = []
-        wrist_reduced: list[int] = []
+        wrist_reduced: list[list[int]] = []
+        wrist_dof_counts: list[int] = []
         wrist_orientation_indices: list[int] = []
         wrist_weights: list[float] = []
         orientation_index_by_human = {
@@ -557,26 +589,33 @@ class InteractionMeshRetargeter:
             elbow_lower.append(float(self.robot_model.jnt_range[elbow_id, 0]))
             elbow_upper.append(float(self.robot_model.jnt_range[elbow_id, 1]))
 
-            if spec.wrist_joint_name is None:
-                wrist_reduced.append(-1)
+            if not spec.wrist_joint_names:
+                wrist_reduced.append([-1, -1, -1])
+                wrist_dof_counts.append(0)
                 wrist_orientation_indices.append(-1)
                 wrist_weights.append(0.0)
                 continue
-            wrist_id = mujoco.mj_name2id(
-                self.robot_model,
-                mujoco.mjtObj.mjOBJ_JOINT,
-                spec.wrist_joint_name,
-            )
-            wrist_address = int(self.robot_model.jnt_qposadr[wrist_id])
-            if wrist_address not in active_index_by_qpos:
-                raise ValueError(
-                    f"Wrist-axis joint {spec.wrist_joint_name!r} is outside active variables",
+            side_wrist_reduced: list[int] = []
+            for wrist_joint_name in spec.wrist_joint_names:
+                wrist_id = mujoco.mj_name2id(
+                    self.robot_model,
+                    mujoco.mjtObj.mjOBJ_JOINT,
+                    wrist_joint_name,
                 )
+                wrist_address = int(self.robot_model.jnt_qposadr[wrist_id])
+                if wrist_address not in active_index_by_qpos:
+                    raise ValueError(
+                        f"Wrist joint {wrist_joint_name!r} is outside active variables",
+                    )
+                side_wrist_reduced.append(active_index_by_qpos[wrist_address])
             orientation_index = orientation_index_by_human.get(
                 spec.human_hand_name,
                 -1,
             )
-            wrist_reduced.append(active_index_by_qpos[wrist_address])
+            wrist_dof_counts.append(len(side_wrist_reduced))
+            wrist_reduced.append(
+                side_wrist_reduced + [-1] * (3 - len(side_wrist_reduced)),
+            )
             wrist_orientation_indices.append(orientation_index)
             wrist_weights.append(
                 0.0
@@ -610,6 +649,10 @@ class InteractionMeshRetargeter:
         self.shoulder_elbow_upper = np.asarray(elbow_upper, dtype=np.float64)
         self.shoulder_wrist_reduced_indices = np.asarray(
             wrist_reduced,
+            dtype=np.int32,
+        )
+        self.shoulder_wrist_dof_counts = np.asarray(
+            wrist_dof_counts,
             dtype=np.int32,
         )
         self.shoulder_wrist_orientation_indices = np.asarray(
@@ -3398,6 +3441,20 @@ class InteractionMeshRetargeter:
             "shoulder_wrist_axis_orientation_weights": (
                 self.shoulder_wrist_weights.astype(np.float64)
             ),
+            "shoulder_wrist_orientation_weights": (
+                self.shoulder_wrist_weights.astype(np.float64)
+            ),
+            "shoulder_wrist_dof_counts": (
+                self.shoulder_wrist_dof_counts.astype(np.int32)
+            ),
+            "shoulder_wrist_joint_names": np.asarray(
+                [
+                    list(spec.wrist_joint_names)
+                    + [""] * (3 - len(spec.wrist_joint_names))
+                    for spec in self.shoulder_side_specs
+                ],
+                dtype=str,
+            ),
             "natural_pose_tracking_enabled": np.asarray(
                 self.natural_pose_tracking_enabled,
             ),
@@ -3861,36 +3918,61 @@ class InteractionMeshRetargeter:
                     orientation_index = int(
                         self.shoulder_wrist_orientation_indices[side_index],
                     )
-                    wrist_reduced_index = int(
-                        self.shoulder_wrist_reduced_indices[side_index],
+                    wrist_dof_count = int(
+                        self.shoulder_wrist_dof_counts[side_index],
                     )
-                    if weight <= 0.0 or orientation_index < 0 or wrist_reduced_index < 0:
-                        continue
-                    wrist_axis_world = orientation_jacobians[
-                        orientation_index,
-                        :,
-                        wrist_reduced_index,
+                    wrist_reduced_indices = self.shoulder_wrist_reduced_indices[
+                        side_index,
+                        :wrist_dof_count,
                     ]
-                    axis_norm = float(np.linalg.norm(wrist_axis_world))
-                    if axis_norm <= 1e-8:
-                        raise RuntimeError("Wrist orientation Jacobian axis is degenerate")
-                    wrist_axis_world = wrist_axis_world / axis_norm
-                    wrist_error = float(
-                        wrist_axis_world @ orientation_errors[orientation_index],
-                    )
-                    wrist_jacobian = np.zeros(self.nq_a, dtype=np.float64)
-                    wrist_jacobian[wrist_reduced_index] = float(
-                        wrist_axis_world
-                        @ orientation_jacobians[
+                    if (
+                        weight <= 0.0
+                        or orientation_index < 0
+                        or wrist_dof_count <= 0
+                    ):
+                        continue
+                    if wrist_dof_count == 1:
+                        wrist_reduced_index = int(wrist_reduced_indices[0])
+                        wrist_axis_world = orientation_jacobians[
                             orientation_index,
                             :,
                             wrist_reduced_index,
-                        ],
-                    )
-                    obj_terms.append(
-                        float(weight)
-                        * cp.square(wrist_jacobian @ dqa - wrist_error),
-                    )
+                        ]
+                        axis_norm = float(np.linalg.norm(wrist_axis_world))
+                        if axis_norm <= 1e-8:
+                            raise RuntimeError(
+                                "Wrist orientation Jacobian axis is degenerate",
+                            )
+                        wrist_axis_world = wrist_axis_world / axis_norm
+                        wrist_error = float(
+                            wrist_axis_world
+                            @ orientation_errors[orientation_index],
+                        )
+                        wrist_jacobian = np.zeros(self.nq_a, dtype=np.float64)
+                        wrist_jacobian[wrist_reduced_index] = float(
+                            wrist_axis_world
+                            @ orientation_jacobians[
+                                orientation_index,
+                                :,
+                                wrist_reduced_index,
+                            ],
+                        )
+                        obj_terms.append(
+                            float(weight)
+                            * cp.square(wrist_jacobian @ dqa - wrist_error),
+                        )
+                    else:
+                        wrist_orientation_jacobian = orientation_jacobians[
+                            orientation_index,
+                        ][:, wrist_reduced_indices]
+                        obj_terms.append(
+                            float(weight)
+                            * cp.sum_squares(
+                                wrist_orientation_jacobian
+                                @ dqa[wrist_reduced_indices]
+                                - orientation_errors[orientation_index],
+                            ),
+                        )
 
         if self.shoulder_direction_enabled:
             if shoulder_direction_targets is None:

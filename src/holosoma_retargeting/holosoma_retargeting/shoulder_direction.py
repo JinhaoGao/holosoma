@@ -201,4 +201,4 @@ class ShoulderSideSpec:
     elbow_link_name: str
     hand_link_name: str
     elbow_joint_name: str
-    wrist_joint_name: str | None
+    wrist_joint_names: tuple[str, ...]

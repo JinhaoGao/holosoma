@@ -231,12 +231,15 @@ def make_shoulder_direction_figure(
         singular_values = diagnostics.singular_values[:, side]
         conditioning_axis.plot(
             frames,
-            singular_values[:, -1],
+            singular_values[:, -2],
             color="#0891b2",
             alpha=0.72,
-            label="smallest singular value",
+            label="smallest nonzero singular value",
         )
-        conditioning_axis.set_ylabel("smallest J singular value", color="#0891b2")
+        conditioning_axis.set_ylabel(
+            "smallest nonzero J singular value",
+            color="#0891b2",
+        )
         error_axis.grid(alpha=0.2)
 
         manifold_axis = figure.add_subplot(grid[side, 3], projection="3d")
