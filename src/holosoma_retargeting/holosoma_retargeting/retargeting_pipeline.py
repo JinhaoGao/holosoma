@@ -1100,6 +1100,11 @@ def build_retargeter_kwargs_from_config(
         "mesh_opacity": 1.0,
         "debug": retargeter_config.debug,
         "dynamic_ground_window": retargeter_config.dynamic_ground_window,
+        "interaction_mesh_weight": retargeter_config.interaction_mesh_weight,
+        "arm_interaction_mesh_weight_scale": (
+            retargeter_config.arm_interaction_mesh_weight_scale
+        ),
+        "root_stability": retargeter_config.root_stability,
         "show_interaction_mesh": False,
         "save_interaction_mesh": True,
         "interaction_mesh_mode": "both",

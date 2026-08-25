@@ -162,6 +162,41 @@ trajectory dashboard and three-dimensional candidate-branch view with:
 python -m holosoma_retargeting.visualization.shoulder_direction result.npz
 ```
 
+## Root stability and Interaction Mesh weights
+
+When a serial shoulder approaches a joint limit or changes feasible branches,
+the floating root can track the aligned source-root translation and torso
+orientation explicitly while upper-limb anchors contribute less to the global
+Interaction Mesh deformation energy. Both root weights default to `0`, the arm
+scale defaults to `1`, and the historical global mesh weight remains `10`, so
+omitting these options preserves the previous solver behavior.
+
+```bash
+python examples/robot_retarget.py \
+  --task robot_only \
+  --robot e1_23dof \
+  --dataset noetix_mocap \
+  --motion sequence/name \
+  --orientation_config examples/orientation_weights \
+  --shoulder-direction-tracking \
+  --root-position-weight 200 \
+  --root-orientation-weight 50 \
+  --interaction-mesh-weight 10 \
+  --arm-interaction-mesh-weight-scale 0.5
+```
+
+`--root-position-weight` follows the source root displacement after frame-zero
+alignment. `--root-orientation-weight` follows the torso frame formed by the
+left shoulder, right shoulder, and source root. These are soft objectives, not
+hard root locks, and nonzero values require the complete floating base to be
+active through the internal `q_a_init_idx=-7` setting. The global mesh option
+weights every Laplacian residual, while the arm scale only multiplies anchor
+rows whose source names contain shoulder, arm, elbow, wrist, or hand. A useful
+first comparison keeps the global weight at `10`, tries arm scales `1`, `0.5`,
+and `0.25`, then raises root weights only as needed. Saved NPZ files include the
+four effective weights, target and actual root poses, position error in meters,
+and orientation error in radians.
+
 ## Natural-posture regularization
 
 Natural-posture regularization is also disabled by default. Use

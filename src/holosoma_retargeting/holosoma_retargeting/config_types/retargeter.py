@@ -106,6 +106,17 @@ class ShoulderDirectionConfig:
 
 
 @dataclass(frozen=True)
+class RootStabilityConfig:
+    """Track source-root translation and torso orientation with the robot root."""
+
+    position_weight: float = 0.0
+    """SQP weight for the aligned source-root world-position target."""
+
+    orientation_weight: float = 0.0
+    """SQP weight for the aligned source-torso world-orientation target."""
+
+
+@dataclass(frozen=True)
 class RetargeterConfig:
     """Configuration for retargeter parameters.
 
@@ -120,6 +131,17 @@ class RetargeterConfig:
 
     dynamic_ground_window: bool = True
     """Whether robot-only ground points follow the robot root each frame."""
+
+    interaction_mesh_weight: float = 10.0
+    """Global weight for every Interaction Mesh Laplacian residual."""
+
+    arm_interaction_mesh_weight_scale: float = 1.0
+    """Multiplier applied to upper-limb anchor rows in the mesh objective."""
+
+    root_stability: RootStabilityConfig = field(
+        default_factory=RootStabilityConfig,
+    )
+    """Optional source-aligned floating-root stability objective."""
 
     q_a_init_idx: int = -7
     """Offset used to select the first optimized qpos address as ``7 + offset``.

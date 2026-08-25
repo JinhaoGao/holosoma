@@ -13,6 +13,7 @@ import tyro
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.config_types.retargeter import (
     RetargeterConfig,
+    RootStabilityConfig,
     ShoulderDirectionConfig,
 )
 from holosoma_retargeting.config_types.robot import RobotConfig
@@ -124,6 +125,18 @@ class RetargetingCommand:
     dynamic_ground_window: bool = True
     """Move the robot-only ground sampling window with the robot root."""
 
+    interaction_mesh_weight: float = 10.0
+    """Global Interaction Mesh deformation-energy weight."""
+
+    arm_interaction_mesh_weight_scale: float = 1.0
+    """Upper-limb mesh-anchor multiplier relative to the global weight."""
+
+    root_position_weight: float = 0.0
+    """Track the source root's aligned world translation when positive."""
+
+    root_orientation_weight: float = 0.0
+    """Track the source torso's aligned world orientation when positive."""
+
     retargeter: RetargeterRuntimeOptions = field(
         default_factory=RetargeterRuntimeOptions,
     )
@@ -204,6 +217,14 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
             visualize=command.retargeter.visualize,
             debug=command.retargeter.debug,
             dynamic_ground_window=command.dynamic_ground_window,
+            interaction_mesh_weight=command.interaction_mesh_weight,
+            arm_interaction_mesh_weight_scale=(
+                command.arm_interaction_mesh_weight_scale
+            ),
+            root_stability=RootStabilityConfig(
+                position_weight=command.root_position_weight,
+                orientation_weight=command.root_orientation_weight,
+            ),
             activate_foot_sticking=command.foot_sticking,
             orientation_weights=orientation_weights,
             orientation_preview=command.orientation_preview,

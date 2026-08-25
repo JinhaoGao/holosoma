@@ -350,6 +350,40 @@ class RetargetingEntrypointTests(unittest.TestCase):
 
         self.assertFalse(kwargs["activate_foot_sticking"])
 
+    def test_root_and_mesh_tuning_reach_solver_constructor_kwargs(self):
+        command = tyro.cli(
+            RetargetingCommand,
+            args=[
+                "--interaction-mesh-weight",
+                "7.5",
+                "--arm-interaction-mesh-weight-scale",
+                "0.4",
+                "--root-position-weight",
+                "250",
+                "--root-orientation-weight",
+                "80",
+            ],
+        )
+        config = internal_config_from_command(command)
+        constants = SimpleNamespace(
+            ORIENTATION_JOINTS_MAPPING={},
+            ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ={},
+            ORIENTATION_T_POSE_ROBOT_BASE_QUATERNION_WXYZ=(1.0, 0.0, 0.0, 0.0),
+            ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS={},
+        )
+
+        kwargs = build_retargeter_kwargs_from_config(
+            config.retargeter,
+            constants,
+            object_urdf_path=None,
+            task_type="robot_only",
+        )
+
+        self.assertEqual(kwargs["interaction_mesh_weight"], 7.5)
+        self.assertEqual(kwargs["arm_interaction_mesh_weight_scale"], 0.4)
+        self.assertEqual(kwargs["root_stability"].position_weight, 250.0)
+        self.assertEqual(kwargs["root_stability"].orientation_weight, 80.0)
+
     def test_orientation_uniform_weight_enables_all_mapped_links(self):
         config = internal_config_from_command(
             RetargetingCommand(
@@ -583,6 +617,10 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 "overwrite",
                 "foot_sticking",
                 "dynamic_ground_window",
+                "interaction_mesh_weight",
+                "arm_interaction_mesh_weight_scale",
+                "root_position_weight",
+                "root_orientation_weight",
                 "retargeter",
                 "orientation_weights",
                 "orientation_config",

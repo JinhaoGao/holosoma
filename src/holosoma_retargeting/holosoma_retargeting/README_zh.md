@@ -148,6 +148,40 @@ python examples/robot_retarget.py \
 肩肘解。上肢的通用完整 SO(3) 项被禁用，朝向权重表里的下肢和躯干项仍照常
 工作。
 
+## 根节点稳定与 Interaction Mesh 权重
+
+肩部接近串联关节限位或切换可行支路时，可以显式约束浮动根跟踪源人体的根部
+平移和躯干朝向，并降低上肢锚点对全局 Interaction Mesh 形变能的影响。两个根部
+权重默认均为 `0`，上肢缩放默认是 `1`，因此不传这些参数时与原求解行为一致。
+下面是一组适合先做可视化对比的保守起点：
+
+```bash
+python examples/robot_retarget.py \
+  --task robot_only \
+  --robot e1_23dof \
+  --dataset noetix_mocap \
+  --motion sequence/name \
+  --orientation_config examples/orientation_weights \
+  --shoulder-direction-tracking \
+  --root-position-weight 200 \
+  --root-orientation-weight 50 \
+  --interaction-mesh-weight 10 \
+  --arm-interaction-mesh-weight-scale 0.5
+```
+
+`--root-position-weight` 跟踪首帧对齐后的源人体 root 平移，
+`--root-orientation-weight` 跟踪由左右肩和人体 root 构成的躯干坐标系；两者都是
+软目标，不会直接锁死机器人根部。非零根部权重要求完整浮动根参与优化，也就是
+内部配置使用 `q_a_init_idx=-7`。`--interaction-mesh-weight` 是所有网格拉普拉斯
+残差的全局权重，`--arm-interaction-mesh-weight-scale` 只缩放 shoulder、arm、
+elbow、wrist 和 hand 对应的锚点行；例如 `0.5` 保留一半上肢网格耦合，`0` 则
+取消这些锚点自身的网格残差，但不会关闭肩部方向或其他显式任务。
+
+调参时可以先固定全局网格权重为历史默认值 `10`，只比较根部权重和上肢缩放。
+若根部仍被肩部瞬态牵动，逐步提高平移或朝向权重；若手臂轨迹被躯干稳定目标
+拉扯，先将上肢缩放从 `1` 降到 `0.5` 或 `0.25`。结果 NPZ 会保存所用四个权重、
+逐帧根部目标/实际位姿，以及米制平移误差和弧度制朝向误差，便于定量比较。
+
 ## 自然姿态正则项
 
 自然姿态正则项同样默认关闭。使用 `--nature_weights WEIGHT` 时，全部 actuated joint 统一使用该非负权重；各关节的固定自然参考角按 `--robot` 从 `examples/nature_weights/g1.json`、`e1.json` 或 `e2.json` 读取。三张表与 `orientation_weights` 目录逐机器人对应，并以弧度保存自然参考角。
