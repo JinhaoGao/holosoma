@@ -107,13 +107,13 @@ class ShoulderDirectionConfig:
 
 @dataclass(frozen=True)
 class RootStabilityConfig:
-    """Track source-root translation and torso orientation with the robot root."""
+    """Track source-root translation and orientation with the robot root."""
 
     position_weight: float = 0.0
     """SQP weight for the aligned source-root world-position target."""
 
     orientation_weight: float = 0.0
-    """SQP weight for the aligned source-torso world-orientation target."""
+    """SQP weight for the aligned source-root world-orientation target."""
 
 
 @dataclass(frozen=True)

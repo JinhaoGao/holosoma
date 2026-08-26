@@ -36,6 +36,7 @@ def _build_retargeter(
     interaction_mesh_weight: float = 10.0,
     arm_interaction_mesh_weight_scale: float = 1.0,
     q_a_init_idx: int = -7,
+    orientation_weights: dict[str, float] | None = None,
 ) -> InteractionMeshRetargeter:
     robot_urdf = (
         PACKAGE_ROOT
@@ -59,6 +60,7 @@ def _build_retargeter(
         root_stability=root_stability or RootStabilityConfig(),
         interaction_mesh_weight=interaction_mesh_weight,
         arm_interaction_mesh_weight_scale=arm_interaction_mesh_weight_scale,
+        orientation_weights=orientation_weights or {},
     )
     return InteractionMeshRetargeter(
         **build_retargeter_kwargs_from_config(
@@ -142,6 +144,61 @@ class RootStabilityObjectiveTests(unittest.TestCase):
             expected = 3.0 if self.retargeter._is_upper_limb_anchor(name) else 7.5
             self.assertEqual(weights[index], expected)
         np.testing.assert_allclose(weights[len(robot_link_keys) :], 7.5)
+
+    def test_direct_root_orientations_replace_the_shoulder_basis(self):
+        initial_q = self.retargeter.robot_model.qpos0.copy()
+        source_matrices = Rotation.from_euler(
+            "xyz",
+            ((0.0, 0.0, 0.0), (0.1, -0.05, 0.2)),
+        ).as_matrix()
+
+        _, target_matrices = self.retargeter._prepare_root_stability_targets(
+            self._human_motion(),
+            initial_q,
+            root_orientation_reference_matrices=source_matrices,
+        )
+        _, initial_robot_matrix, _, _ = (
+            self.retargeter._get_root_stability_data(
+                initial_q,
+                with_jacobians=False,
+            )
+        )
+
+        np.testing.assert_allclose(
+            target_matrices[0],
+            initial_robot_matrix,
+            atol=1e-12,
+        )
+        np.testing.assert_allclose(
+            target_matrices[1] @ target_matrices[0].T,
+            source_matrices[1] @ source_matrices[0].T,
+            atol=1e-12,
+        )
+        self.assertEqual(
+            self.retargeter.root_stability_orientation_source,
+            "direct_root_orientation",
+        )
+
+    def test_bootstrap_keeps_generic_hips_orientation_until_root_alignment(self):
+        retargeter = _build_retargeter(
+            root_stability=RootStabilityConfig(orientation_weight=80.0),
+            orientation_weights={"Hips": 1.0},
+        )
+        root_index = retargeter.root_stability_orientation_index
+
+        self.assertGreaterEqual(root_index, 0)
+        self.assertNotIn(
+            root_index,
+            retargeter._reserved_orientation_objective_indices(
+                root_stability_bootstrap=True,
+            ),
+        )
+        self.assertIn(
+            root_index,
+            retargeter._reserved_orientation_objective_indices(
+                root_stability_bootstrap=False,
+            ),
+        )
 
     def test_position_only_mode_does_not_build_unused_torso_targets(self):
         retargeter = _build_retargeter(

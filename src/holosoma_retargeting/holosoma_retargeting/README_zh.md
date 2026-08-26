@@ -170,9 +170,12 @@ python examples/robot_retarget.py \
 ```
 
 `--root-position-weight` 跟踪首帧对齐后的源人体 root 平移，
-`--root-orientation-weight` 跟踪由左右肩和人体 root 构成的躯干坐标系；两者都是
-软目标，不会直接锁死机器人根部。非零根部权重要求完整浮动根参与优化，也就是
-内部配置使用 `q_a_init_idx=-7`。`--interaction-mesh-weight` 是所有网格拉普拉斯
+`--root-orientation-weight` 优先跟踪数据中直接提供的 root 朝向；没有直接朝向时
+才使用左右肩和人体 root 构成的躯干坐标系。第 0 帧先在不施加根稳定目标的情况
+下完成正常重定向，再以这份已求解姿态建立相对运动基准，因此模型初始化坐标系
+不会被误当作目标姿态。两者都是软目标，不会直接锁死机器人根部。非零根部权重
+要求完整浮动根参与优化，也就是内部配置使用 `q_a_init_idx=-7`。
+`--interaction-mesh-weight` 是所有网格拉普拉斯
 残差的全局权重，`--arm-interaction-mesh-weight-scale` 只缩放 shoulder、arm、
 elbow、wrist 和 hand 对应的锚点行；例如 `0.5` 保留一半上肢网格耦合，`0` 则
 取消这些锚点自身的网格残差，但不会关闭肩部方向或其他显式任务。

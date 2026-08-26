@@ -761,6 +761,15 @@ class InteractionMeshRetargeter:
         self.root_stability_human_root_name = self.demo_joints[
             self.root_stability_human_root_index
         ]
+        self.root_stability_orientation_index = (
+            self.orientation_human_joint_names.index(
+                self.root_stability_human_root_name,
+            )
+            if self.root_stability_human_root_name
+            in self.orientation_human_joint_names
+            else -1
+        )
+        self.root_stability_orientation_source = "disabled"
         shoulder_name_pairs = (
             ("LeftArm", "RightArm"),
             ("L_Shoulder", "R_Shoulder"),
@@ -789,18 +798,23 @@ class InteractionMeshRetargeter:
                 "Root orientation stability requires the complete floating-base "
                 "quaternion to be active; use q_a_init_idx=-7",
             )
-        if orientation_weight > 0.0 and not self.root_stability_human_shoulder_names:
+        if (
+            orientation_weight > 0.0
+            and self.root_stability_orientation_index < 0
+            and not self.root_stability_human_shoulder_names
+        ):
             raise ValueError(
-                "Root orientation stability requires a supported left/right "
-                "human shoulder pair",
+                "Root orientation stability requires direct root orientations "
+                "or a supported left/right human shoulder pair",
             )
 
     def _prepare_root_stability_targets(
         self,
         human_joint_motions: np.ndarray,
         initial_q: np.ndarray,
+        root_orientation_reference_matrices: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Align source-root translation and torso orientation to robot frame zero."""
+        """Align source-root motion to an already-retargeted robot frame zero."""
 
         frame_count = int(human_joint_motions.shape[0])
         if not self.root_stability_enabled:
@@ -845,29 +859,66 @@ class InteractionMeshRetargeter:
 
         if (
             float(self.root_stability_config.orientation_weight) <= 0.0
-            or not self.root_stability_human_shoulder_names
         ):
+            self.root_stability_orientation_source = "disabled"
             return target_positions, np.empty(
                 (frame_count, 0, 3, 3),
                 dtype=np.float64,
             )
-        left_name, right_name = self.root_stability_human_shoulder_names
-        left_index = self.demo_joints.index(left_name)
-        right_index = self.demo_joints.index(right_name)
-        human_matrices = np.asarray(
-            [
-                self._anatomical_basis(
-                    frame[left_index],
-                    frame[right_index],
-                    frame[self.root_stability_human_root_index],
+
+        if root_orientation_reference_matrices is not None:
+            human_matrices = np.asarray(
+                root_orientation_reference_matrices,
+                dtype=np.float64,
+            )
+            if human_matrices.shape != (frame_count, 3, 3):
+                raise ValueError(
+                    "Root orientation references must have shape "
+                    f"{(frame_count, 3, 3)}, got {human_matrices.shape}",
                 )
-                for frame in motions
-            ],
-            dtype=np.float64,
-        )
+            if not np.isfinite(human_matrices).all():
+                raise ValueError("Root orientation references must be finite")
+            self.root_stability_orientation_source = "direct_root_orientation"
+        else:
+            if not self.root_stability_human_shoulder_names:
+                raise ValueError(
+                    "Root orientation stability requires either direct root "
+                    "orientations or a supported left/right shoulder pair",
+                )
+            left_name, right_name = self.root_stability_human_shoulder_names
+            left_index = self.demo_joints.index(left_name)
+            right_index = self.demo_joints.index(right_name)
+            human_matrices = np.asarray(
+                [
+                    self._anatomical_basis(
+                        frame[left_index],
+                        frame[right_index],
+                        frame[self.root_stability_human_root_index],
+                    )
+                    for frame in motions
+                ],
+                dtype=np.float64,
+            )
+            self.root_stability_orientation_source = "shoulder_root_basis"
         alignment = human_matrices[0].T @ initial_robot_matrix
         target_matrices = human_matrices @ alignment[None, ...]
         return target_positions, target_matrices
+
+    def _reserved_orientation_objective_indices(
+        self,
+        *,
+        root_stability_bootstrap: bool,
+    ) -> set[int]:
+        """Return generic SO(3) rows replaced by specialized objectives."""
+
+        reserved = set(self.shoulder_reserved_orientation_indices.tolist())
+        if (
+            not root_stability_bootstrap
+            and float(self.root_stability_config.orientation_weight) > 0.0
+            and self.root_stability_orientation_index >= 0
+        ):
+            reserved.add(self.root_stability_orientation_index)
+        return reserved
 
     def _get_root_stability_data(
         self,
@@ -3077,13 +3128,6 @@ class InteractionMeshRetargeter:
         q = np.copy(q_locked_list[0])
         retargeted_motions = [q]
         (
-            root_stability_target_positions,
-            root_stability_target_matrices,
-        ) = self._prepare_root_stability_targets(
-            human_joint_motions,
-            q,
-        )
-        (
             orientation_target_matrices,
             orientation_alignment_matrices,
         ) = self._prepare_orientation_targets(
@@ -3092,6 +3136,23 @@ class InteractionMeshRetargeter:
             num_frames,
             human_orientation_joint_names=source_orientation_joint_names,
             orientation_target_world_rotation_deltas_wxyz=(orientation_target_world_rotation_deltas_wxyz),
+        )
+        root_stability_target_positions = np.empty(
+            (num_frames, 0),
+            dtype=np.float64,
+        )
+        root_stability_target_matrices = np.empty(
+            (num_frames, 0, 3, 3),
+            dtype=np.float64,
+        )
+        root_orientation_reference_matrices = (
+            orientation_target_matrices[
+                :,
+                self.root_stability_orientation_index,
+            ]
+            if self.root_stability_orientation_index >= 0
+            and orientation_target_matrices.shape[1:] != (0, 3, 3)
+            else None
         )
         (
             shoulder_direction_targets,
@@ -3231,6 +3292,7 @@ class InteractionMeshRetargeter:
                 else:
                     w_nominal_tracking = self.w_nominal_tracking_init * np.exp(-i / self.nominal_tracking_tau)
 
+                root_stability_bootstrap = self.root_stability_enabled and i == 0
                 q, cost = self.iterate(
                     q_locked=q_locked_list[i],
                     q_n=q,
@@ -3254,18 +3316,33 @@ class InteractionMeshRetargeter:
                     root_stability_target_position=(
                         root_stability_target_positions[i]
                         if self.root_stability_enabled
+                        and not root_stability_bootstrap
                         else None
                     ),
                     root_stability_target_matrix=(
                         root_stability_target_matrices[i]
                         if self.root_stability_enabled
+                        and not root_stability_bootstrap
                         and root_stability_target_matrices.shape[1:] == (3, 3)
                         else None
                     ),
+                    root_stability_bootstrap=root_stability_bootstrap,
                 )
                 frame_costs.append(float(cost))
                 sqp_iteration_counts.append(self.last_sqp_iteration_count)
                 sqp_stop_reasons.append(self.last_sqp_stop_reason)
+
+                if root_stability_bootstrap:
+                    (
+                        root_stability_target_positions,
+                        root_stability_target_matrices,
+                    ) = self._prepare_root_stability_targets(
+                        human_joint_motions,
+                        q,
+                        root_orientation_reference_matrices=(
+                            root_orientation_reference_matrices
+                        ),
+                    )
 
                 (
                     all_robot_link_positions,
@@ -3596,6 +3673,13 @@ class InteractionMeshRetargeter:
             ),
             "root_stability_human_root_name": np.asarray(
                 self.root_stability_human_root_name,
+            ),
+            "root_stability_bootstrap_frame": np.asarray(
+                0 if self.root_stability_enabled else -1,
+                dtype=np.int32,
+            ),
+            "root_stability_orientation_source": np.asarray(
+                self.root_stability_orientation_source,
             ),
             "root_stability_position_weight": np.asarray(
                 float(self.root_stability_config.position_weight),
@@ -4118,6 +4202,7 @@ class InteractionMeshRetargeter:
         shoulder_reference_joint_positions: np.ndarray | None = None,
         root_stability_target_position: np.ndarray | None = None,
         root_stability_target_matrix: np.ndarray | None = None,
+        root_stability_bootstrap: bool = False,
     ) -> tuple[np.ndarray, float]:
         """The main function to solve a single iteration of the DiffIK problem.
         Args:
@@ -4260,7 +4345,7 @@ class InteractionMeshRetargeter:
 
         obj_terms.append(cp.sum_squares(cp.multiply(sqrt_w3, lap_var - target_lap_vec)))
 
-        if self.root_stability_enabled:
+        if self.root_stability_enabled and not root_stability_bootstrap:
             (
                 current_root_position,
                 current_root_matrix,
@@ -4341,8 +4426,10 @@ class InteractionMeshRetargeter:
                 orientation_target_matrices,
                 current_orientation_matrices,
             )
-            reserved_orientation_indices = set(
-                self.shoulder_reserved_orientation_indices.tolist(),
+            reserved_orientation_indices = (
+                self._reserved_orientation_objective_indices(
+                    root_stability_bootstrap=root_stability_bootstrap,
+                )
             )
             for link_idx, weight in enumerate(self.orientation_weight_values):
                 if link_idx in reserved_orientation_indices:
@@ -4622,6 +4709,7 @@ class InteractionMeshRetargeter:
         shoulder_reference_joint_positions: np.ndarray | None = None,
         root_stability_target_position: np.ndarray | None = None,
         root_stability_target_matrix: np.ndarray | None = None,
+        root_stability_bootstrap: bool = False,
     ):
         """Apply each successful linearized QP step directly, matching main."""
         max_iterations = int(n_iter)
@@ -4648,6 +4736,7 @@ class InteractionMeshRetargeter:
                 shoulder_reference_joint_positions=(shoulder_reference_joint_positions),
                 root_stability_target_position=root_stability_target_position,
                 root_stability_target_matrix=root_stability_target_matrix,
+                root_stability_bootstrap=root_stability_bootstrap,
             )
             if not np.isfinite(cost):
                 raise RuntimeError(

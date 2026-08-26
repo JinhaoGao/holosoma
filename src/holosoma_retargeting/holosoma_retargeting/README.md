@@ -186,10 +186,14 @@ python examples/robot_retarget.py \
 ```
 
 `--root-position-weight` follows the source root displacement after frame-zero
-alignment. `--root-orientation-weight` follows the torso frame formed by the
-left shoulder, right shoulder, and source root. These are soft objectives, not
-hard root locks, and nonzero values require the complete floating base to be
-active through the internal `q_a_init_idx=-7` setting. The global mesh option
+alignment. `--root-orientation-weight` prefers a direct source-root orientation
+and falls back to the torso frame formed by the shoulders and source root when
+direct orientations are unavailable. Frame zero is first retargeted without a
+root-stability objective; its solved robot pose then anchors all relative root
+targets, so the model initialization frame cannot become an accidental target.
+These are soft objectives, not hard root locks, and nonzero values require the
+complete floating base to be active through the internal `q_a_init_idx=-7`
+setting. The global mesh option
 weights every Laplacian residual, while the arm scale only multiplies anchor
 rows whose source names contain shoulder, arm, elbow, wrist, or hand. A useful
 first comparison keeps the global weight at `10`, tries arm scales `1`, `0.5`,

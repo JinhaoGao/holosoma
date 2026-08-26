@@ -135,7 +135,7 @@ class RetargetingCommand:
     """Track the source root's aligned world translation when positive."""
 
     root_orientation_weight: float = 0.0
-    """Track the source torso's aligned world orientation when positive."""
+    """Track the source root's aligned world orientation when positive."""
 
     retargeter: RetargeterRuntimeOptions = field(
         default_factory=RetargeterRuntimeOptions,
