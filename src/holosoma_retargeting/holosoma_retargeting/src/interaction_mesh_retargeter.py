@@ -6,6 +6,7 @@ import sys
 import time
 from collections.abc import Mapping
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
 
@@ -20,8 +21,13 @@ from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 from tqdm import tqdm
 from viser.extras import ViserUrdf  # type: ignore[import-not-found]
 
-from holosoma_retargeting.config_types.retargeter import FootLockConfig, SelfCollisionConfig
+from holosoma_retargeting.config_types.retargeter import (
+    FootLockConfig,
+    PlanarFootContactConfig,
+    SelfCollisionConfig,
+)
 from holosoma_retargeting.data_utils.hand_skeleton import build_hand_visualization_spec
+from holosoma_retargeting.foot_contact import FootContactPlan, FootContactState
 
 # Add src to path for direct execution
 src_path = Path(__file__).parent.parent / "src"
@@ -49,6 +55,18 @@ from viser_utils import (  # type: ignore[import-not-found,no-redef]  # noqa: E4
 )
 
 
+@dataclass(frozen=True)
+class _ResolvedPlanarFootTarget:
+    """Robot-space target resolved once at the start of a motion frame."""
+
+    side: str
+    mode: str
+    phase_id: int
+    pivot_uv: tuple[float, float]
+    anchor_xy: np.ndarray
+    heading_anchor_xy: np.ndarray | None = None
+
+
 class InteractionMeshRetargeter:
     """
     A class to perform kinematic retargeting from human motion to a robot,
@@ -67,6 +85,7 @@ class InteractionMeshRetargeter:
         collision_detection_threshold: float = 0.1,
         penetration_tolerance: float = 1e-3,
         foot_sticking_tolerance: float = 1e-3,
+        planar_foot_contact: PlanarFootContactConfig | None = None,
         foot_lock: FootLockConfig | None = None,
         self_collision: SelfCollisionConfig | None = None,
         visualize: bool = False,
@@ -109,7 +128,7 @@ class InteractionMeshRetargeter:
         During each SQP iteration, the problem is solved with the following constraints and costs:
             1. [Cost] Minimize the Laplacian deformation in the object frame.
             2. [Constraint] Enforce the non-penetration constraints w/ the ground and (if activated) the object.
-            3. [Constraint] Enforce the foot sticking constraints if activated.
+            3. [Constraint] Enforce contact-aware planar foot constraints if activated.
             4. [Constraint] Enforce the joint limits if activated.
             5. [Constraint] Enforce trust region of dq.
         The constraints are linearized and the costs are quadratic with a trust region.
@@ -125,7 +144,8 @@ class InteractionMeshRetargeter:
             collision_detection_threshold: only start to detect collision
             when the distance is smaller than this threshold.
             penetration_tolerance: tolerance for penetration when enforcing non-penetration constraints.
-            foot_sticking_tolerance: tolerance for foot sticking constraints in x, y.
+            foot_sticking_tolerance: XY tolerance for planted sole regions.
+            planar_foot_contact: contact detection and mode-specific constraint settings.
             foot_lock: configuration for explicit frame-range based foot locking constraints.
             nominal_tracking_tau: the time constant for the nominal tracking cost.
             natural_pose_joint_positions: fixed natural-pose references,
@@ -135,6 +155,7 @@ class InteractionMeshRetargeter:
                 keyed by the same scalar joint names as the references.
         """
 
+        self.task_constants = task_constants
         self.robot_model_path = task_constants.ROBOT_URDF_FILE
         if object_urdf_path:
             object_path = Path(object_urdf_path).expanduser()
@@ -148,7 +169,7 @@ class InteractionMeshRetargeter:
         self.activate_foot_sticking = activate_foot_sticking
         self.activate_obj_non_penetration = activate_obj_non_penetration
         self.activate_joint_limits = activate_joint_limits
-        self.foot_links = dict(zip(task_constants.FOOT_STICKING_LINKS, task_constants.FOOT_STICKING_LINKS))
+        self._init_planar_foot_contact(planar_foot_contact)
         self.penetration_tolerance = float(penetration_tolerance)
         if not np.isfinite(self.penetration_tolerance) or self.penetration_tolerance < 0:
             raise ValueError("penetration_tolerance must be finite and non-negative")
@@ -176,7 +197,6 @@ class InteractionMeshRetargeter:
         if self.human_joint_parent_indices.shape != (len(self.demo_joints),):
             raise ValueError("DEMO_JOINT_PARENT_INDICES must contain one parent for every DEMO_JOINTS entry")
         self.laplacian_match_links = task_constants.JOINTS_MAPPING
-        self.task_constants = task_constants
         self.qpos_to_viser_joint_indices: np.ndarray | None = None
 
         self.mapped_joint_indices = [self.demo_joints.index(name) for name in self.laplacian_match_links]
@@ -222,6 +242,9 @@ class InteractionMeshRetargeter:
         ) = self._robot_link_topology()
         self.robot_actuated_joint_names = self._robot_actuated_joint_names()
         self.robot_link_name_to_index = {name: index for index, name in enumerate(self.robot_link_names)}
+        missing_foot_links = sorted(set(self.foot_links).difference(self.robot_link_name_to_index))
+        if missing_foot_links:
+            raise ValueError(f"Planar foot-contact layout references unknown robot links: {missing_foot_links}")
         self._init_self_collision(self._self_collision_config)
 
         if self.robot_data.qpos.shape[0] > 7 + self.task_constants.ROBOT_DOF:
@@ -592,6 +615,68 @@ class InteractionMeshRetargeter:
             dtype=np.float64,
         )
 
+    def _init_planar_foot_contact(
+        self,
+        planar_foot_contact: PlanarFootContactConfig | None,
+    ) -> None:
+        """Validate the semantic sole layout and initialize phase anchors."""
+        self.planar_foot_contact = planar_foot_contact or PlanarFootContactConfig()
+        constraint_values = {
+            "heading_tolerance": self.planar_foot_contact.heading_tolerance,
+            "slide_tracking_tolerance": self.planar_foot_contact.slide_tracking_tolerance,
+        }
+        invalid = {name: value for name, value in constraint_values.items() if not np.isfinite(value) or value < 0.0}
+        if invalid:
+            raise ValueError(f"Planar foot-contact constraint tolerances must be finite and non-negative: {invalid}")
+
+        layout = getattr(self.task_constants, "FOOT_CONTACT_LINKS", None)
+        required_regions = {
+            "heel_positive_lateral",
+            "heel_negative_lateral",
+            "forefoot_positive_lateral",
+            "forefoot_negative_lateral",
+            "toe",
+        }
+        if layout is None:
+            legacy_by_side = {
+                side: [
+                    str(name) for name in self.task_constants.FOOT_STICKING_LINKS if self._name_side(str(name)) == side
+                ]
+                for side in ("left", "right")
+            }
+            layout = {}
+            for side, links in legacy_by_side.items():
+                if len(links) < 4:
+                    raise ValueError(
+                        "Legacy FOOT_STICKING_LINKS must provide at least four links per foot",
+                    )
+                layout[side] = {
+                    "heel_positive_lateral": links[0],
+                    "heel_negative_lateral": links[1],
+                    "forefoot_positive_lateral": links[2],
+                    "forefoot_negative_lateral": links[3],
+                    "toe": links[4] if len(links) >= 5 else links[2],
+                }
+
+        normalized_layout: dict[str, dict[str, str]] = {}
+        for side in ("left", "right"):
+            if side not in layout:
+                raise ValueError(f"FOOT_CONTACT_LINKS is missing the {side!r} sole")
+            regions = {str(region): str(link) for region, link in layout[side].items()}
+            missing_regions = sorted(required_regions.difference(regions))
+            if missing_regions:
+                raise ValueError(
+                    f"FOOT_CONTACT_LINKS[{side!r}] is missing semantic regions: {missing_regions}",
+                )
+            normalized_layout[side] = regions
+        self.foot_contact_link_layout = normalized_layout
+        link_names = tuple(
+            dict.fromkeys(link for side in ("left", "right") for link in normalized_layout[side].values()),
+        )
+        self.foot_links = {name: name for name in link_names}
+        self._foot_contact_phase_anchors: dict[tuple[str, int], _ResolvedPlanarFootTarget] = {}
+        self._active_planar_foot_targets: dict[str, _ResolvedPlanarFootTarget] | None = None
+
     def _init_foot_lock(self, foot_lock: FootLockConfig | None) -> None:
         """Initialize foot lock configuration and normalize window mappings."""
         self.foot_lock = foot_lock or FootLockConfig()
@@ -648,6 +733,226 @@ class InteractionMeshRetargeter:
         if normalized.startswith(("right", "r_")) or "_right" in normalized:
             return "right"
         return None
+
+    def _semantic_sole_point(
+        self,
+        side: str,
+        region: str,
+        jacobians: Mapping[str, np.ndarray],
+        positions: Mapping[str, np.ndarray],
+        *,
+        pivot_uv: tuple[float, float] = (0.5, 0.0),
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Aggregate semantic robot sole links into one point and Jacobian."""
+        layout = self.foot_contact_link_layout[side]
+
+        def named(name: str) -> tuple[np.ndarray, np.ndarray]:
+            link = layout[name]
+            return jacobians[link], positions[link]
+
+        J_hp, p_hp = named("heel_positive_lateral")
+        J_hn, p_hn = named("heel_negative_lateral")
+        J_fp, p_fp = named("forefoot_positive_lateral")
+        J_fn, p_fn = named("forefoot_negative_lateral")
+        J_toe, p_toe = named("toe")
+        J_heel = 0.5 * (J_hp + J_hn)
+        p_heel = 0.5 * (p_hp + p_hn)
+        J_forefoot = 0.5 * (J_fp + J_fn)
+        p_forefoot = 0.5 * (p_fp + p_fn)
+
+        if region == "heel":
+            return J_heel, p_heel
+        if region == "forefoot":
+            return J_forefoot, p_forefoot
+        if region == "toe":
+            return J_toe, p_toe
+        if region == "center":
+            return 0.5 * (J_heel + J_forefoot), 0.5 * (p_heel + p_forefoot)
+        if region != "pivot":
+            raise ValueError(f"Unknown semantic sole region: {region!r}")
+
+        u = float(np.clip(pivot_uv[0], -0.2, 1.2))
+        v = float(np.clip(pivot_uv[1], -1.5, 1.5))
+        J_base = J_heel + u * (J_toe - J_heel)
+        p_base = p_heel + u * (p_toe - p_heel)
+        heel_half_width_J = 0.5 * (J_hp - J_hn)
+        heel_half_width_p = 0.5 * (p_hp - p_hn)
+        forefoot_half_width_J = 0.5 * (J_fp - J_fn)
+        forefoot_half_width_p = 0.5 * (p_fp - p_fn)
+        if u <= 0.8:
+            blend = float(np.clip(u / 0.8, 0.0, 1.0))
+            half_width_J = (1.0 - blend) * heel_half_width_J + blend * forefoot_half_width_J
+            half_width_p = (1.0 - blend) * heel_half_width_p + blend * forefoot_half_width_p
+        else:
+            toe_width_scale = float(np.clip((1.0 - u) / 0.2, 0.0, 1.0))
+            half_width_J = toe_width_scale * forefoot_half_width_J
+            half_width_p = toe_width_scale * forefoot_half_width_p
+        return J_base + v * half_width_J, p_base + v * half_width_p
+
+    def _prepare_planar_foot_targets(
+        self,
+        q_reference: np.ndarray,
+        frame_state: Mapping[str, FootContactState],
+    ) -> None:
+        """Resolve persistent phase anchors from the previous accepted robot pose."""
+        unknown_sides = sorted(set(frame_state).difference({"left", "right"}))
+        if unknown_sides:
+            raise ValueError(f"Foot contact state contains unknown sides: {unknown_sides}")
+        missing_sides = [side for side in ("left", "right") if side not in frame_state]
+        if missing_sides:
+            raise ValueError(f"Foot contact state is missing sides: {missing_sides}")
+
+        active_states = {side: state for side, state in frame_state.items() if state.mode != "swing"}
+        if not active_states:
+            self._active_planar_foot_targets = {}
+            return
+        jacobians, positions, _ = self._calc_manipulator_jacobians(
+            q_reference,
+            links=self.foot_links,
+            obj_frame=False,
+        )
+        active_targets: dict[str, _ResolvedPlanarFootTarget] = {}
+        for side, state in active_states.items():
+            if state.phase_id < 0:
+                raise ValueError(f"Active {side} foot contact must have a non-negative phase_id")
+            cache_key = (side, state.phase_id)
+            cached = self._foot_contact_phase_anchors.get(cache_key)
+            if cached is None:
+                if state.mode == "flat":
+                    _, p_center = self._semantic_sole_point(
+                        side,
+                        "center",
+                        jacobians,
+                        positions,
+                    )
+                    _, p_heel = self._semantic_sole_point(side, "heel", jacobians, positions)
+                    _, p_forefoot = self._semantic_sole_point(side, "forefoot", jacobians, positions)
+                    cached = _ResolvedPlanarFootTarget(
+                        side=side,
+                        mode=state.mode,
+                        phase_id=state.phase_id,
+                        pivot_uv=state.pivot_uv,
+                        anchor_xy=p_center[:2].copy(),
+                        heading_anchor_xy=(p_forefoot - p_heel)[:2].copy(),
+                    )
+                else:
+                    if state.mode == "heel":
+                        region = "heel"
+                    elif state.mode == "toe":
+                        region = "toe"
+                    elif state.mode == "pivot":
+                        region = "pivot"
+                    elif state.mode == "slide":
+                        region = "center"
+                    else:
+                        raise ValueError(f"Unknown planar foot contact mode: {state.mode!r}")
+                    _, point = self._semantic_sole_point(
+                        side,
+                        region,
+                        jacobians,
+                        positions,
+                        pivot_uv=state.pivot_uv,
+                    )
+                    cached = _ResolvedPlanarFootTarget(
+                        side=side,
+                        mode=state.mode,
+                        phase_id=state.phase_id,
+                        pivot_uv=state.pivot_uv,
+                        anchor_xy=point[:2].copy(),
+                    )
+                self._foot_contact_phase_anchors[cache_key] = cached
+
+            displacement = (
+                np.asarray(state.reference_displacement_xy, dtype=np.float64)
+                if state.mode == "slide"
+                else np.zeros(2, dtype=np.float64)
+            )
+            active_targets[side] = _ResolvedPlanarFootTarget(
+                side=cached.side,
+                mode=cached.mode,
+                phase_id=cached.phase_id,
+                pivot_uv=cached.pivot_uv,
+                anchor_xy=cached.anchor_xy + displacement,
+                heading_anchor_xy=cached.heading_anchor_xy,
+            )
+        self._active_planar_foot_targets = active_targets
+
+    def _append_contact_plan_constraints(
+        self,
+        constraints: list,
+        dqa: cp.Variable,
+        jacobians: Mapping[str, np.ndarray],
+        positions: Mapping[str, np.ndarray],
+    ) -> None:
+        """Append the minimal independent planar constraints for active modes."""
+        for side, target in (self._active_planar_foot_targets or {}).items():
+            if target.mode == "flat":
+                J_center, p_center = self._semantic_sole_point(
+                    side,
+                    "center",
+                    jacobians,
+                    positions,
+                )
+                delta = target.anchor_xy - p_center[:2]
+                constraints.extend(
+                    [
+                        J_center[:2] @ dqa >= delta - self.foot_sticking_tolerance,
+                        J_center[:2] @ dqa <= delta + self.foot_sticking_tolerance,
+                    ],
+                )
+                J_heel, p_heel = self._semantic_sole_point(side, "heel", jacobians, positions)
+                J_forefoot, p_forefoot = self._semantic_sole_point(
+                    side,
+                    "forefoot",
+                    jacobians,
+                    positions,
+                )
+                heading_anchor = np.asarray(target.heading_anchor_xy, dtype=np.float64)
+                heading_norm = float(np.linalg.norm(heading_anchor))
+                if heading_norm <= 1e-8:
+                    raise RuntimeError(f"Degenerate flat-foot heading anchor for the {side} foot")
+                heading_normal = np.asarray([-heading_anchor[1], heading_anchor[0]]) / heading_norm
+                heading_now = (p_forefoot - p_heel)[:2]
+                J_heading = (J_forefoot - J_heel)[:2]
+                heading_delta = -float(heading_normal @ (heading_now - heading_anchor))
+                heading_row = heading_normal @ J_heading
+                constraints.extend(
+                    [
+                        heading_row @ dqa >= heading_delta - self.planar_foot_contact.heading_tolerance,
+                        heading_row @ dqa <= heading_delta + self.planar_foot_contact.heading_tolerance,
+                    ],
+                )
+                continue
+
+            if target.mode == "heel":
+                region = "heel"
+            elif target.mode == "toe":
+                region = "toe"
+            elif target.mode == "pivot":
+                region = "pivot"
+            elif target.mode == "slide":
+                region = "center"
+            else:
+                raise ValueError(f"Unknown planar foot contact mode: {target.mode!r}")
+            J_point, p_point = self._semantic_sole_point(
+                side,
+                region,
+                jacobians,
+                positions,
+                pivot_uv=target.pivot_uv,
+            )
+            tolerance = (
+                self.planar_foot_contact.slide_tracking_tolerance
+                if target.mode == "slide"
+                else self.foot_sticking_tolerance
+            )
+            delta = target.anchor_xy - p_point[:2]
+            constraints.extend(
+                [
+                    J_point[:2] @ dqa >= delta - tolerance,
+                    J_point[:2] @ dqa <= delta + tolerance,
+                ],
+            )
 
     def _init_self_collision(self, self_collision: SelfCollisionConfig | None) -> None:
         """Initialize self-collision configuration and precompute geom pairs."""
@@ -1585,6 +1890,7 @@ class InteractionMeshRetargeter:
         visualization_human_joint_quaternions_wxyz: np.ndarray | None = None,
         orientation_target_world_rotation_deltas_wxyz: np.ndarray | None = None,
         result_metadata: dict[str, object] | None = None,
+        foot_contact_plan: FootContactPlan | None = None,
     ):
         """
         The main function to retarget an entire motion sequence frame by frame.
@@ -1684,14 +1990,32 @@ class InteractionMeshRetargeter:
                 raise ValueError("Complete visualization-human data must contain finite positions and unit quaternions")
             missing_mapped_names = sorted(set(self.laplacian_match_links).difference(visual_human_names))
             if missing_mapped_names:
-                raise ValueError(
-                    "Complete visualization-human tree is missing mapped joints: "
-                    f"{missing_mapped_names}"
-                )
-        foot_sticking_states = self._foot_sticking_states_array(
+                raise ValueError(f"Complete visualization-human tree is missing mapped joints: {missing_mapped_names}")
+        legacy_foot_sticking_states = self._foot_sticking_states_array(
             foot_sticking_sequences,
             num_frames,
         )
+        if foot_contact_plan is None:
+            foot_contact_plan = FootContactPlan.from_sticking_sequences(
+                [
+                    {
+                        "left": bool(frame[0]),
+                        "right": bool(frame[1]),
+                    }
+                    for frame in legacy_foot_sticking_states
+                ],
+                num_frames=num_frames,
+            )
+        elif len(foot_contact_plan) != num_frames:
+            raise ValueError(
+                f"foot_contact_plan must contain {num_frames} frames, got {len(foot_contact_plan)}",
+            )
+        foot_sticking_states = foot_contact_plan.sticking_states
+        if not hasattr(self, "_foot_contact_phase_anchors"):
+            self._foot_contact_phase_anchors = {}
+        else:
+            self._foot_contact_phase_anchors.clear()
+        self._active_planar_foot_targets = None
         if q_nominal_list is not None:
             q_nominal_list = self._owned_nominal_qpos(
                 q_nominal_list,
@@ -1851,6 +2175,7 @@ class InteractionMeshRetargeter:
                     n_iter=50 if i == 0 else 10,
                     frame_idx=i,
                     orientation_target_matrices=orientation_target_matrices[i],
+                    foot_contact_state=foot_contact_plan.frames[i],
                 )
                 frame_costs.append(float(cost))
                 sqp_iteration_counts.append(self.last_sqp_iteration_count)
@@ -1956,15 +2281,8 @@ class InteractionMeshRetargeter:
         else:
             saved_human_name_set = set(mapped_human_joint_names)
             saved_human_name_set.update(self.orientation_human_joint_names)
-            saved_human_indices = [
-                index
-                for index, name in enumerate(self.demo_joints)
-                if name in saved_human_name_set
-            ]
-            saved_human_joint_names = [
-                self.demo_joints[index]
-                for index in saved_human_indices
-            ]
+            saved_human_indices = [index for index, name in enumerate(self.demo_joints) if name in saved_human_name_set]
+            saved_human_joint_names = [self.demo_joints[index] for index in saved_human_indices]
             saved_human_joints = np.asarray(
                 human_joint_motions[:, saved_human_indices],
                 dtype=np.float32,
@@ -1974,10 +2292,7 @@ class InteractionMeshRetargeter:
                 saved_human_indices,
             )
         saved_robot_indices = list(range(len(self.robot_link_names)))
-        saved_robot_link_names = [
-            self.robot_link_names[index]
-            for index in saved_robot_indices
-        ]
+        saved_robot_link_names = [self.robot_link_names[index] for index in saved_robot_indices]
         all_robot_link_positions = np.asarray(
             robot_link_positions_w_list,
             dtype=np.float32,
@@ -2035,13 +2350,9 @@ class InteractionMeshRetargeter:
         diagnostic_human_joint_names = (
             self.orientation_human_joint_names if self.orientation_diagnostics_enabled else ()
         )
-        diagnostic_robot_link_names = (
-            self.orientation_robot_link_names if self.orientation_diagnostics_enabled else ()
-        )
+        diagnostic_robot_link_names = self.orientation_robot_link_names if self.orientation_diagnostics_enabled else ()
         diagnostic_weights = (
-            self.orientation_weight_values
-            if self.orientation_diagnostics_enabled
-            else np.empty((0,), dtype=np.float64)
+            self.orientation_weight_values if self.orientation_diagnostics_enabled else np.empty((0,), dtype=np.float64)
         )
         save_payload = {
             "qpos": np.asarray(retargeted_motions[1:], dtype=np.float64),
@@ -2098,6 +2409,13 @@ class InteractionMeshRetargeter:
             "foot_sticking_enabled_for_saved_trajectory": np.asarray(
                 self.activate_foot_sticking and self.q_a_init_idx < 12,
             ),
+            "foot_contact_modes": foot_contact_plan.modes,
+            "foot_contact_phase_ids": foot_contact_plan.phase_ids,
+            "foot_contact_confidences": foot_contact_plan.confidences,
+            "foot_contact_pivot_regions": foot_contact_plan.pivot_regions,
+            "foot_contact_pivot_uv": foot_contact_plan.pivot_uv,
+            "foot_contact_reference_displacements_xy": (foot_contact_plan.reference_displacements_xy),
+            "foot_contact_plan_version": np.asarray(1, dtype=np.int32),
             "frame_costs": np.asarray(frame_costs, dtype=np.float64),
             "sqp_iteration_counts": np.asarray(sqp_iteration_counts, dtype=np.int32),
             "sqp_stop_reasons": np.asarray(sqp_stop_reasons, dtype=str),
@@ -2185,18 +2503,11 @@ class InteractionMeshRetargeter:
                     "human_orientation_quaternions_wxyz": visual_human_quaternions,
                 }
             )
-        elif (
-            saved_human_joint_quaternions_wxyz is not None
-            and (self.orientation_diagnostics_enabled or self.orientation_preview_enabled)
+        elif saved_human_joint_quaternions_wxyz is not None and (
+            self.orientation_diagnostics_enabled or self.orientation_preview_enabled
         ):
-            source_orientation_index = {
-                name: index
-                for index, name in enumerate(source_orientation_joint_names)
-            }
-            saved_orientation_indices = [
-                source_orientation_index[name]
-                for name in self.orientation_human_joint_names
-            ]
+            source_orientation_index = {name: index for index, name in enumerate(source_orientation_joint_names)}
+            saved_orientation_indices = [source_orientation_index[name] for name in self.orientation_human_joint_names]
             saved_human_orientation_names = np.asarray(
                 self.orientation_human_joint_names,
                 dtype=str,
@@ -2507,11 +2818,22 @@ class InteractionMeshRetargeter:
         # Foot constraints (sticking + foot lock window Z pinning)
         apply_foot_sticking = (self.q_a_init_idx < 12) and self.activate_foot_sticking
         apply_foot_lock = (self.q_a_init_idx < 12) and self.foot_lock.enable
-        if apply_foot_sticking or apply_foot_lock:
+        use_contact_plan = apply_foot_sticking and self._active_planar_foot_targets is not None
+        apply_legacy_sticking = apply_foot_sticking and self._active_planar_foot_targets is None
+        has_contact_plan_targets = use_contact_plan and bool(self._active_planar_foot_targets)
+        if apply_legacy_sticking or has_contact_plan_targets or apply_foot_lock:
             J_WF_dict, p_WF_dict, _ = self._calc_manipulator_jacobians(q, links=self.foot_links, obj_frame=False)
 
-            # Foot sticking: constrain XY to stay near previous frame position
-            if apply_foot_sticking:
+            if has_contact_plan_targets:
+                self._append_contact_plan_constraints(
+                    constraints,
+                    dqa,
+                    J_WF_dict,
+                    p_WF_dict,
+                )
+
+            # Legacy foot sticking: constrain every sole point near its previous-frame position.
+            if apply_legacy_sticking:
                 _, p_WF_t_last_dict, _ = self._calc_manipulator_jacobians(
                     q_t_last, links=self.foot_links, obj_frame=False
                 )
@@ -2611,8 +2933,7 @@ class InteractionMeshRetargeter:
         # the preceding frame's null-space drift as a moving target.
         if self.natural_pose_tracking_enabled:
             natural_pose_candidate = (
-                dqa[self.natural_pose_reduced_indices]
-                + q_a_n_last[self.natural_pose_reduced_indices]
+                dqa[self.natural_pose_reduced_indices] + q_a_n_last[self.natural_pose_reduced_indices]
             )
             natural_pose_error = natural_pose_candidate - self.natural_pose_reference_values
             obj_terms.append(
@@ -2753,11 +3074,16 @@ class InteractionMeshRetargeter:
         n_iter: int = 10,
         frame_idx: int = 0,
         orientation_target_matrices: np.ndarray | None = None,
+        foot_contact_state: Mapping[str, FootContactState] | None = None,
     ):
         """Apply each successful linearized QP step directly, matching main."""
         max_iterations = int(n_iter)
         if max_iterations <= 0:
             raise ValueError("n_iter must be positive")
+        if foot_contact_state is None:
+            self._active_planar_foot_targets = None
+        else:
+            self._prepare_planar_foot_targets(q_t_last, foot_contact_state)
 
         last_cost = np.inf
         stop_reason = "max_iterations"
@@ -3114,9 +3440,7 @@ class InteractionMeshRetargeter:
             for g2 in range(g1 + 1, ngeom):
                 if contype[g2] == 0 and conaff[g2] == 0:
                     continue
-                masks_match = (int(contype[g1]) & int(conaff[g2])) or (
-                    int(contype[g2]) & int(conaff[g1])
-                )
+                masks_match = (int(contype[g1]) & int(conaff[g2])) or (int(contype[g2]) & int(conaff[g1]))
                 if not masks_match:
                     continue
                 if self._environment_collision_pair_is_active(

@@ -53,7 +53,7 @@ python examples/robot_retarget.py \
 # --save-dir PATH                覆盖默认输出目录 demo_results
 # --output-name NAME.npz         只修改最终 NPZ 文件名，不改变结果目录层级
 # --overwrite                    覆盖已有结果
-# --foot-sticking True|False     开启或完全关闭足底粘连 XY 硬约束，默认 True
+# --foot-sticking True|False     开启或关闭接触感知足底平面硬约束，默认 True
 # --retargeter.debug             显示诊断图层，并在完成后等待 Enter
 # --retargeter.no-visualize      关闭默认实时可视化，适用于 headless/CI
 # --orientation_weights WEIGHT     开启朝向损失，全部映射 link 使用同一非负权重
@@ -62,7 +62,9 @@ python examples/robot_retarget.py \
 # --nature_config FILE_OR_DIR      开启自然姿态项，从 JSON 读取参考角与逐关节权重
 ```
 
-足底粘连硬约束默认开启。只在本次重定向中完全关闭该 XY 硬约束：
+接触感知足底平面硬约束默认开启。它区分全脚掌、脚跟、脚尖、旋转支点、
+主动滑步和摆动相；增强任务中的滑步轨迹会逐帧映射到目标世界坐标，
+高台接触必须由攀爬场景的朝上支撑面确认。只在本次重定向中完全关闭该约束：
 
 ```bash
 python examples/robot_retarget.py \

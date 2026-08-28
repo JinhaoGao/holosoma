@@ -91,6 +91,7 @@ class RobotConfig:
 
     # Joint definitions (optional overrides)
     foot_sticking_links: list[str] | None = None
+    foot_contact_links: dict[str, dict[str, str]] | None = None
 
     # Manual joint limits
     manual_lb: dict[str, float] | None = None
@@ -207,6 +208,49 @@ class RobotConfig:
     FOOT_STICKING_LINKS = property(
         _foot_sticking_links,
         doc="Get foot sticking links - use override if provided, else use robot_type default.",
+    )
+
+    def _foot_contact_links(self) -> dict[str, dict[str, str]]:
+        """Return semantic heel, forefoot, and toe links for each sole."""
+        if self.foot_contact_links is not None:
+            return {
+                side: {region: str(link) for region, link in regions.items()}
+                for side, regions in self.foot_contact_links.items()
+            }
+
+        family = robot_family(self.robot_type)
+        if family == "g1":
+            prefixes = {
+                "left": "left_ankle_roll_sphere_",
+                "right": "right_ankle_roll_sphere_",
+            }
+        elif family == "t1":
+            prefixes = {
+                "left": "left_foot_sphere_",
+                "right": "right_foot_sphere_",
+            }
+        elif family in {"e1", "e2"}:
+            prefixes = {
+                "left": "l_foot_sphere_",
+                "right": "r_foot_sphere_",
+            }
+        else:
+            raise ValueError(f"Invalid robot type: {self.robot_type}")
+
+        return {
+            side: {
+                "heel_positive_lateral": f"{prefix}1_link",
+                "heel_negative_lateral": f"{prefix}2_link",
+                "forefoot_positive_lateral": f"{prefix}3_link",
+                "forefoot_negative_lateral": f"{prefix}4_link",
+                "toe": f"{prefix}5_link",
+            }
+            for side, prefix in prefixes.items()
+        }
+
+    FOOT_CONTACT_LINKS = property(
+        _foot_contact_links,
+        doc="Get semantic sole contact links for contact-aware planar constraints.",
     )
 
     def _manual_lb(self) -> dict[str, float]:

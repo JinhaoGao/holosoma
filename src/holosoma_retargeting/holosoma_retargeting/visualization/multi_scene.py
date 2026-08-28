@@ -1309,10 +1309,13 @@ def make_multi_result_player(
             ("terrain", result.terrain_points_world),
         ):
             if points is not None:
-                point_cloud_trajectories[layer_name] = np.asarray(
-                    points,
-                    dtype=np.float32,
-                ) + offset
+                point_cloud_trajectories[layer_name] = (
+                    np.asarray(
+                        points,
+                        dtype=np.float32,
+                    )
+                    + offset
+                )
         if result.object_keypoints is not None:
             for layer_name, field_name in (
                 ("object_demo", "demo_world"),
@@ -1320,10 +1323,13 @@ def make_multi_result_player(
             ):
                 points = result.object_keypoints.get(field_name)
                 if points is not None:
-                    point_cloud_trajectories[layer_name] = np.asarray(
-                        points,
-                        dtype=np.float32,
-                    ) + offset
+                    point_cloud_trajectories[layer_name] = (
+                        np.asarray(
+                            points,
+                            dtype=np.float32,
+                        )
+                        + offset
+                    )
         point_cloud_overlay = (
             RetargetingPointCloudOverlay(
                 server=server,
@@ -1444,6 +1450,9 @@ def make_multi_result_player(
                     constraint_status=_saved_foot_sticking_constraint_status(
                         foot_sticking,
                         frame_idx,
+                    ),
+                    modes=(
+                        np.asarray(foot_sticking["modes"], dtype=str)[frame_idx] if "modes" in foot_sticking else None
                     ),
                 )
             )

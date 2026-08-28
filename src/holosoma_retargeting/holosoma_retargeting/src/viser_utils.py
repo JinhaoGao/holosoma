@@ -91,18 +91,27 @@ def format_foot_sticking_status(
     states: Sequence[bool] | np.ndarray,
     *,
     constraint_status: str,
+    modes: Sequence[str] | np.ndarray | None = None,
 ) -> str:
-    """Format a compact red/green Viser status panel for left/right sticking."""
+    """Format a compact Viser status panel for left/right planar contact."""
     state_array = np.asarray(states, dtype=bool).reshape(-1)
     if state_array.shape != (2,):
         raise ValueError(f"Foot sticking states must have shape (2,), got {state_array.shape}")
 
+    mode_array = None if modes is None else np.asarray(modes, dtype=str).reshape(-1)
+    if mode_array is not None and mode_array.shape != (2,):
+        raise ValueError(f"Foot contact modes must have shape (2,), got {mode_array.shape}")
     left_light = "🟢" if bool(state_array[0]) else "🔴"
     right_light = "🟢" if bool(state_array[1]) else "🔴"
+    left_status = f"sticking={bool(state_array[0])}"
+    right_status = f"sticking={bool(state_array[1])}"
+    if mode_array is not None:
+        left_status = f"mode={mode_array[0]}, {left_status}"
+        right_status = f"mode={mode_array[1]}, {right_status}"
     return (
         f"**Frame:** `{int(frame_idx)}`  \n"
-        f"{left_light} **Left:** `sticking={bool(state_array[0])}`  \n"
-        f"{right_light} **Right:** `sticking={bool(state_array[1])}`  \n"
+        f"{left_light} **Left:** `{left_status}`  \n"
+        f"{right_light} **Right:** `{right_status}`  \n"
         f"**Hard constraint:** `{constraint_status}`"
     )
 

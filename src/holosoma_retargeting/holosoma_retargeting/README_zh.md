@@ -63,9 +63,12 @@ python examples/parallel_robot_retarget.py \
 `--overwrite`。已有结果被直接续用时不会重新进入实时求解，可增加
 `--overwrite` 重跑，或使用结果可视化脚本。全数据遍历仍不属于公开参数。
 
-足底粘连 XY 硬约束默认开启。`--foot-sticking True` 显式保持开启，
-`--foot-sticking False` 会在本次单任务或增强任务重定向中完全关闭该
-硬约束，但不会关闭地面非穿透或关节限位。例如：
+接触感知的足底平面硬约束默认开启。它会区分全脚掌、脚跟、脚尖、旋转
+支点、主动滑步和摆动相；旋转相只锁定实际支点，主动滑步会跟随逐帧映射
+到目标世界坐标的人体足底轨迹。高台接触还必须匹配攀爬场景中明确的朝上
+支撑面，单纯静止的悬空脚不会被锁定。`--foot-sticking True` 显式保持开启，
+`--foot-sticking False` 会在本次单任务或增强任务重定向中完全关闭所有
+足底平面约束，但不会关闭地面非穿透或关节限位。例如：
 
 ```bash
 python examples/robot_retarget.py \

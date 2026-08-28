@@ -20,6 +20,7 @@ from typing import Literal
 from urllib.parse import quote
 
 import numpy as np
+import trimesh
 
 from holosoma_retargeting.config_types.data_type import MotionDataConfig, normalize_data_format
 from holosoma_retargeting.config_types.retargeter import RetargeterConfig
@@ -42,6 +43,7 @@ from holosoma_retargeting.data_utils.object_assets import (
     get_omomo_object_asset,
 )
 from holosoma_retargeting.data_utils.omomo import parse_omomo_sequence_name
+from holosoma_retargeting.foot_contact import build_planar_foot_contact_plan
 from holosoma_retargeting.src.interaction_mesh_retargeter import (
     InteractionMeshRetargeter,  # type: ignore[import-not-found]
 )
@@ -53,7 +55,6 @@ from holosoma_retargeting.src.utils import (
     estimate_human_orientation,
     estimate_mocap_foot_orientation,
     estimate_smpl_orientation,
-    extract_foot_sticking_sequence_velocity,
     extract_object_first_moving_frame,
     load_object_data,
     preprocess_motion_data,
@@ -1010,6 +1011,65 @@ def _object_pose_rotation_deltas_wxyz(
     )
 
 
+def _object_pose_reference_transforms(
+    demo_object_poses_xyz_wxyz: np.ndarray,
+    target_object_poses_xyz_wxyz: np.ndarray,
+    rotation_deltas_wxyz: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map scaled source points through each demo-to-target object transform."""
+    demo = np.asarray(demo_object_poses_xyz_wxyz, dtype=np.float64)
+    target = np.asarray(target_object_poses_xyz_wxyz, dtype=np.float64)
+    deltas = _normalize_quaternions_wxyz(
+        rotation_deltas_wxyz,
+        label="reference transform rotation deltas",
+    )
+    if demo.shape != target.shape or demo.ndim != 2 or demo.shape[1] != 7:
+        raise ValueError(
+            f"Demo and target object poses must share shape (T, 7), got {demo.shape} and {target.shape}",
+        )
+    if len(demo) != len(deltas):
+        raise ValueError(
+            "Object poses and reference transform rotations must have the same frame count, "
+            f"got {len(demo)} and {len(deltas)}",
+        )
+    if not np.isfinite(demo[:, :3]).all() or not np.isfinite(target[:, :3]).all():
+        raise ValueError("Object positions used by reference transforms must be finite")
+
+    rotated_basis = [
+        _rotate_vectors_by_quaternions_wxyz(
+            np.tile(axis, (len(deltas), 1)),
+            deltas,
+        )
+        for axis in np.eye(3, dtype=np.float64)
+    ]
+    rotation_matrices = np.stack(rotated_basis, axis=2)
+    translations = target[:, :3] - np.einsum(
+        "tij,tj->ti",
+        rotation_matrices,
+        demo[:, :3],
+    )
+    return rotation_matrices, translations
+
+
+def _climbing_elevated_support_triangles(
+    task_type: TaskType,
+    constants: SimpleNamespace,
+) -> np.ndarray | None:
+    """Load explicit source-scene triangles used to confirm elevated support."""
+    if task_type != "climbing":
+        return None
+    mesh_path = Path(constants.OBJECT_MESH_FILE).expanduser().resolve()
+    if not mesh_path.is_file():
+        raise FileNotFoundError(f"Climbing support mesh not found: {mesh_path}")
+    mesh = trimesh.load(mesh_path, force="mesh", process=False)
+    triangles = np.asarray(mesh.triangles, dtype=np.float64)
+    if triangles.ndim != 3 or triangles.shape[1:] != (3, 3) or len(triangles) == 0:
+        raise ValueError(f"Climbing support mesh contains no triangles: {mesh_path}")
+    if not np.isfinite(triangles).all():
+        raise ValueError(f"Climbing support mesh contains non-finite vertices: {mesh_path}")
+    return triangles
+
+
 def _transform_nominal_robot_root_with_object_delta(
     q_nominal: np.ndarray,
     demo_object_poses: np.ndarray,
@@ -1091,6 +1151,7 @@ def build_retargeter_kwargs_from_config(
         "activate_joint_limits": retargeter_config.activate_joint_limits,
         "activate_obj_non_penetration": retargeter_config.activate_obj_non_penetration,
         "activate_foot_sticking": retargeter_config.activate_foot_sticking,
+        "planar_foot_contact": retargeter_config.planar_foot_contact,
         "foot_lock": retargeter_config.foot_lock,
         "penetration_tolerance": retargeter_config.penetration_tolerance,
         "foot_sticking_tolerance": retargeter_config.foot_sticking_tolerance,
@@ -1336,13 +1397,8 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
     )
     constants.SOURCE_FPS = motion.fps
     constants.SOURCE_ROOT_QUATERNIONS = motion.root_quaternions_wxyz
-    constants.SOURCE_ROOT_FRAME_TO_ROBOT_BASE_QUATERNION_WXYZ = (
-        motion.root_frame_to_robot_base_quaternion_wxyz
-    )
-    if (
-        motion.t_pose_orientation_joint_names is not None
-        and motion.t_pose_orientation_quaternions_wxyz is not None
-    ):
+    constants.SOURCE_ROOT_FRAME_TO_ROBOT_BASE_QUATERNION_WXYZ = motion.root_frame_to_robot_base_quaternion_wxyz
+    if motion.t_pose_orientation_joint_names is not None and motion.t_pose_orientation_quaternions_wxyz is not None:
         constants.ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ = dict(
             zip(
                 motion.t_pose_orientation_joint_names,
@@ -1355,13 +1411,12 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         )
     human_joints = motion.joints.copy()
     visualization_human_joints = (
-        motion.source_skeleton_positions.copy()
-        if motion.source_skeleton_positions is not None
-        else None
+        motion.source_skeleton_positions.copy() if motion.source_skeleton_positions is not None else None
     )
     if data_format in {"lafan", "noetix_mocap"}:
         spine_joint_idx = constants.DEMO_JOINTS.index("Spine1")
         human_joints[:, spine_joint_idx, 2] -= 0.06
+    foot_contact_source_joints = human_joints.copy()
 
     (
         human_joint_quaternions,
@@ -1470,14 +1525,30 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         object_poses,
         object_poses_augmented,
     )
-    foot_sticking_sequences = extract_foot_sticking_sequence_velocity(
-        human_joints,
-        retargeter.demo_joints,
-        toe_names,
+    (
+        foot_reference_rotation_matrices,
+        foot_reference_translations,
+    ) = _object_pose_reference_transforms(
+        object_poses,
+        object_poses_augmented,
+        orientation_target_world_rotation_deltas_wxyz,
     )
-    if task_type == "object_interaction":
-        foot_sticking_sequences[0][toe_names[0]] = False
-        foot_sticking_sequences[0][toe_names[1]] = False
+    foot_contact_plan = build_planar_foot_contact_plan(
+        foot_contact_source_joints,
+        retargeter.demo_joints,
+        constants.DEMO_JOINT_PARENT_INDICES,
+        toe_names,
+        fps=constants.SOURCE_FPS,
+        config=cfg.retargeter.planar_foot_contact,
+        reference_position_scale=smpl_scale,
+        reference_rotation_matrices=foot_reference_rotation_matrices,
+        reference_translations=foot_reference_translations,
+        elevated_support_triangles=_climbing_elevated_support_triangles(
+            task_type,
+            constants,
+        ),
+    )
+    foot_sticking_sequences = foot_contact_plan.legacy_sequences(toe_names)
 
     result_metadata = {
         "run_kind": job.run_kind,
@@ -1510,9 +1581,7 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
                     "FBX motion is missing source-scene metadata required for paired refinement: "
                     f"{missing_source_scene_fields}"
                 )
-            result_metadata.update(
-                {name: np.asarray(source_data[name]).copy() for name in source_scene_fields}
-            )
+            result_metadata.update({name: np.asarray(source_data[name]).copy() for name in source_scene_fields})
     logger.info(
         "Retargeting %s/%s for %s -> %s",
         job.run_kind,
@@ -1534,6 +1603,7 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         object_points_local_demo=object_local_pts_demo,
         object_points_local=object_local_pts,
         foot_sticking_sequences=foot_sticking_sequences,
+        foot_contact_plan=foot_contact_plan,
         q_a_init=q_init,
         q_nominal_list=q_nominal,
         original=not is_augmented,
