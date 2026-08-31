@@ -2,6 +2,25 @@
   "schema_version": 1,
   "robot": "e1",
   "datasets": {
+    "amass": {
+      "weights": {
+        "Pelvis": 1.0,
+        "L_Hip": 1.0,
+        "R_Hip": 1.0,
+        "L_Knee": 1.0,
+        "R_Knee": 1.0,
+        "L_Ankle": 1.0,
+        "R_Ankle": 1.0,
+        "L_Foot": 1.0,
+        "R_Foot": 1.0,
+        "L_Shoulder": 1.0,
+        "R_Shoulder": 1.0,
+        "L_Elbow": 1.0,
+        "R_Elbow": 1.0,
+        "L_Wrist": 1.0,
+        "R_Wrist": 1.0
+      }
+    },
     "fbx_mocap": {
       "weights": {
         "Hips": 20.0,

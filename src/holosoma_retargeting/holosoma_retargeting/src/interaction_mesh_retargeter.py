@@ -426,26 +426,52 @@ class InteractionMeshRetargeter:
         self.shoulder_wrist_orientation_indices = np.empty((0,), dtype=np.int32)
         self.shoulder_wrist_weights = np.empty((0,), dtype=np.float64)
         self.shoulder_reserved_orientation_indices = np.empty((0,), dtype=np.int32)
+        self.shoulder_human_torso_origin_name = ""
+        self.shoulder_human_torso_side_names: tuple[str, str] = ()
         self.shoulder_torso_link_name = ""
         self.shoulder_plan: dict[str, np.ndarray] = {}
         if not self.shoulder_direction_enabled:
             return
 
-        required_human_names = {
-            "Hips",
-            "LeftArm",
-            "LeftForeArm",
-            "LeftHand",
-            "RightArm",
-            "RightForeArm",
-            "RightHand",
-        }
-        missing_human_names = sorted(required_human_names.difference(self.demo_joints))
-        if missing_human_names:
+        human_schemas = (
+            (
+                "Hips",
+                (
+                    ("LeftArm", "LeftForeArm", "LeftHand"),
+                    ("RightArm", "RightForeArm", "RightHand"),
+                ),
+            ),
+            (
+                "Pelvis",
+                (
+                    ("L_Shoulder", "L_Elbow", "L_Wrist"),
+                    ("R_Shoulder", "R_Elbow", "R_Wrist"),
+                ),
+            ),
+        )
+        human_schema = next(
+            (
+                (torso_origin, side_names)
+                for torso_origin, side_names in human_schemas
+                if {
+                    torso_origin,
+                    *(name for names in side_names for name in names),
+                }.issubset(self.demo_joints)
+            ),
+            None,
+        )
+        if human_schema is None:
             raise ValueError(
-                "Shoulder direction tracking currently requires the Noetix/FBX "
-                f"upper-body names; missing={missing_human_names}",
+                "Shoulder direction tracking requires either the BVH/FBX "
+                "Hips/Arm/ForeArm/Hand schema or the SMPL-X "
+                "Pelvis/Shoulder/Elbow/Wrist schema",
             )
+        human_torso_origin, human_side_names = human_schema
+        self.shoulder_human_torso_origin_name = human_torso_origin
+        self.shoulder_human_torso_side_names = (
+            human_side_names[0][0],
+            human_side_names[1][0],
+        )
 
         def _body_exists(name: str) -> bool:
             return (
@@ -477,8 +503,12 @@ class InteractionMeshRetargeter:
                 "Shoulder direction tracking supports the G1, E1, and E2 arm chains only",
             )
         specs: list[ShoulderSideSpec] = []
-        sides = (("l", "left", "Left"), ("r", "right", "Right"))
-        for short_prefix, long_prefix, human_prefix in sides:
+        robot_sides = (("l", "left"), ("r", "right"))
+        for (short_prefix, long_prefix), human_names in zip(
+            robot_sides,
+            human_side_names,
+            strict=True,
+        ):
             if is_g1:
                 shoulder_joint_names = (
                     f"{long_prefix}_shoulder_pitch_joint",
@@ -520,9 +550,9 @@ class InteractionMeshRetargeter:
                     else ()
                 )
             spec = ShoulderSideSpec(
-                human_arm_name=f"{human_prefix}Arm",
-                human_forearm_name=f"{human_prefix}ForeArm",
-                human_hand_name=f"{human_prefix}Hand",
+                human_arm_name=human_names[0],
+                human_forearm_name=human_names[1],
+                human_hand_name=human_names[2],
                 shoulder_joint_names=shoulder_joint_names,
                 torso_basis_link_name=torso_basis_link,
                 shoulder_anchor_link_name=shoulder_anchor_link,
@@ -1017,9 +1047,15 @@ class InteractionMeshRetargeter:
         if not self.shoulder_direction_enabled:
             empty = np.empty((frame_count, 0, 3), dtype=np.float64)
             return empty, empty.copy()
-        hips_index = self.demo_joints.index("Hips")
-        left_arm_index = self.demo_joints.index("LeftArm")
-        right_arm_index = self.demo_joints.index("RightArm")
+        torso_origin_index = self.demo_joints.index(
+            self.shoulder_human_torso_origin_name,
+        )
+        left_arm_index = self.demo_joints.index(
+            self.shoulder_human_torso_side_names[0],
+        )
+        right_arm_index = self.demo_joints.index(
+            self.shoulder_human_torso_side_names[1],
+        )
         upper_targets = np.empty((frame_count, 2, 3), dtype=np.float64)
         forearm_targets = np.empty_like(upper_targets)
         for frame in range(frame_count):
@@ -1027,7 +1063,7 @@ class InteractionMeshRetargeter:
             basis = self._anatomical_basis(
                 positions[left_arm_index],
                 positions[right_arm_index],
-                positions[hips_index],
+                positions[torso_origin_index],
             )
             for side_index, spec in enumerate(self.shoulder_side_specs):
                 arm = positions[self.demo_joints.index(spec.human_arm_name)]
@@ -5222,12 +5258,15 @@ class InteractionMeshRetargeter:
 
         # ---- remaining hinge/slide joints: v = qdot ----
         for j in range(1, self.robot_model.njnt):
-            jt = self.robot_model.jnt_type[j]
-            if jt in (mujoco.mjtJoint.mjJNT_HINGE, mujoco.mjtJoint.mjJNT_SLIDE):
+            jt = int(self.robot_model.jnt_type[j])
+            if jt in (
+                int(mujoco.mjtJoint.mjJNT_HINGE),
+                int(mujoco.mjtJoint.mjJNT_SLIDE),
+            ):
                 qa = self.robot_model.jnt_qposadr[j]
                 da = self.robot_model.jnt_dofadr[j]
                 T[da, qa] = 1.0
-            elif jt == mujoco.mjtJoint.mjJNT_BALL:
+            elif jt == int(mujoco.mjtJoint.mjJNT_BALL):
                 raise NotImplementedError("BALL joint block not implemented.")
 
         return T

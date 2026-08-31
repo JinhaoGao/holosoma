@@ -34,7 +34,12 @@ from holosoma_retargeting.src.interaction_mesh_retargeter import (  # noqa: E402
 )
 
 
-def _build_retargeter(robot: str, *, candidate_count: int = 4) -> InteractionMeshRetargeter:
+def _build_retargeter(
+    robot: str,
+    *,
+    candidate_count: int = 4,
+    data_format: str = "noetix_mocap",
+) -> InteractionMeshRetargeter:
     robot_file = {
         "g1": "models/g1/g1_29dof.urdf",
         "e1_23dof": "models/e1/e1_23dof.urdf",
@@ -48,7 +53,7 @@ def _build_retargeter(robot: str, *, candidate_count: int = 4) -> InteractionMes
                 PACKAGE_ROOT / "holosoma_retargeting" / robot_file,
             ),
         ),
-        MotionDataConfig(data_format="noetix_mocap", robot_type=robot),
+        MotionDataConfig(data_format=data_format, robot_type=robot),
         TaskConfig(object_name="ground"),
         "robot_only",
     )
@@ -78,15 +83,22 @@ def _synthetic_upper_body(retargeter: InteractionMeshRetargeter, frames: int) ->
     indices = {name: retargeter.demo_joints.index(name) for name in retargeter.demo_joints}
     for frame in range(frames):
         phase = 0.15 * frame
-        positions[frame, indices["Hips"]] = [0.0, 0.0, 0.0]
-        positions[frame, indices["LeftArm"]] = [0.0, 0.2, 0.5]
-        positions[frame, indices["RightArm"]] = [0.0, -0.2, 0.5]
-        upper = np.asarray([0.1 * np.sin(phase), 0.0, -0.25])
-        positions[frame, indices["LeftForeArm"]] = positions[frame, indices["LeftArm"]] + upper
-        positions[frame, indices["RightForeArm"]] = positions[frame, indices["RightArm"]] + upper
-        forearm = np.asarray([0.08 * np.sin(phase), 0.0, -0.22])
-        positions[frame, indices["LeftHand"]] = positions[frame, indices["LeftForeArm"]] + forearm
-        positions[frame, indices["RightHand"]] = positions[frame, indices["RightForeArm"]] + forearm
+        positions[frame, indices[retargeter.shoulder_human_torso_origin_name]] = [
+            0.0,
+            0.0,
+            0.0,
+        ]
+        for side_index, spec in enumerate(retargeter.shoulder_side_specs):
+            lateral = 0.2 if side_index == 0 else -0.2
+            positions[frame, indices[spec.human_arm_name]] = [0.0, lateral, 0.5]
+            upper = np.asarray([0.1 * np.sin(phase), 0.0, -0.25])
+            positions[frame, indices[spec.human_forearm_name]] = (
+                positions[frame, indices[spec.human_arm_name]] + upper
+            )
+            forearm = np.asarray([0.08 * np.sin(phase), 0.0, -0.22])
+            positions[frame, indices[spec.human_hand_name]] = (
+                positions[frame, indices[spec.human_forearm_name]] + forearm
+            )
     return positions
 
 
@@ -197,6 +209,33 @@ class ShoulderDirectionRetargeterTests(unittest.TestCase):
         np.testing.assert_array_equal(self.g1.shoulder_wrist_dof_counts, [3, 3])
         np.testing.assert_array_equal(self.e1.shoulder_wrist_dof_counts, [1, 1])
         np.testing.assert_array_equal(self.e2.shoulder_wrist_dof_counts, [0, 0])
+
+    def test_smplx_human_schema_is_supported_for_e1_23dof_and_e2(self):
+        for data_format in ("amass", "gvhmr"):
+            for robot in ("e1_23dof", "e2"):
+                with self.subTest(data_format=data_format, robot=robot):
+                    retargeter = _build_retargeter(
+                        robot,
+                        data_format=data_format,
+                    )
+                    self.assertEqual(
+                        retargeter.shoulder_human_torso_origin_name,
+                        "Pelvis",
+                    )
+                    self.assertEqual(
+                        retargeter.shoulder_human_torso_side_names,
+                        ("L_Shoulder", "R_Shoulder"),
+                    )
+                    motion = _synthetic_upper_body(retargeter, 3)
+                    upper, forearm = retargeter._prepare_shoulder_direction_targets(
+                        motion,
+                    )
+                    self.assertEqual(upper.shape, (3, 2, 3))
+                    self.assertEqual(forearm.shape, (3, 2, 3))
+                    np.testing.assert_allclose(
+                        np.linalg.norm(upper, axis=-1),
+                        1.0,
+                    )
 
     def test_robot_direction_jacobian_matches_shoulder_finite_difference(self):
         for retargeter in (self.g1, self.e2):

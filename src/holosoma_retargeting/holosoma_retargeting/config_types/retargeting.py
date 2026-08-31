@@ -25,6 +25,7 @@ from holosoma_retargeting.config_types.weight_profiles import (
 
 TaskType = Literal["robot_only", "object_interaction", "climbing"]
 DatasetName = Literal[
+    "amass",
     "climbing",
     "fbx_mocap",
     "gvhmr",
@@ -35,6 +36,7 @@ DatasetName = Literal[
 ]
 
 DATASET_DATA_FORMATS: dict[str, str] = {
+    "amass": "amass",
     "climbing": "mocap",
     "fbx_mocap": "fbx_mocap",
     "gvhmr": "gvhmr",
@@ -45,6 +47,7 @@ DATASET_DATA_FORMATS: dict[str, str] = {
 }
 _DEMO_DATA_ROOT = Path(__file__).resolve().parents[1] / "demo_data"
 DATASET_DEFAULT_PATHS: dict[str, Path] = {
+    "amass": _DEMO_DATA_ROOT / "amass_smplx_processed",
     "climbing": _DEMO_DATA_ROOT / "climb",
     "fbx_mocap": _DEMO_DATA_ROOT / "fbx_mocap",
     "gvhmr": _DEMO_DATA_ROOT / "gvhmr",

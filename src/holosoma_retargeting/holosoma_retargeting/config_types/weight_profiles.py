@@ -13,6 +13,7 @@ from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.config_types.robot import RobotConfig, robot_family
 
 ORIENTATION_PROFILE_DATASETS = (
+    "amass",
     "fbx_mocap",
     "gvhmr",
     "lafan",
@@ -24,6 +25,7 @@ ORIENTATION_PROFILE_SCHEMA_VERSION = 1
 NATURE_PROFILE_SCHEMA_VERSION = 1
 
 _ORIENTATION_DATA_FORMATS = {
+    "amass": "amass",
     "fbx_mocap": "fbx_mocap",
     "gvhmr": "gvhmr",
     "lafan": "lafan",

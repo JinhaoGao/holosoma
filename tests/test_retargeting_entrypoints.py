@@ -641,6 +641,7 @@ class RetargetingEntrypointTests(unittest.TestCase):
 
     def test_production_task_matrix_accepts_required_combinations(self):
         datasets = (
+            "amass",
             "climbing",
             "fbx_mocap",
             "gvhmr",
