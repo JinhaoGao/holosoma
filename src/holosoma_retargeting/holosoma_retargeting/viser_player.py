@@ -92,6 +92,11 @@ def _saved_foot_sticking_constraint_status(
     """Describe whether detected sticking was actually constrained in a saved frame."""
     if not bool(foot_sticking["enabled"]):
         return "disabled for saved trajectory"
+    if "modes" in foot_sticking:
+        modes = np.asarray(foot_sticking["modes"], dtype=str)
+        if bool(np.any(modes[frame_idx] != "swing")):
+            return "active"
+        return "inactive (both feet in swing)"
     states = np.asarray(foot_sticking["states"], dtype=bool)
     if bool(np.any(states[frame_idx])):
         return "active"
@@ -365,11 +370,7 @@ class MappedSkeletonOverlay:
             human_parents = np.asarray(human_joint_parent_indices, dtype=np.int32)
             if human_parents.shape != (len(demo_joints),):
                 raise ValueError("Full human skeleton parent indices have an incompatible shape")
-            self.human_edges = [
-                (int(parent), index)
-                for index, parent in enumerate(human_parents)
-                if parent >= 0
-            ]
+            self.human_edges = [(int(parent), index) for index, parent in enumerate(human_parents) if parent >= 0]
         else:
             self.human_edges = _mapped_skeleton_edges(self.human_joint_names)
         self.robot_skeleton_joints = (
@@ -1286,8 +1287,7 @@ def _build_orientation_overlay(
         missing_preview_joints = [name for name in preview.human_joint_names if name not in human_index]
         if missing_preview_joints:
             raise ValueError(
-                "Orientation preview joints are absent from human_joint_names: "
-                f"{missing_preview_joints}",
+                f"Orientation preview joints are absent from human_joint_names: {missing_preview_joints}",
             )
         selected = _requested_saved_orientation_indices(
             preview.human_joint_names,
@@ -1356,8 +1356,7 @@ def _build_orientation_overlay(
             expected_shape = (num_frames, len(mapped_joint_names), 3)
             if robot_points.shape != expected_shape:
                 raise ValueError(
-                    "Mapped robot skeleton trajectory must have shape "
-                    f"{expected_shape}; got {robot_points.shape}",
+                    f"Mapped robot skeleton trajectory must have shape {expected_shape}; got {robot_points.shape}",
                 )
             point_indices = orientation_skeleton_point_indices(
                 diagnostics,
@@ -1470,14 +1469,10 @@ def _build_orientation_overlay(
     )
     available_names = {
         "source_all": source_all_overlay.names if source_all_overlay is not None else (),
-        "source_retargeting": (
-            source_retargeting_overlay.names if source_retargeting_overlay is not None else ()
-        ),
+        "source_retargeting": (source_retargeting_overlay.names if source_retargeting_overlay is not None else ()),
         "target": target_overlay.names if target_overlay is not None else (),
         "robot_all": robot_all_overlay.names if robot_all_overlay is not None else (),
-        "robot_retargeting": (
-            robot_retargeting_overlay.names if robot_retargeting_overlay is not None else ()
-        ),
+        "robot_retargeting": (robot_retargeting_overlay.names if robot_retargeting_overlay is not None else ()),
     }
     if any(available_names.values()):
         print(f"[viser_player] Saved orientation overlays enabled | {available_names}")
@@ -1552,9 +1547,7 @@ def _build_mapped_skeleton_overlay(
         human_joints=human_joints,
         demo_joints=demo_joints,
         human_joint_parent_indices=(
-            np.asarray(saved_human_parent_indices)
-            if saved_human_parent_indices is not None
-            else None
+            np.asarray(saved_human_parent_indices) if saved_human_parent_indices is not None else None
         ),
         joints_mapping=joints_mapping,
         robot_xml_path=robot_xml_path,
@@ -1993,6 +1986,7 @@ def make_player(
                             foot_sticking,
                             0,
                         ),
+                        modes=(np.asarray(foot_sticking["modes"], dtype=str)[0] if "modes" in foot_sticking else None),
                     ),
                     visible=config.show_foot_sticking,
                 )
@@ -2050,6 +2044,9 @@ def make_player(
                 constraint_status=_saved_foot_sticking_constraint_status(
                     foot_sticking,
                     foot_frame_idx,
+                ),
+                modes=(
+                    np.asarray(foot_sticking["modes"], dtype=str)[foot_frame_idx] if "modes" in foot_sticking else None
                 ),
             )
         if mapped_skeleton_overlay is not None:
@@ -2131,7 +2128,7 @@ def main(cfg: ViserConfig) -> None:
         )
     input_kind = resolve_input_kind(input_path, cfg.input_kind)
     if input_kind == "raw":
-        from holosoma_retargeting.visualization.raw_scene import (  # noqa: I001, PLC0415
+        from holosoma_retargeting.visualization.raw_scene import (  # noqa: I001
             Config as RawViewerConfig,
             main as raw_viewer_main,
         )
@@ -2160,7 +2157,7 @@ def main(cfg: ViserConfig) -> None:
         )
         return
     if input_kind == "converted":
-        from holosoma_retargeting.visualization.body_velocity_scene import (  # noqa: I001, PLC0415
+        from holosoma_retargeting.visualization.body_velocity_scene import (  # noqa: I001
             Config as BodyVelocityConfig,
             main as body_velocity_main,
         )

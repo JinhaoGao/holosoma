@@ -55,11 +55,15 @@ rerun the solver, so use `--overwrite` to watch the live solve again or inspect
 the saved result with the player. Dataset traversal, ablation, search, and
 result rebuilding are not public command options.
 
-Foot-sticking XY hard constraints are enabled by default. Pass
+Contact-aware planar foot constraints are enabled by default. They distinguish
+flat, heel, toe, pivot, slide, and swing phases; pivoting locks only its support
+point and an intentional slide follows the source path mapped through each
+frame's target transform. Elevated support requires a matching upward-facing
+surface from the climbing scene, so a stationary airborne foot is not locked. Pass
 `--foot-sticking True` to state that choice explicitly or
-`--foot-sticking False` to disable them completely for the selected single or
-augmented run. This switch does not disable ground non-penetration or joint
-limits:
+`--foot-sticking False` to disable all planar contact constraints for the
+selected single or augmented run. This switch does not disable ground
+non-penetration or joint limits:
 
 ```bash
 python examples/robot_retarget.py \

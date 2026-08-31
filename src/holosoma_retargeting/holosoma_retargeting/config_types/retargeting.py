@@ -123,7 +123,7 @@ class RetargetingCommand:
     """Replace an existing result for the exact same motion and configuration."""
 
     foot_sticking: Literal[True, False] = True
-    """Enable or completely disable the foot-sticking XY hard constraints."""
+    """Enable or completely disable contact-aware planar foot constraints."""
 
     dynamic_ground_window: bool = True
     """Move the robot-only ground sampling window with the robot root."""

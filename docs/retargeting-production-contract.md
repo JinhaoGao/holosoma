@@ -97,12 +97,26 @@ same arms-down pose; later frames continue from the previous solution.
 
 ## Foot-sticking contract
 
-Foot-sticking XY hard constraints are enabled by default. The public syntax is
-exactly `--foot-sticking True|False`; `False` prevents those constraints from
-being added for the selected single-motion or augmentation run. It does not
-disable ground non-penetration, joint limits, or the separately configured
-frame-window Z foot lock. Use `--overwrite` when changing this setting for an
-output path that already exists.
+Contact-aware planar foot constraints are enabled by default. The detector uses
+smoothed source-foot tangential and normal velocities, hysteresis, and minimum
+phase durations to distinguish swing, flat support, heel or toe support,
+pivoting, and intentional sliding. Elevated support additionally requires the
+source sole to lie on an explicit upward-facing surface from the climbing
+scene; a merely stationary airborne foot remains in swing. A flat phase holds
+sole-center XY and heading, while heel, toe, and pivot phases hold only the
+active support point. Each planted phase is anchored once instead of being
+re-anchored to every preceding output frame. Intentional slides follow the
+source sole path after the per-frame demo-to-target object transform, so
+translation and rotation augmentations remain in the target world frame.
+
+The public syntax remains exactly `--foot-sticking True|False`; `False`
+prevents all contact-aware planar constraints from being added for the selected
+single-motion or augmentation run. It does not disable ground
+non-penetration, joint limits, or the separately configured frame-window Z
+foot lock. Use `--overwrite` when changing this setting for an output path that
+already exists. Saved NPZ results contain the canonical left/right contact
+mode, phase ID, confidence, pivot location, and reference displacement for
+each frame in addition to the legacy Boolean sticking states.
 
 ## Output layout
 

@@ -9,6 +9,44 @@ from typing import Literal
 
 
 @dataclass(frozen=True)
+class PlanarFootContactConfig:
+    """Configuration for contact-aware planar foot constraints."""
+
+    smoothing_window_seconds: float = 0.1
+    """Centered smoothing window used before differentiating source feet."""
+
+    static_speed: float = 0.025
+    """Tangential speed in m/s below which a source contact point may plant."""
+
+    release_speed: float = 0.06
+    """Tangential speed in m/s above which a planted source point is released."""
+
+    normal_speed: float = 0.08
+    """Maximum absolute normal speed in m/s for a contact candidate."""
+
+    pivot_angular_speed: float = 0.12
+    """Minimum planar foot angular speed in rad/s for pivot classification."""
+
+    slide_speed: float = 0.08
+    """Minimum coherent planar speed in m/s for intentional sliding."""
+
+    ground_clearance: float = 0.04
+    """Distance in meters from the lowest support level treated as near-ground."""
+
+    minimum_phase_seconds: float = 0.1
+    """Minimum duration retained for a detected contact-point phase."""
+
+    elevated_support_seconds: float = 0.2
+    """Stable duration required after an elevated support surface is confirmed."""
+
+    heading_tolerance: float = 2e-3
+    """Linearized tangential tolerance used to hold flat-foot yaw."""
+
+    slide_tracking_tolerance: float = 5e-3
+    """XY tolerance for target-world intentional slide tracking."""
+
+
+@dataclass(frozen=True)
 class FootLockConfig:
     """Configuration for explicit frame-range based foot locking constraints."""
 
@@ -158,13 +196,18 @@ class RetargeterConfig:
     Ground non-penetration remains active when this is disabled."""
 
     activate_foot_sticking: bool = True
-    """Whether to enforce foot sticking constraints."""
+    """Whether to enforce contact-aware planar foot constraints."""
 
     penetration_tolerance: float = 0.001
     """Tolerance for penetration when enforcing non-penetration constraints."""
 
     foot_sticking_tolerance: float = 1e-3
-    """Tolerance for foot sticking constraints in x, y."""
+    """XY tolerance for planted sole-region constraints."""
+
+    planar_foot_contact: PlanarFootContactConfig = field(
+        default_factory=PlanarFootContactConfig,
+    )
+    """Detection and constraint parameters for contact-aware planar locking."""
 
     foot_lock: FootLockConfig = field(default_factory=FootLockConfig)
     """Configuration for explicit frame-range based foot locking."""

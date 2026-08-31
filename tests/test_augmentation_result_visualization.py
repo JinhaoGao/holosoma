@@ -28,6 +28,7 @@ from holosoma_retargeting.multi_viser_player import (
 )
 from holosoma_retargeting.retargeting_pipeline import (
     RetargetJobResult,
+    _object_pose_reference_transforms,
     _object_pose_rotation_deltas_wxyz,
     _transform_nominal_robot_root_with_object_delta,
     initialize_robot_pose,
@@ -355,6 +356,24 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
             ],
             atol=1e-12,
         )
+
+    def test_object_pose_reference_transform_matches_augmented_rigid_motion(self):
+        half_angle = np.pi / 4.0
+        demo = np.asarray([[1.0, 2.0, 0.0, 1.0, 0.0, 0.0, 0.0]])
+        target = np.asarray(
+            [[3.0, 5.0, 0.0, np.cos(half_angle), 0.0, 0.0, np.sin(half_angle)]],
+        )
+        deltas = _object_pose_rotation_deltas_wxyz(demo, target)
+
+        rotations, translations = _object_pose_reference_transforms(
+            demo,
+            target,
+            deltas,
+        )
+        source_point = np.asarray([[2.0, 2.0, 0.0]])
+        transformed_point = np.einsum("tij,tj->ti", rotations, source_point) + translations
+
+        np.testing.assert_allclose(transformed_point, [[3.0, 6.0, 0.0]], atol=1e-12)
 
     def test_object_pose_rotation_delta_rejects_invalid_input(self):
         poses = np.zeros((2, 7), dtype=np.float64)
@@ -1124,9 +1143,7 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
                 human_joint_names=np.asarray(joint_names),
                 mapped_human_joint_names=np.asarray(mapped_joint_names),
                 mapped_robot_joints=np.zeros((2, 3, 3), dtype=np.float32),
-                mapped_robot_link_names=np.asarray(
-                    ("torso_link", "left_shoulder_yaw_link", "right_shoulder_yaw_link")
-                ),
+                mapped_robot_link_names=np.asarray(("torso_link", "left_shoulder_yaw_link", "right_shoulder_yaw_link")),
             )
 
             skeleton = load_human_skeleton(path, expected_frames=2)

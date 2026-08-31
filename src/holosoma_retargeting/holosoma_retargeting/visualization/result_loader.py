@@ -204,9 +204,7 @@ def discover_variant_paths(
 
     if reference.is_dir():
         identities = [
-            path
-            for path in sorted(reference.glob("*.npz"))
-            if path.is_file() and split_result_family(path)[1] is None
+            path for path in sorted(reference.glob("*.npz")) if path.is_file() and split_result_family(path)[1] is None
         ]
         if len(identities) != 1:
             raise ValueError(
@@ -217,10 +215,7 @@ def discover_variant_paths(
     sequence, _ = split_result_family(reference)
     if variants is None:
         return _discover_variant_paths(reference)
-    paths = {
-        variant: _result_path_for_variant(reference.parent, sequence, variant)
-        for variant in variants
-    }
+    paths = {variant: _result_path_for_variant(reference.parent, sequence, variant) for variant in variants}
     missing = [path for path in paths.values() if not path.is_file()]
     if missing:
         formatted = "\n".join(f"  {path}" for path in missing)
@@ -286,11 +281,65 @@ def _load_foot_sticking_npz(
     )
     if side_names != ("left", "right"):
         raise ValueError(f"foot_sticking_side_names must use canonical order ('left', 'right'), got {side_names}")
-    return {
+    metadata = {
         "states": states,
         "enabled": bool(_npz_scalar(data, "foot_sticking_enabled_for_saved_trajectory", False)),
         "tolerance": _npz_scalar(data, "foot_sticking_tolerance"),
     }
+    if "foot_contact_modes" not in data:
+        return metadata
+
+    required_contact_fields = (
+        "foot_contact_phase_ids",
+        "foot_contact_confidences",
+        "foot_contact_pivot_regions",
+        "foot_contact_pivot_uv",
+        "foot_contact_reference_displacements_xy",
+    )
+    missing_contact_fields = [name for name in required_contact_fields if name not in data]
+    if missing_contact_fields:
+        raise ValueError(
+            "Saved foot-contact plan is incomplete; missing fields: " + ", ".join(missing_contact_fields),
+        )
+
+    modes = np.asarray(data["foot_contact_modes"], dtype=str)
+    phase_ids = np.asarray(data["foot_contact_phase_ids"], dtype=np.int32)
+    confidences = np.asarray(data["foot_contact_confidences"], dtype=np.float32)
+    pivot_regions = np.asarray(data["foot_contact_pivot_regions"], dtype=str)
+    pivot_uv = np.asarray(data["foot_contact_pivot_uv"], dtype=np.float32)
+    reference_displacements = np.asarray(
+        data["foot_contact_reference_displacements_xy"],
+        dtype=np.float32,
+    )
+    expected_pair_shape = (num_frames, 2)
+    for name, value in {
+        "foot_contact_modes": modes,
+        "foot_contact_phase_ids": phase_ids,
+        "foot_contact_confidences": confidences,
+        "foot_contact_pivot_regions": pivot_regions,
+    }.items():
+        if value.shape != expected_pair_shape:
+            raise ValueError(f"{name} must have shape {expected_pair_shape}, got {value.shape}")
+    expected_vector_shape = (num_frames, 2, 2)
+    if pivot_uv.shape != expected_vector_shape:
+        raise ValueError(f"foot_contact_pivot_uv must have shape {expected_vector_shape}, got {pivot_uv.shape}")
+    if reference_displacements.shape != expected_vector_shape:
+        raise ValueError(
+            "foot_contact_reference_displacements_xy must have shape "
+            f"{expected_vector_shape}, got {reference_displacements.shape}",
+        )
+    metadata.update(
+        {
+            "modes": modes,
+            "phase_ids": phase_ids,
+            "confidences": confidences,
+            "pivot_regions": pivot_regions,
+            "pivot_uv": pivot_uv,
+            "reference_displacements_xy": reference_displacements,
+            "plan_version": int(_npz_scalar(data, "foot_contact_plan_version", 1)),
+        },
+    )
+    return metadata
 
 
 def _load_interaction_mesh_npz(
