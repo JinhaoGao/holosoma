@@ -17,11 +17,12 @@ from holosoma_retargeting.config_types.retargeter import (
     ShoulderDirectionConfig,
 )
 from holosoma_retargeting.config_types.robot import RobotConfig
-from holosoma_retargeting.config_types.task import TaskConfig
-from holosoma_retargeting.config_types.weight_profiles import (
+from holosoma_retargeting.config_types.robot_profiles import (
+    load_robot_profile,
     resolve_natural_pose,
     resolve_orientation_weights,
 )
+from holosoma_retargeting.config_types.task import TaskConfig
 
 TaskType = Literal["robot_only", "object_interaction", "climbing"]
 DatasetName = Literal[
@@ -122,23 +123,62 @@ class RetargetingCommand:
     overwrite: bool = False
     """Replace an existing result for the exact same motion and configuration."""
 
-    foot_sticking: Literal[True, False] = True
-    """Enable or completely disable contact-aware planar foot constraints."""
+    robot_profile: Annotated[
+        Path | None,
+        tyro.conf.arg(aliases=("--robot_profile",)),
+    ] = None
+    """Optional robot-profile JSON file or directory override."""
 
-    dynamic_ground_window: bool = True
-    """Move the robot-only ground sampling window with the robot root."""
+    robot_dof: int | None = None
+    """Override the robot-profile actuated degree-of-freedom count."""
 
-    interaction_mesh_weight: float = 10.0
-    """Global Interaction Mesh deformation-energy weight."""
+    robot_height: float | None = None
+    """Override the robot-profile height in meters."""
 
-    arm_interaction_mesh_weight_scale: float = 1.0
-    """Upper-limb mesh-anchor multiplier relative to the global weight."""
+    robot_urdf_file: Path | None = None
+    """Override the robot-profile URDF path."""
 
-    root_position_weight: float = 0.0
+    foot_sticking: Literal[True, False] | None = None
+    """Override contact-aware planar foot constraints."""
+
+    dynamic_ground_window: bool | None = None
+    """Override whether the ground window follows the robot root."""
+
+    interaction_mesh_weight: float | None = None
+    """Override the global Interaction Mesh deformation-energy weight."""
+
+    arm_interaction_mesh_weight_scale: float | None = None
+    """Override the upper-limb Interaction Mesh row multiplier."""
+
+    root_position_weight: float | None = None
     """Track the source root's aligned world translation when positive."""
 
-    root_orientation_weight: float = 0.0
+    root_orientation_weight: float | None = None
     """Track the source root's aligned world orientation when positive."""
+
+    q_a_init_idx: int | None = None
+    """Override the first optimized qpos offset."""
+
+    activate_joint_limits: bool | None = None
+    """Override joint-limit enforcement."""
+
+    activate_obj_non_penetration: bool | None = None
+    """Override object non-penetration enforcement."""
+
+    penetration_tolerance: float | None = None
+    """Override non-penetration tolerance in meters."""
+
+    foot_sticking_tolerance: float | None = None
+    """Override planted-foot XY tolerance in meters."""
+
+    step_size: float | None = None
+    """Override the SQP trust-region radius."""
+
+    w_nominal_tracking_init: float | None = None
+    """Override the initial nominal-pose tracking weight."""
+
+    nominal_tracking_tau: float | None = None
+    """Override the nominal-pose tracking decay constant."""
 
     retargeter: RetargeterRuntimeOptions = field(
         default_factory=RetargeterRuntimeOptions,
@@ -149,34 +189,31 @@ class RetargetingCommand:
         float | None,
         tyro.conf.arg(aliases=("--orientation_weights",)),
     ] = None
-    """Uniform non-negative weight for every mapped link. None keeps the
-    orientation objective disabled."""
+    """Override all mapped orientation weights with one value."""
 
-    orientation_config: Annotated[
-        Path | None,
-        tyro.conf.arg(aliases=("--orientation_config",)),
-    ] = None
-    """Robot-specific JSON file or directory with per-link orientation weights."""
+    orientation_tracking: bool | None = None
+    """Override the robot-profile orientation objective switch."""
 
-    orientation_preview: bool = False
-    """Save per-link frame-alignment overlays without enabling orientation costs."""
+    orientation_preview: bool | None = None
+    """Override saving of orientation alignment diagnostics."""
 
-    shoulder_direction_tracking: bool = False
-    """Use sequence-aware upper-arm directions instead of upper-limb SO(3)."""
+    shoulder_direction_tracking: bool | None = None
+    """Override direct upper-arm direction tracking."""
+
+    shoulder_direction_weight: float | None = None
+    """Override the direct upper-arm direction residual weight."""
+
+    shoulder_wrist_axis_weight_scale: float | None = None
+    """Override the retained wrist-axis orientation weight scale."""
+
+    natural_pose_tracking: bool | None = None
+    """Override the robot-profile natural-pose objective switch."""
 
     nature_weights: Annotated[
         float | None,
         tyro.conf.arg(aliases=("--nature_weights",)),
     ] = None
-    """Uniform non-negative natural-pose weight for every actuated joint.
-    None keeps the natural-pose objective disabled."""
-
-    nature_config: Annotated[
-        Path | None,
-        tyro.conf.arg(aliases=("--nature_config",)),
-    ] = None
-    """Robot-specific JSON file or directory with natural references and
-    per-joint weights."""
+    """Override every natural-pose joint weight with one value."""
 
 
 def internal_config_from_command(command: RetargetingCommand) -> RetargetingConfig:
@@ -194,17 +231,43 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         robot=command.robot,
         dataset=dataset,
     )
-    orientation_weights = resolve_orientation_weights(
+    profile = load_robot_profile(
         robot=command.robot,
+        config_path=command.robot_profile,
+    )
+    defaults = profile.retargeting
+    orientation_enabled = (
+        profile.orientation_enabled if command.orientation_tracking is None else command.orientation_tracking
+    )
+    orientation_weights = resolve_orientation_weights(
+        profile=profile,
         dataset=dataset,
         data_format=data_format,
+        enabled=orientation_enabled,
         uniform_weight=command.orientation_weights,
-        config_path=command.orientation_config,
+        robot=command.robot,
+    )
+    natural_pose_enabled = (
+        profile.natural_pose_enabled if command.natural_pose_tracking is None else command.natural_pose_tracking
     )
     natural_pose = resolve_natural_pose(
-        robot=command.robot,
+        profile=profile,
+        enabled=natural_pose_enabled,
         uniform_weight=command.nature_weights,
-        config_path=command.nature_config,
+    )
+    robot_dof = profile.robot_dof if command.robot_dof is None else command.robot_dof
+    robot_height = profile.robot_height if command.robot_height is None else command.robot_height
+    if robot_dof <= 0:
+        raise ValueError("robot_dof must be positive")
+    if robot_height <= 0.0:
+        raise ValueError("robot_height must be positive")
+    robot_urdf_file = (
+        profile.robot_urdf_file if command.robot_urdf_file is None else str(command.robot_urdf_file.expanduser())
+    )
+    shoulder_enabled = (
+        profile.shoulder_direction.enable
+        if command.shoulder_direction_tracking is None
+        else command.shoulder_direction_tracking
     )
     return RetargetingConfig(
         task_type=command.task,
@@ -216,23 +279,90 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         save_dir=command.save_dir,
         output_name=command.output_name,
         overwrite_existing=command.overwrite,
+        robot_config=RobotConfig(
+            robot_type=command.robot,
+            robot_dof=robot_dof,
+            robot_height=robot_height,
+            robot_urdf_file=robot_urdf_file,
+        ),
         retargeter=RetargeterConfig(
             visualize=command.retargeter.visualize,
             debug=command.retargeter.debug,
-            dynamic_ground_window=command.dynamic_ground_window,
-            interaction_mesh_weight=command.interaction_mesh_weight,
+            dynamic_ground_window=(
+                defaults.dynamic_ground_window
+                if command.dynamic_ground_window is None
+                else command.dynamic_ground_window
+            ),
+            interaction_mesh_weight=(
+                defaults.interaction_mesh_weight
+                if command.interaction_mesh_weight is None
+                else command.interaction_mesh_weight
+            ),
             arm_interaction_mesh_weight_scale=(
-                command.arm_interaction_mesh_weight_scale
+                defaults.arm_interaction_mesh_weight_scale
+                if command.arm_interaction_mesh_weight_scale is None
+                else command.arm_interaction_mesh_weight_scale
             ),
             root_stability=RootStabilityConfig(
-                position_weight=command.root_position_weight,
-                orientation_weight=command.root_orientation_weight,
+                position_weight=(
+                    defaults.root_position_weight
+                    if command.root_position_weight is None
+                    else command.root_position_weight
+                ),
+                orientation_weight=(
+                    defaults.root_orientation_weight
+                    if command.root_orientation_weight is None
+                    else command.root_orientation_weight
+                ),
             ),
-            activate_foot_sticking=command.foot_sticking,
+            q_a_init_idx=(defaults.q_a_init_idx if command.q_a_init_idx is None else command.q_a_init_idx),
+            activate_joint_limits=(
+                defaults.activate_joint_limits
+                if command.activate_joint_limits is None
+                else command.activate_joint_limits
+            ),
+            activate_obj_non_penetration=(
+                defaults.activate_obj_non_penetration
+                if command.activate_obj_non_penetration is None
+                else command.activate_obj_non_penetration
+            ),
+            activate_foot_sticking=(defaults.foot_sticking if command.foot_sticking is None else command.foot_sticking),
+            penetration_tolerance=(
+                defaults.penetration_tolerance
+                if command.penetration_tolerance is None
+                else command.penetration_tolerance
+            ),
+            foot_sticking_tolerance=(
+                defaults.foot_sticking_tolerance
+                if command.foot_sticking_tolerance is None
+                else command.foot_sticking_tolerance
+            ),
+            planar_foot_contact=profile.planar_foot_contact,
+            step_size=(defaults.step_size if command.step_size is None else command.step_size),
+            w_nominal_tracking_init=(
+                defaults.w_nominal_tracking_init
+                if command.w_nominal_tracking_init is None
+                else command.w_nominal_tracking_init
+            ),
+            nominal_tracking_tau=(
+                defaults.nominal_tracking_tau if command.nominal_tracking_tau is None else command.nominal_tracking_tau
+            ),
             orientation_weights=orientation_weights,
-            orientation_preview=command.orientation_preview,
+            orientation_preview=(
+                profile.orientation_preview if command.orientation_preview is None else command.orientation_preview
+            ),
             shoulder_direction=ShoulderDirectionConfig(
-                enable=command.shoulder_direction_tracking,
+                enable=shoulder_enabled,
+                direction_weight=(
+                    profile.shoulder_direction.direction_weight
+                    if command.shoulder_direction_weight is None
+                    else command.shoulder_direction_weight
+                ),
+                wrist_axis_weight_scale=(
+                    profile.shoulder_direction.wrist_axis_weight_scale
+                    if command.shoulder_wrist_axis_weight_scale is None
+                    else command.shoulder_wrist_axis_weight_scale
+                ),
             ),
             natural_pose_joint_positions=natural_pose.references,
             natural_pose_weights=natural_pose.weights,

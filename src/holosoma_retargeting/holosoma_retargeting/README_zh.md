@@ -93,70 +93,18 @@ python examples/robot_retarget.py \
 
 `object_interaction` 只接受 `OMOMO_new`，并且只支持 G1。`climbing` 只接受 `climbing` 和 `noetix_csv_climb`，并且只支持 G1。增强入口只接受这两类任务，因此 E1/E2 以及 `robot_only` 必须使用普通单动作入口。
 
-## 可选的 link 朝向损失
+## 每个机器人一份统一配置
 
-朝向损失默认关闭。数据带有直接来源的朝向时，可以为 15 个已映射关键点设置统一的非负权重：
+每个具体机器人现在只维护 `examples/robot_profiles` 中的一份 JSON，即
+`g1.json`、`e1_23dof.json`、`e1_24dof.json` 或 `e2.json`；兼容名称
+`--robot e1` 会读取 E1 23DoF 的表。表内统一保存机器人身高、自由度、URDF、
+根节点与 Interaction Mesh 权重、求解器和足底接触默认值、肩部方向参数、
+各数据集的朝向权重，以及自然姿态参考角和权重。原先拆开的 `nature_weights`
+与 `orientation_weights` 目录不再使用。
 
-```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot e1 \
-  --dataset noetix_mocap \
-  --motion run_to_the_right \
-  --orientation_weights 1
-```
-
-`--orientation_weights 0.1` 会统一使用 `0.1`，`--orientation_weights 0` 等同于关闭。
-需要单独控制权重时，使用机器人对应的完整 JSON 配置：
-
-```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot e1 \
-  --dataset noetix_mocap \
-  --motion run_to_the_right \
-  --orientation_config examples/orientation_weights/e1.json
-```
-
-仓库提供 `g1.json`、`e1.json` 和 `e2.json`。每个文件都包含
-`gvhmr`、`lafan`、`noetix_csv_climb`、`noetix_mocap` 和 `OMOMO_new`
-五张完整权重表，程序根据当前 `--dataset` 自动选择。权重键可以是人体
-关键点名，也可以替换成对应机器人的 link 名；每个映射都必须出现，
-将数值写为 `0` 即可取消该关键点的朝向损失。配置中的 `robot` 必须与
-命令一致，`--orientation_weights` 与 `--orientation_config` 不能同时使用。
-
-配置使用人体 T-pose 与机器人 FK T-pose 计算固定 frame offset，再比较目标 frame 与实际机器人 link frame。G1、E1、E2 都有独立机器人 T-pose；GVHMR、LAFAN、mocap/Noetix CSV、Noetix mocap 和 OMOMO 均有数据格式对应的人体 frame 定义。实现不会从关键点位置或骨向量伪造朝向。若源动作没有直接朝向，例如旧 `climbing` NPY，显式开启朝向损失会清晰报错，位置重定向仍可正常使用。
-
-## 序列感知的肩部方向跟踪
-
-G1、E1 和 E2 的 robot-only Noetix/FBX 动作可以使用
-`--shoulder-direction-tracking`，将 Arm、ForeArm 和 Hand 的通用完整 SO(3)
-目标替换为躯干局部坐标系中的上臂单位方向目标。离线 reference 阶段会采样
-肩部的一维可行解流形，并以方向、肘平面兼容性、关节限位、速度和加速度
-代价选择整段连续支路；最终 SQP 仍直接跟踪上臂方向，reference 只用于消除
-方向雅可比的零空间歧义。
-
-```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot g1 \
-  --dataset noetix_mocap \
-  --motion sequence/name \
-  --orientation_config examples/orientation_weights \
-  --shoulder-direction-tracking
-```
-
-在该模式中，G1 的 Hand 朝向误差只能驱动三个腕关节，E1 的 Hand 朝向只投影
-到单个 elbow-yaw 轴，E2 不启用腕部朝向任务，因而手部朝向不会反向选择另一组
-肩肘解。上肢的通用完整 SO(3) 项被禁用，朝向权重表里的下肢和躯干项仍照常
-工作。
-
-## 根节点稳定与 Interaction Mesh 权重
-
-肩部接近串联关节限位或切换可行支路时，可以显式约束浮动根跟踪源人体的根部
-平移和躯干朝向，并降低上肢锚点对全局 Interaction Mesh 形变能的影响。两个根部
-权重默认均为 `0`，上肢缩放默认是 `1`，因此不传这些参数时与原求解行为一致。
-下面是一组适合先做可视化对比的保守起点：
+程序每次都会先读取机器人表。命令行显式给出的值优先于 JSON，未给出的值
+则继承 JSON。例如下面的命令只把根位置权重覆盖为 `1.0`，其余参数仍取
+E1 23DoF 表中的默认值：
 
 ```bash
 python examples/robot_retarget.py \
@@ -164,57 +112,62 @@ python examples/robot_retarget.py \
   --robot e1_23dof \
   --dataset noetix_mocap \
   --motion sequence/name \
-  --orientation_config examples/orientation_weights \
-  --shoulder-direction-tracking \
+  --root-position-weight 1.0
+```
+
+`--robot-profile FILE_OR_DIR` 可临时加载另一份完整表，而不必修改仓库内默认
+文件。`--robot-height`、`--robot-dof` 和 `--robot-urdf-file` 可以直接覆盖
+机器人参数；`--foot-sticking False` 这类显式布尔值同样会覆盖表内开关。
+
+## 直接跟踪上臂方向
+
+当机器人表中的 `shoulder_direction.enable` 为 `true`，或者命令行传入
+`--shoulder-direction-tracking True` 时，求解器会关闭 Arm、ForeArm、Hand
+的通用完整 SO(3) 目标，并直接在逐帧 SQP 中跟踪躯干局部坐标系下的上臂
+单位方向。当前实现不再构造候选、不再评分候选、不再选择 pitch/roll/yaw
+解分支，也不存在离线关节参考路径或分支参考项。上臂方向没有约束到的冗余
+自由度由原有 Interaction Mesh、关节限位、可选自然姿态项和逐帧平滑项共同
+决定。方向残差权重可用 `--shoulder-direction-weight` 临时覆盖。
+
+G1 的 Hand 朝向只作用于三个腕关节，E1 的 Hand 朝向只投影到单个
+elbow-yaw 轴，E2 不设置腕部朝向任务。开启朝向表时，下肢和躯干朝向仍正常
+生效。结果会保存目标/实际上臂方向、方向误差、实际肩部关节角和方向雅可比
+奇异值，可用下面的命令绘图：
+
+```bash
+python -m holosoma_retargeting.visualization.shoulder_direction result.npz
+```
+
+## 朝向、根稳定性与自然姿态
+
+仓库内四张表保持原来的默认行为：朝向跟踪、肩部方向跟踪、自然姿态正则和
+两个根稳定权重默认关闭，foot-sticking 默认开启。若希望长期改变某台机器人
+的行为，只需修改它的一张 JSON。单次运行中，`--orientation-tracking True`
+会启用当前数据集的逐关键点朝向表，`--orientation-weights WEIGHT` 会用一个
+非负数覆盖全部映射权重；`--natural-pose-tracking True` 会启用表内逐关节
+自然姿态权重，`--nature-weights WEIGHT` 则为全部 actuated joint 使用同一
+权重。
+
+根节点稳定仍是软目标。位置目标跟踪首帧对齐后的源人体 root 位移，朝向目标
+优先使用源数据的直接 root 朝向，否则使用人体躯干坐标系；首帧求解结果用于
+建立后续相对目标。根节点与网格权重可按下面方式联合调节：
+
+```bash
+python examples/robot_retarget.py \
+  --task robot_only \
+  --robot e1_23dof \
+  --dataset noetix_mocap \
+  --motion sequence/name \
+  --orientation-tracking True \
+  --shoulder-direction-tracking True \
   --root-position-weight 200 \
   --root-orientation-weight 50 \
   --interaction-mesh-weight 10 \
   --arm-interaction-mesh-weight-scale 0.5
 ```
 
-`--root-position-weight` 跟踪首帧对齐后的源人体 root 平移，
-`--root-orientation-weight` 优先跟踪数据中直接提供的 root 朝向；没有直接朝向时
-才使用左右肩和人体 root 构成的躯干坐标系。第 0 帧先在不施加根稳定目标的情况
-下完成正常重定向，再以这份已求解姿态建立相对运动基准，因此模型初始化坐标系
-不会被误当作目标姿态。两者都是软目标，不会直接锁死机器人根部。非零根部权重
-要求完整浮动根参与优化，也就是内部配置使用 `q_a_init_idx=-7`。
-`--interaction-mesh-weight` 是所有网格拉普拉斯
-残差的全局权重，`--arm-interaction-mesh-weight-scale` 只缩放 shoulder、arm、
-elbow、wrist 和 hand 对应的锚点行；例如 `0.5` 保留一半上肢网格耦合，`0` 则
-取消这些锚点自身的网格残差，但不会关闭肩部方向或其他显式任务。
-
-调参时可以先固定全局网格权重为历史默认值 `10`，只比较根部权重和上肢缩放。
-若根部仍被肩部瞬态牵动，逐步提高平移或朝向权重；若手臂轨迹被躯干稳定目标
-拉扯，先将上肢缩放从 `1` 降到 `0.5` 或 `0.25`。结果 NPZ 会保存所用四个权重、
-逐帧根部目标/实际位姿，以及米制平移误差和弧度制朝向误差，便于定量比较。
-
-## 自然姿态正则项
-
-自然姿态正则项同样默认关闭。使用 `--nature_weights WEIGHT` 时，全部 actuated joint 统一使用该非负权重；各关节的固定自然参考角按 `--robot` 从 `examples/nature_weights/g1.json`、`e1.json` 或 `e2.json` 读取。三张表与 `orientation_weights` 目录逐机器人对应，并以弧度保存自然参考角。
-
-```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot e1 \
-  --dataset noetix_mocap \
-  --motion run_to_the_right \
-  --nature_weights 0.1
-```
-
-需要逐关节设置不同权重时，使用 `--nature_config` 指定当前机器人的 JSON 文件，或指定包含三张机器人表的目录。配置表中的 `weights` 是直接参与目标函数的绝对权重，不再经过比例或全局缩放。
-
-```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot e1 \
-  --dataset noetix_mocap \
-  --motion run_to_the_right \
-  --nature_config examples/nature_weights/e1.json
-```
-
-求解器在每次 SQP 迭代中加入固定关节空间代价 `sum_i w_i (q_i - q_i_natural)^2`，因此时间平滑项不会把前一帧的歧义分支继续当作移动参考。带非零权重的关节还会在第一帧求解前初始化到自然参考角一次，后续帧仍从上一帧结果继续求解。
-
-`--nature_weights` 与 `--nature_config` 不能同时使用。两者都不传时不会读取或加入自然姿态目标；统一权重或表内权重为 `0` 时，对应关节不参与该项代价。
+自然姿态目标仍为 `sum_i w_i (q_i - q_i_natural)^2`。非零权重关节会在首帧
+前从固定参考角初始化，后续帧继续使用上一帧解。
 
 ## 增强变体
 

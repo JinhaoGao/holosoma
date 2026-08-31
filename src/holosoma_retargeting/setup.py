@@ -9,8 +9,7 @@ setup(
     packages=find_packages(),
     package_data={
         "holosoma_retargeting": [
-            "examples/orientation_weights/*.json",
-            "examples/nature_weights/*.json",
+            "examples/robot_profiles/*.json",
         ],
     },
     python_requires=">=3.11",

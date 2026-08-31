@@ -25,8 +25,9 @@ from holosoma_retargeting.config_types.retargeting import (  # noqa: E402
     RetargetingConfig,
     internal_config_from_command,
 )
-from holosoma_retargeting.config_types.weight_profiles import (  # noqa: E402
+from holosoma_retargeting.config_types.robot_profiles import (  # noqa: E402
     ORIENTATION_PROFILE_DATASETS,
+    load_robot_profile,
 )
 from holosoma_retargeting.examples import (  # noqa: E402
     PUBLIC_RETARGETING_COMMANDS,
@@ -39,7 +40,7 @@ from holosoma_retargeting.retargeting_pipeline import (  # noqa: E402
     build_retargeter_kwargs_from_config,
 )
 
-ORIENTATION_PROFILE_DIR = PACKAGE_ROOT / "holosoma_retargeting" / "examples" / "orientation_weights"
+ROBOT_PROFILE_DIR = PACKAGE_ROOT / "holosoma_retargeting" / "examples" / "robot_profiles"
 
 
 class RetargetingEntrypointTests(unittest.TestCase):
@@ -293,7 +294,7 @@ class RetargetingEntrypointTests(unittest.TestCase):
         command = tyro.cli(RetargetingCommand, args=[])
         config = internal_config_from_command(command)
 
-        self.assertTrue(command.foot_sticking)
+        self.assertIsNone(command.foot_sticking)
         self.assertTrue(config.retargeter.activate_foot_sticking)
 
     def test_foot_sticking_cli_accepts_explicit_true_and_false(self):
@@ -384,6 +385,32 @@ class RetargetingEntrypointTests(unittest.TestCase):
         self.assertEqual(kwargs["root_stability"].position_weight, 250.0)
         self.assertEqual(kwargs["root_stability"].orientation_weight, 80.0)
 
+    def test_cli_values_override_robot_profile_defaults(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            profile = json.loads(
+                (ROBOT_PROFILE_DIR / "g1.json").read_text(encoding="utf-8"),
+            )
+            profile["retargeting"]["root_position_weight"] = 12.0
+            profile["retargeting"]["foot_sticking"] = False
+            profile_path = Path(temporary_dir) / "g1.json"
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+
+            inherited = internal_config_from_command(
+                RetargetingCommand(robot_profile=profile_path),
+            )
+            overridden = internal_config_from_command(
+                RetargetingCommand(
+                    robot_profile=profile_path,
+                    root_position_weight=1.0,
+                    foot_sticking=True,
+                ),
+            )
+
+        self.assertEqual(inherited.retargeter.root_stability.position_weight, 12.0)
+        self.assertFalse(inherited.retargeter.activate_foot_sticking)
+        self.assertEqual(overridden.retargeter.root_stability.position_weight, 1.0)
+        self.assertTrue(overridden.retargeter.activate_foot_sticking)
+
     def test_orientation_uniform_weight_enables_all_mapped_links(self):
         config = internal_config_from_command(
             RetargetingCommand(
@@ -420,22 +447,6 @@ class RetargetingEntrypointTests(unittest.TestCase):
         self.assertEqual(len(config.retargeter.orientation_weights), 15)
         self.assertEqual(set(config.retargeter.orientation_weights.values()), {0.1})
 
-    def test_orientation_uniform_weight_and_profile_are_mutually_exclusive(self):
-        for uniform_weight in (0.0, 1.0):
-            with self.subTest(uniform_weight=uniform_weight), self.assertRaisesRegex(
-                ValueError,
-                "mutually exclusive",
-            ):
-                internal_config_from_command(
-                    RetargetingCommand(
-                        task="robot_only",
-                        robot="g1",
-                        dataset="gvhmr",
-                        orientation_weights=uniform_weight,
-                        orientation_config=ORIENTATION_PROFILE_DIR / "g1.json",
-                    ),
-                )
-
     def test_orientation_uniform_weight_rejects_invalid_values_and_bool(self):
         for value in (-0.1, float("inf"), float("nan"), True):
             with self.subTest(value=value), self.assertRaisesRegex(
@@ -451,14 +462,14 @@ class RetargetingEntrypointTests(unittest.TestCase):
                     ),
                 )
 
-    def test_example_profiles_cover_every_orientation_dataset_and_robot(self):
-        for robot in ("g1", "e1", "e2"):
-            profile_path = ORIENTATION_PROFILE_DIR / f"{robot}.json"
-            profile = json.loads(profile_path.read_text(encoding="utf-8"))
-            self.assertEqual(profile["schema_version"], 1)
-            self.assertEqual(profile["robot"], robot)
+    def test_robot_profiles_cover_every_orientation_dataset_and_robot(self):
+        for robot in ("g1", "e1_23dof", "e1_24dof", "e2"):
+            profile = load_robot_profile(robot=robot)
+            raw = json.loads(profile.path.read_text(encoding="utf-8"))
+            self.assertEqual(raw["schema_version"], 1)
+            self.assertEqual(profile.robot, robot)
             self.assertEqual(
-                set(profile["datasets"]),
+                set(profile.orientation_weights_by_dataset),
                 set(ORIENTATION_PROFILE_DATASETS),
             )
             for dataset in ORIENTATION_PROFILE_DATASETS:
@@ -468,21 +479,22 @@ class RetargetingEntrypointTests(unittest.TestCase):
                             task="robot_only",
                             robot=robot,
                             dataset=dataset,
-                            orientation_config=profile_path,
+                            orientation_tracking=True,
                         ),
                     )
-                    expected = profile["datasets"][dataset]["weights"]
+                    expected = profile.orientation_weights_by_dataset[dataset]
                     if set(expected.values()) == {0.0}:
                         self.assertEqual(config.retargeter.orientation_weights, {})
                     else:
-                        self.assertEqual(len(config.retargeter.orientation_weights), 15)
-                        self.assertEqual(config.retargeter.orientation_weights, expected)
+                        self.assertEqual(
+                            config.retargeter.orientation_weights,
+                            expected,
+                        )
 
     def test_fbx_e2_orientation_profile_tracks_hips_legs_and_forearms(self):
-        profile = json.loads(
-            (ORIENTATION_PROFILE_DIR / "e2.json").read_text(encoding="utf-8"),
-        )
-        weights = profile["datasets"]["fbx_mocap"]["weights"]
+        weights = load_robot_profile(
+            robot="e2",
+        ).orientation_weights_by_dataset["fbx_mocap"]
         self.assertEqual(weights["Hips"], 20.0)
         self.assertEqual(weights["LeftUpLeg"], 1.0)
         self.assertEqual(weights["RightUpLeg"], 1.0)
@@ -491,117 +503,70 @@ class RetargetingEntrypointTests(unittest.TestCase):
         self.assertEqual(weights["LeftArm"], 0.0)
         self.assertEqual(weights["RightArm"], 0.0)
 
-    def test_orientation_profile_accepts_keypoint_and_link_weight_names(self):
+    def test_robot_profile_accepts_orientation_link_alias_overrides(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
-            profile_path = Path(temporary_dir) / "shoulders.json"
+            profile_path = Path(temporary_dir) / "e1_23dof.json"
             profile = json.loads(
-                (ORIENTATION_PROFILE_DIR / "e1.json").read_text(
+                (ROBOT_PROFILE_DIR / "e1_23dof.json").read_text(
                     encoding="utf-8",
                 ),
             )
-            weights = profile["datasets"]["noetix_mocap"]["weights"]
-            weights["LeftArm"] = 0.0
-            del weights["RightArm"]
-            weights["r_arm_shoulder_yaw_link"] = 0.25
-            profile_path.write_text(
-                json.dumps(profile),
-                encoding="utf-8",
-            )
+            overrides = profile["orientation"]["datasets"]["noetix_mocap"]["overrides"]
+            overrides["LeftArm"] = 0.0
+            overrides["r_arm_shoulder_yaw_link"] = 0.25
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
             config = internal_config_from_command(
                 RetargetingCommand(
                     task="robot_only",
-                    robot="e1",
+                    robot="e1_23dof",
                     dataset="noetix_mocap",
-                    orientation_config=profile_path,
+                    robot_profile=profile_path,
+                    orientation_tracking=True,
                 ),
             )
 
-        self.assertEqual(len(config.retargeter.orientation_weights), 15)
-        self.assertEqual(
-            config.retargeter.orientation_weights["LeftArm"],
-            0.0,
-        )
-        self.assertEqual(
-            config.retargeter.orientation_weights["RightArm"],
-            0.25,
-        )
-        self.assertEqual(
-            {
-                weight
-                for key, weight in config.retargeter.orientation_weights.items()
-                if key not in {"LeftArm", "RightArm"}
-            },
-            {1.0},
-        )
+        self.assertEqual(config.retargeter.orientation_weights["LeftArm"], 0.0)
+        self.assertEqual(config.retargeter.orientation_weights["RightArm"], 0.25)
 
-    def test_orientation_profile_rejects_robot_mismatch(self):
+    def test_robot_profile_rejects_robot_mismatch(self):
         with self.assertRaisesRegex(ValueError, "does not match command robot"):
             internal_config_from_command(
                 RetargetingCommand(
                     task="robot_only",
                     robot="e2",
                     dataset="lafan",
-                    orientation_config=ORIENTATION_PROFILE_DIR / "g1.json",
+                    robot_profile=ROBOT_PROFILE_DIR / "g1.json",
                 ),
             )
 
-    def test_legacy_climbing_rejects_orientation_loss(self):
-        for orientation_weights, orientation_config in (
-            (1.0, None),
-            (None, ORIENTATION_PROFILE_DIR / "g1.json"),
-        ):
-            with self.subTest(
-                orientation_weights=orientation_weights,
-                orientation_config=orientation_config,
-            ), self.assertRaisesRegex(ValueError, "does not provide direct"):
+    def test_climbing_rejects_enabled_orientation_tracking(self):
+        with self.assertRaisesRegex(ValueError, "does not provide direct"):
+            internal_config_from_command(
+                RetargetingCommand(
+                    task="climbing",
+                    robot="g1",
+                    dataset="climbing",
+                    orientation_tracking=True,
+                ),
+            )
+
+    def test_robot_profile_rejects_invalid_orientation_tables(self):
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            profile = json.loads(
+                (ROBOT_PROFILE_DIR / "g1.json").read_text(encoding="utf-8"),
+            )
+            profile["orientation"]["datasets"]["noetix_mocap"]["overrides"]["unknown_link"] = 1.0
+            profile_path = Path(temporary_dir) / "g1.json"
+            profile_path.write_text(json.dumps(profile), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "neither a mapped"):
                 internal_config_from_command(
                     RetargetingCommand(
-                        task="climbing",
+                        task="robot_only",
                         robot="g1",
-                        dataset="climbing",
-                        orientation_weights=orientation_weights,
-                        orientation_config=orientation_config,
+                        dataset="noetix_mocap",
+                        robot_profile=profile_path,
                     ),
                 )
-
-    def test_orientation_profile_rejects_invalid_tables(self):
-        mutators = {
-            "missing dataset": lambda profile: profile["datasets"].pop(
-                "gvhmr",
-            ),
-            "unknown keypoint": lambda profile: profile["datasets"]["noetix_mocap"]["weights"].__setitem__(
-                "unknown_link", 1.0
-            ),
-            "missing keypoint": lambda profile: profile["datasets"]["noetix_mocap"]["weights"].pop("LeftArm"),
-            "duplicate alias": lambda profile: profile["datasets"]["noetix_mocap"]["weights"].__setitem__(
-                "left_shoulder_yaw_link", 1.0
-            ),
-            "negative weight": lambda profile: profile["datasets"]["noetix_mocap"]["weights"].__setitem__(
-                "LeftArm", -1.0
-            ),
-        }
-        for name, mutate in mutators.items():
-            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary_dir:
-                profile = json.loads(
-                    (ORIENTATION_PROFILE_DIR / "g1.json").read_text(
-                        encoding="utf-8",
-                    ),
-                )
-                mutate(profile)
-                profile_path = Path(temporary_dir) / "invalid.json"
-                profile_path.write_text(
-                    json.dumps(profile),
-                    encoding="utf-8",
-                )
-                with self.assertRaises(ValueError):
-                    internal_config_from_command(
-                        RetargetingCommand(
-                            task="robot_only",
-                            robot="g1",
-                            dataset="noetix_mocap",
-                            orientation_config=profile_path,
-                        ),
-                    )
 
     def test_public_command_has_only_compact_production_options(self):
         self.assertEqual(
@@ -615,19 +580,33 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 "save_dir",
                 "output_name",
                 "overwrite",
+                "robot_profile",
+                "robot_dof",
+                "robot_height",
+                "robot_urdf_file",
                 "foot_sticking",
                 "dynamic_ground_window",
                 "interaction_mesh_weight",
                 "arm_interaction_mesh_weight_scale",
                 "root_position_weight",
                 "root_orientation_weight",
+                "q_a_init_idx",
+                "activate_joint_limits",
+                "activate_obj_non_penetration",
+                "penetration_tolerance",
+                "foot_sticking_tolerance",
+                "step_size",
+                "w_nominal_tracking_init",
+                "nominal_tracking_tau",
                 "retargeter",
                 "orientation_weights",
-                "orientation_config",
+                "orientation_tracking",
                 "orientation_preview",
                 "shoulder_direction_tracking",
+                "shoulder_direction_weight",
+                "shoulder_wrist_axis_weight_scale",
+                "natural_pose_tracking",
                 "nature_weights",
-                "nature_config",
             ),
         )
 

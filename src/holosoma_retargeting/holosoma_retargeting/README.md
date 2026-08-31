@@ -90,90 +90,21 @@ python examples/robot_retarget.py \
 `climbing` and `noetix_csv_climb` on G1. The augmentation command accepts only
 those two interaction tasks.
 
-## Optional orientation loss
+## Per-robot retargeting profiles
 
-Orientation loss is disabled by default. `--orientation_weights WEIGHT` assigns one
-non-negative weight to all 15 calibrated mappings:
+Every concrete robot now has one authoritative JSON file in
+`examples/robot_profiles`: `g1.json`, `e1_23dof.json`, `e1_24dof.json`, or
+`e2.json`. The compatibility name `--robot e1` resolves to the E1 23DOF
+profile. A profile contains the robot height, degree-of-freedom count, URDF,
+root and Interaction Mesh weights, solver and foot-contact defaults, the
+direct shoulder-direction settings, all dataset orientation weights, and the
+natural-pose reference and weights. The former `nature_weights` and
+`orientation_weights` profile directories are no longer used.
 
-```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot g1 \
-  --dataset gvhmr \
-  --motion tennis \
-  --orientation_weights 1
-```
-
-For per-keypoint or per-link weights, use the complete profile for the selected
-robot:
-
-```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot g1 \
-  --dataset gvhmr \
-  --motion tennis \
-  --orientation_config examples/orientation_weights/g1.json
-```
-
-The orientation directory provides `g1.json`, `e1.json`, and `e2.json`. Both
-explicit E1 variants use the E1 orientation table. Each profile contains
-complete tables for `gvhmr`, `lafan`, `noetix_csv_climb`, `noetix_mocap`, and
-`OMOMO_new`; the current `--dataset` selects the table. Every mapped key must
-appear and may name either its human keypoint or robot link. Set a value to
-zero to remove that keypoint's orientation loss. The profile robot must match
-the command, and `--orientation_weights` and `--orientation_config` are mutually
-exclusive. G1, E1, and E2 each use their own robot FK T-pose; each
-direct-orientation format supplies its source T-pose frame. No orientation is
-inferred from positions or bone vectors.
-
-## Sequence-aware shoulder direction tracking
-
-G1, E1, and E2 robot-only Noetix/FBX motions can replace the generic full-SO(3)
-Arm, ForeArm, and Hand objectives with a shoulder task that tracks the
-torso-local upper-arm unit direction:
-
-```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot g1 \
-  --dataset noetix_mocap \
-  --motion sequence/name \
-  --orientation_config examples/orientation_weights \
-  --shoulder-direction-tracking
-```
-
-The offline reference stage samples the one-dimensional shoulder solution
-manifold, preserves descendants of every retained branch, and selects a full
-sequence path with direction, elbow-plane compatibility, joint-limit,
-velocity, and acceleration costs. Candidate graph edges and final SQP shoulder
-motion also have explicit per-frame joint-step limits, preventing an optimizer
-from treating a distant equivalent Euler branch as an adjacent solution. The
-reference only resolves the local direction-Jacobian null space; the unit
-direction remains a direct SQP objective. G1 Hand orientation is tracked only
-through its three wrist variables, E1 Hand orientation is projected onto its
-single elbow-yaw axis, and E2 has no wrist orientation task. This restriction
-prevents Hand orientation error from selecting a different shoulder or elbow
-solution.
-Generic full-SO(3) upper-limb terms are disabled in this mode; lower-body and
-torso entries in the selected orientation profile continue to work normally.
-
-The result stores the complete candidate graph, selected path, actual shoulder
-angles, direction errors, and Jacobian singular values. Render these as a
-trajectory dashboard and three-dimensional candidate-branch view with:
-
-```bash
-python -m holosoma_retargeting.visualization.shoulder_direction result.npz
-```
-
-## Root stability and Interaction Mesh weights
-
-When a serial shoulder approaches a joint limit or changes feasible branches,
-the floating root can track the aligned source-root translation and torso
-orientation explicitly while upper-limb anchors contribute less to the global
-Interaction Mesh deformation energy. Both root weights default to `0`, the arm
-scale defaults to `1`, and the historical global mesh weight remains `10`, so
-omitting these options preserves the previous solver behavior.
+The selected profile is always loaded. An option supplied explicitly on the
+command line takes precedence over its JSON value; an omitted option inherits
+the profile value. For example, this command changes only the root-position
+weight while retaining every other E1 23DOF profile default:
 
 ```bash
 python examples/robot_retarget.py \
@@ -181,66 +112,74 @@ python examples/robot_retarget.py \
   --robot e1_23dof \
   --dataset noetix_mocap \
   --motion sequence/name \
-  --orientation_config examples/orientation_weights \
-  --shoulder-direction-tracking \
+  --root-position-weight 1.0
+```
+
+Use `--robot-profile FILE_OR_DIR` to test another complete table without
+replacing the bundled profile. Robot dimensions and assets can also be
+overridden directly through `--robot-height`, `--robot-dof`, and
+`--robot-urdf-file`. Boolean profile values such as foot sticking accept
+explicit overrides such as `--foot-sticking False`.
+
+## Direct upper-arm direction tracking
+
+When `shoulder_direction.enable` is true in the robot profile, or
+`--shoulder-direction-tracking True` is supplied, the solver replaces the
+generic Arm, ForeArm, and Hand SO(3) costs with a direct torso-local upper-arm
+unit-direction residual. There is no candidate construction, candidate
+scoring, pitch/roll/yaw branch selection, offline reference path, or branch
+reference in this mode. Redundant shoulder motion is resolved by the existing
+Interaction Mesh, joint limits, natural-pose cost when enabled, and the
+frame-to-frame smoothness objective. The direction weight can be overridden
+with `--shoulder-direction-weight`.
+
+G1 Hand orientation is retained only through its three wrist variables, E1
+Hand orientation is projected onto its single elbow-yaw axis, and E2 has no
+wrist orientation task. Lower-body and torso entries from an enabled
+orientation table continue to work. Saved results contain target and actual
+upper-arm directions, direction errors, solved shoulder angles, and direction
+Jacobian singular values. Render them with:
+
+```bash
+python -m holosoma_retargeting.visualization.shoulder_direction result.npz
+```
+
+## Orientation, root stability, and natural pose
+
+The bundled profiles preserve the previous default behavior: orientation,
+direct shoulder-direction tracking, natural-pose regularization, and both root
+stability weights start disabled, while foot sticking remains enabled. Edit a
+robot JSON once to change its persistent defaults, or use command-line
+overrides for one run. `--orientation-tracking True` enables the selected
+dataset table, while `--orientation-weights WEIGHT` overrides every mapped
+link with one non-negative weight. `--natural-pose-tracking True` enables the
+stored per-joint table, while `--nature-weights WEIGHT` applies one weight to
+all actuated joints.
+
+Root stability remains a pair of soft objectives. The position target follows
+the source-root displacement after frame-zero alignment, while the orientation
+target uses a direct source-root orientation when available and otherwise the
+source torso frame. The first solved robot frame anchors the relative targets.
+The Interaction Mesh and root values can be tuned together as follows:
+
+```bash
+python examples/robot_retarget.py \
+  --task robot_only \
+  --robot e1_23dof \
+  --dataset noetix_mocap \
+  --motion sequence/name \
+  --orientation-tracking True \
+  --shoulder-direction-tracking True \
   --root-position-weight 200 \
   --root-orientation-weight 50 \
   --interaction-mesh-weight 10 \
   --arm-interaction-mesh-weight-scale 0.5
 ```
 
-`--root-position-weight` follows the source root displacement after frame-zero
-alignment. `--root-orientation-weight` prefers a direct source-root orientation
-and falls back to the torso frame formed by the shoulders and source root when
-direct orientations are unavailable. Frame zero is first retargeted without a
-root-stability objective; its solved robot pose then anchors all relative root
-targets, so the model initialization frame cannot become an accidental target.
-These are soft objectives, not hard root locks, and nonzero values require the
-complete floating base to be active through the internal `q_a_init_idx=-7`
-setting. The global mesh option
-weights every Laplacian residual, while the arm scale only multiplies anchor
-rows whose source names contain shoulder, arm, elbow, wrist, or hand. A useful
-first comparison keeps the global weight at `10`, tries arm scales `1`, `0.5`,
-and `0.25`, then raises root weights only as needed. Saved NPZ files include the
-four effective weights, target and actual root poses, position error in meters,
-and orientation error in radians.
-
-## Natural-posture regularization
-
-Natural-posture regularization is also disabled by default. Use
-`--nature_weights WEIGHT` to assign one non-negative weight to every actuated
-joint. The fixed natural reference angles are read from the bundled
-matching file in `examples/nature_weights`. The explicit E1 variants use
-independent `e1_23dof.json` and `e1_24dof.json` tables; the latter defines all
-24 joints, including `waist_roll_joint`:
-
-```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot g1 \
-  --dataset gvhmr \
-  --motion tennis \
-  --nature_weights 0.1
-```
-
-For independent joint weights, pass a robot-specific JSON file or a directory
-containing the corresponding files through `--nature_config`. Each table
-contains direct absolute weights and its natural reference angles in radians:
-
-```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot g1 \
-  --dataset gvhmr \
-  --motion tennis \
-  --nature_config examples/nature_weights/g1.json
-```
-
-Every SQP iteration adds the fixed joint-space cost
-`sum_i w_i (q_i - q_i_natural)^2`. Active natural-pose joints are initialized from
-the same references once before frame zero, while later frames continue from
-the preceding solution. `--nature_weights` and `--nature_config` are mutually
-exclusive. A zero uniform or table weight removes the corresponding cost.
+The natural-pose objective remains
+`sum_i w_i (q_i - q_i_natural)^2`. Active joints are initialized from their
+fixed references before frame zero, and later frames continue from the
+preceding solution.
 
 ## Outputs
 

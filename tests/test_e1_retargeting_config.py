@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import mujoco
@@ -16,6 +15,7 @@ from holosoma_retargeting.config_types.retargeting import (
     internal_config_from_command,
 )
 from holosoma_retargeting.config_types.robot import RobotConfig
+from holosoma_retargeting.config_types.robot_profiles import load_robot_profile
 from holosoma_retargeting.config_types.task import TaskConfig
 from holosoma_retargeting.retargeting_pipeline import (
     build_retargeter_kwargs_from_config,
@@ -30,20 +30,12 @@ from holosoma_retargeting.src.viser_utils import (
     actuated_joint_names_from_urdf,
 )
 
-PACKAGE_ROOT = (
-    Path(__file__).resolve().parents[1]
-    / "src"
-    / "holosoma_retargeting"
-    / "holosoma_retargeting"
-)
-NATURE_PROFILE_DIR = PACKAGE_ROOT / "examples" / "nature_weights"
+PACKAGE_ROOT = Path(__file__).resolve().parents[1] / "src" / "holosoma_retargeting" / "holosoma_retargeting"
+ROBOT_PROFILE_DIR = PACKAGE_ROOT / "examples" / "robot_profiles"
 
 
 def _model(robot: str) -> mujoco.MjModel:
-    path = (
-        PACKAGE_ROOT
-        / RobotConfig(robot_type=robot).ROBOT_URDF_FILE
-    ).with_suffix(".xml")
+    path = (PACKAGE_ROOT / RobotConfig(robot_type=robot).ROBOT_URDF_FILE).with_suffix(".xml")
     return mujoco.MjModel.from_xml_path(str(path))
 
 
@@ -79,10 +71,7 @@ def test_e1_variants_select_the_expected_assets_and_dofs() -> None:
 def test_e1_variants_cover_every_registered_human_format() -> None:
     for robot in ("e1_23dof", "e1_24dof"):
         model = _model(robot)
-        body_names = {
-            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id)
-            for body_id in range(1, model.nbody)
-        }
+        body_names = {mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id) for body_id in range(1, model.nbody)}
         config = RobotConfig(robot_type=robot)
         assert set(config.FOOT_STICKING_LINKS).issubset(body_names)
 
@@ -120,23 +109,22 @@ def test_fbx_e1_variants_share_the_waist_roll_torso_mapping() -> None:
 
 def test_e1_variants_have_independent_natural_pose_profiles() -> None:
     for robot, joint_count in (("e1_23dof", 23), ("e1_24dof", 24)):
-        profile = json.loads(
-            (NATURE_PROFILE_DIR / f"{robot}.json").read_text(encoding="utf-8"),
-        )
+        profile = load_robot_profile(robot=robot)
         config = internal_config_from_command(
             RetargetingCommand(
                 task="robot_only",
                 robot=robot,
                 dataset="fbx_mocap",
-                nature_config=NATURE_PROFILE_DIR / f"{robot}.json",
+                robot_profile=ROBOT_PROFILE_DIR / f"{robot}.json",
+                natural_pose_tracking=True,
             ),
         )
 
-        assert profile["robot"] == robot
-        assert profile["robot_urdf_name"] == f"{robot}.urdf"
-        assert len(profile["references"]) == joint_count
-        assert set(profile["references"]) == set(profile["weights"])
-        assert config.retargeter.natural_pose_joint_positions == profile["references"]
+        assert profile.robot == robot
+        assert Path(profile.robot_urdf_file).name == f"{robot}.urdf"
+        assert len(profile.natural_pose.references) == joint_count
+        assert set(profile.natural_pose.references) == set(profile.natural_pose.weights)
+        assert config.retargeter.natural_pose_joint_positions == profile.natural_pose.references
 
 
 def test_e1_24dof_robot_only_command_reaches_the_24dof_mjcf_asset() -> None:
@@ -166,9 +154,7 @@ def test_e1_24dof_robot_only_command_reaches_the_24dof_mjcf_asset() -> None:
 
     assert normalized.robot == "e1_24dof"
     assert normalized.robot_config.ROBOT_DOF == 24
-    assert Path(constants.ROBOT_URDF_FILE).with_suffix(".xml") == (
-        PACKAGE_ROOT / "models/e1/e1_24dof.xml"
-    )
+    assert Path(constants.ROBOT_URDF_FILE).with_suffix(".xml") == (PACKAGE_ROOT / "models/e1/e1_24dof.xml")
     assert set(config.retargeter.natural_pose_weights.values()) == {0.1}
     assert config.retargeter.natural_pose_joint_positions["waist_roll_joint"] == 0.0
     assert len(config.retargeter.natural_pose_joint_positions) == 24

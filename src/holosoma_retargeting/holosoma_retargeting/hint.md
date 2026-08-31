@@ -53,13 +53,15 @@ python examples/robot_retarget.py \
 # --save-dir PATH                覆盖默认输出目录 demo_results
 # --output-name NAME.npz         只修改最终 NPZ 文件名，不改变结果目录层级
 # --overwrite                    覆盖已有结果
-# --foot-sticking True|False     开启或关闭接触感知足底平面硬约束，默认 True
+# --robot-profile FILE_OR_DIR    临时覆盖当前机器人统一 JSON 表
+# --foot-sticking True|False     覆盖表内接触感知足底平面约束开关
 # --retargeter.debug             显示诊断图层，并在完成后等待 Enter
 # --retargeter.no-visualize      关闭默认实时可视化，适用于 headless/CI
-# --orientation_weights WEIGHT     开启朝向损失，全部映射 link 使用同一非负权重
-# --orientation_config FILE_OR_DIR 开启朝向损失，从 JSON 读取各 link 权重
-# --nature_weights WEIGHT          开启自然姿态项，全部 actuated joint 使用同一非负权重
-# --nature_config FILE_OR_DIR      开启自然姿态项，从 JSON 读取参考角与逐关节权重
+# --orientation-tracking True    启用机器人表中当前数据集的朝向权重
+# --orientation_weights WEIGHT   用同一非负权重覆盖全部映射 link
+# --shoulder-direction-tracking True 直接跟踪躯干局部上臂方向
+# --natural-pose-tracking True   启用机器人表中的逐关节自然姿态项
+# --nature_weights WEIGHT        用同一权重覆盖全部 actuated joint
 ```
 
 接触感知足底平面硬约束默认开启。它区分全脚掌、脚跟、脚尖、旋转支点、
@@ -92,7 +94,10 @@ python examples/robot_retarget.py \
 结果已存在且命令显示为 resumed 时不会再次进入求解过程；此时增加
 `--overwrite` 可重新求解并观看实时过程，或者直接使用下方的结果可视化脚本。
 
-统一使用权重 `1.0`：
+每个机器人只维护 `examples/robot_profiles` 中的一张表。表内包含身高、URDF、
+足底开关、根节点与网格权重、直接上臂方向设置、各数据集朝向权重和自然姿态
+权重。未写在命令行中的参数读取表内默认值，显式命令行值优先。例如只覆盖
+根位置权重可使用：
 
 ```bash
 python examples/robot_retarget.py \
@@ -100,32 +105,14 @@ python examples/robot_retarget.py \
   --robot e2 \
   --dataset lafan \
   --motion walk2_subject3 \
-  --orientation_weights 1
+  --root-position-weight 1.0
 ```
 
-逐关键点配置使用
-`examples/orientation_weights/g1.json`、`e1.json` 或 `e2.json`。每个文件
-按 `gvhmr`、`lafan`、`noetix_csv_climb`、`noetix_mocap` 和 `OMOMO_new`
-分别保存完整的 15 个关键点权重；程序会根据当前 `--dataset` 自动选表。
-把某一项改成 `0` 即可取消该关键点的朝向损失。
-
-```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot e2 \
-  --dataset lafan \
-  --motion walk2_subject3 \
-  --orientation_config examples/orientation_weights/e2.json
-```
-
-`--orientation_weights` 与 `--orientation_config` 不能同时使用。旧 `climbing`
-只有位置数据，不支持这两个朝向选项。
-
-自然姿态正则项默认关闭。`--nature_weights 0.1` 会从
-`examples/nature_weights/g1.json`、`e1.json` 或 `e2.json` 读取当前机器人的
-自然参考角，并给全部 actuated joint 统一设置 `0.1` 权重。需要逐关节
-设置不同权重时，使用 `--nature_config examples/nature_weights/e2.json`；
-该参数也接受包含三张对应表的目录。两种自然姿态权重来源不能同时使用。
+`--orientation-tracking True` 使用表内当前数据集的逐关键点权重，
+`--orientation-weights 1.0` 用统一权重覆盖它们。`--natural-pose-tracking True`
+使用表内逐关节自然姿态权重，`--nature-weights 0.1` 用统一权重覆盖。肩部模式
+由 `--shoulder-direction-tracking True` 开启，当前实现直接跟踪上臂方向，不会
+构造、评分或选择 pitch/roll/yaw 候选分支。
 
 默认结果路径为：
 
@@ -164,9 +151,8 @@ python examples/parallel_robot_retarget.py \
 
 该入口同样默认实时可视化，并支持 `--retargeter.debug`、
 `--retargeter.no-visualize`、`--data-path`、`--save-dir`、`--overwrite`、
-`--foot-sticking True|False`、`--orientation_weights WEIGHT`、
-`--orientation_config FILE_OR_DIR`、`--nature_weights WEIGHT` 和
-`--nature_config FILE_OR_DIR`。开启 debug 时，每个 identity/增强
+`--robot-profile FILE_OR_DIR`、`--foot-sticking True|False`、
+`--orientation_weights WEIGHT` 和 `--nature_weights WEIGHT`。开启 debug 时，每个 identity/增强
 变体完成后都会等待 Enter，便于逐个检查。默认结果路径为：
 
 ```text

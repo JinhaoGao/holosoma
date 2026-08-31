@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import sys
 import unittest
+from contextlib import ExitStack
+from dataclasses import fields
+from inspect import signature
 from pathlib import Path
+from unittest import mock
 
 import mujoco
 import numpy as np
@@ -26,7 +30,6 @@ from holosoma_retargeting.retargeting_pipeline import (  # noqa: E402
     create_task_constants,
 )
 from holosoma_retargeting.shoulder_direction import (  # noqa: E402
-    second_order_candidate_path,
     unit_direction_jacobian,
 )
 from holosoma_retargeting.src.interaction_mesh_retargeter import (  # noqa: E402
@@ -37,7 +40,6 @@ from holosoma_retargeting.src.interaction_mesh_retargeter import (  # noqa: E402
 def _build_retargeter(
     robot: str,
     *,
-    candidate_count: int = 4,
     data_format: str = "noetix_mocap",
 ) -> InteractionMeshRetargeter:
     robot_file = {
@@ -60,13 +62,7 @@ def _build_retargeter(
     config = RetargeterConfig(
         q_a_init_idx=0,
         activate_foot_sticking=False,
-        shoulder_direction=ShoulderDirectionConfig(
-            enable=True,
-            candidate_count=candidate_count,
-            seed_count=max(8, candidate_count),
-            refresh_candidate_count=min(2, candidate_count - 1),
-            max_nfev=20,
-        ),
+        shoulder_direction=ShoulderDirectionConfig(enable=True),
     )
     return InteractionMeshRetargeter(
         **build_retargeter_kwargs_from_config(
@@ -92,9 +88,7 @@ def _synthetic_upper_body(retargeter: InteractionMeshRetargeter, frames: int) ->
             lateral = 0.2 if side_index == 0 else -0.2
             positions[frame, indices[spec.human_arm_name]] = [0.0, lateral, 0.5]
             upper = np.asarray([0.1 * np.sin(phase), 0.0, -0.25])
-            positions[frame, indices[spec.human_forearm_name]] = (
-                positions[frame, indices[spec.human_arm_name]] + upper
-            )
+            positions[frame, indices[spec.human_forearm_name]] = positions[frame, indices[spec.human_arm_name]] + upper
             forearm = np.asarray([0.08 * np.sin(phase), 0.0, -0.22])
             positions[frame, indices[spec.human_hand_name]] = (
                 positions[frame, indices[spec.human_forearm_name]] + forearm
@@ -118,67 +112,18 @@ class ShoulderDirectionMathTests(unittest.TestCase):
             finite[:, column] = (plus / np.linalg.norm(plus) - minus / np.linalg.norm(minus)) / (2.0 * epsilon)
         np.testing.assert_allclose(analytic, finite, atol=1e-8)
 
-    def test_second_order_path_rejects_a_low_node_cost_branch_flip(self):
-        states = np.asarray(
-            [
-                [[0.0], [1.0]],
-                [[0.1], [0.9]],
-                [[0.2], [0.8]],
-                [[0.3], [0.7]],
-            ],
-            dtype=np.float64,
+    def test_public_config_and_solver_have_no_branch_planning_interface(self):
+        self.assertEqual(
+            tuple(field.name for field in fields(ShoulderDirectionConfig)),
+            ("enable", "direction_weight", "wrist_axis_weight_scale"),
         )
-        node_costs = np.asarray(
-            [[0.0, 0.2], [0.0, 0.2], [0.3, 0.0], [0.3, 0.0]],
-            dtype=np.float64,
+        self.assertNotIn(
+            "shoulder_reference_joint_positions",
+            signature(InteractionMeshRetargeter.solve_single_iteration).parameters,
         )
-        selected = second_order_candidate_path(
-            states,
-            node_costs,
-            np.ones_like(node_costs, dtype=bool),
-            joint_ranges=np.ones(1),
-            velocity_weight=2.0,
-            acceleration_weight=8.0,
+        self.assertFalse(
+            hasattr(InteractionMeshRetargeter, "_plan_shoulder_direction_references"),
         )
-        self.assertTrue(
-            np.array_equal(selected, np.zeros(4, dtype=np.int32))
-            or np.array_equal(selected, np.ones(4, dtype=np.int32)),
-        )
-
-    def test_second_order_path_enforces_joint_step_edges(self):
-        states = np.asarray(
-            [
-                [[0.0], [1.0]],
-                [[0.1], [0.9]],
-                [[0.2], [0.8]],
-            ],
-            dtype=np.float64,
-        )
-        node_costs = np.asarray(
-            [[0.0, 6.0], [0.0, 6.0], [10.0, 0.0]],
-            dtype=np.float64,
-        )
-        selected = second_order_candidate_path(
-            states,
-            node_costs,
-            np.ones_like(node_costs, dtype=bool),
-            joint_ranges=np.ones(1),
-            velocity_weight=0.0,
-            acceleration_weight=0.0,
-            max_joint_step=np.asarray([0.25]),
-        )
-        np.testing.assert_array_equal(selected, np.zeros(3, dtype=np.int32))
-
-    def test_candidate_reduction_preserves_continuation_samples(self):
-        states = np.arange(18, dtype=np.float64).reshape(6, 3)
-        selected = InteractionMeshRetargeter._diverse_candidate_indices(
-            states,
-            np.arange(6, dtype=np.float64),
-            np.ones(3, dtype=np.float64),
-            4,
-            required_indices=np.asarray([2, 4], dtype=np.int32),
-        )
-        self.assertTrue({2, 4}.issubset(set(selected)))
 
 
 class ShoulderDirectionRetargeterTests(unittest.TestCase):
@@ -227,11 +172,8 @@ class ShoulderDirectionRetargeterTests(unittest.TestCase):
                         ("L_Shoulder", "R_Shoulder"),
                     )
                     motion = _synthetic_upper_body(retargeter, 3)
-                    upper, forearm = retargeter._prepare_shoulder_direction_targets(
-                        motion,
-                    )
+                    upper = retargeter._prepare_shoulder_direction_targets(motion)
                     self.assertEqual(upper.shape, (3, 2, 3))
-                    self.assertEqual(forearm.shape, (3, 2, 3))
                     np.testing.assert_allclose(
                         np.linalg.norm(upper, axis=-1),
                         1.0,
@@ -262,9 +204,7 @@ class ShoulderDirectionRetargeterTests(unittest.TestCase):
                         minus,
                         with_jacobians=False,
                     )
-                    finite = (plus_direction[side] - minus_direction[side]) / (
-                        2.0 * epsilon
-                    )
+                    finite = (plus_direction[side] - minus_direction[side]) / (2.0 * epsilon)
                     reduced = retargeter.shoulder_joint_reduced_indices[
                         side,
                         local_column,
@@ -276,55 +216,56 @@ class ShoulderDirectionRetargeterTests(unittest.TestCase):
                     )
             self.assertEqual(directions.shape, (2, 3))
 
-    def test_short_sequence_planner_returns_valid_continuous_references(self):
-        for retargeter in (self.g1, self.e2):
-            motion = _synthetic_upper_body(retargeter, 4)
-            upper, forearm = retargeter._prepare_shoulder_direction_targets(motion)
-            plan = retargeter._plan_shoulder_direction_references(
-                retargeter.robot_model.qpos0.copy(),
-                upper,
-                forearm,
+    def test_direction_only_objective_solves_without_a_joint_branch_reference(self):
+        retargeter = self.e2
+        qpos = retargeter.robot_model.qpos0.copy()
+        targets, _ = retargeter._get_shoulder_direction_data(
+            qpos,
+            with_jacobians=False,
+        )
+        robot_keys = list(retargeter.laplacian_match_links)
+        zero_jacobians = {key: np.zeros((3, retargeter.nq_a), dtype=np.float64) for key in robot_keys}
+        zero_positions = {key: np.zeros(3, dtype=np.float64) for key in robot_keys}
+        with ExitStack() as stack:
+            stack.enter_context(
+                mock.patch.object(
+                    retargeter,
+                    "_calc_manipulator_jacobians",
+                    return_value=(zero_jacobians, zero_positions, None),
+                ),
             )
-            self.assertEqual(plan["reference_joint_positions"].shape, (4, 2, 3))
-            self.assertEqual(
-                plan["raw_reference_joint_positions"].shape,
-                (4, 2, 3),
+            stack.enter_context(
+                mock.patch.object(
+                    retargeter,
+                    "_update_jacobians_and_phis_from_q",
+                    return_value=({}, {}),
+                ),
             )
-            self.assertEqual(plan["selected_candidate_indices"].shape, (4, 2))
-            self.assertTrue(np.isfinite(plan["reference_joint_positions"]).all())
-            self.assertTrue(
-                np.all(np.sum(plan["candidate_valid"], axis=-1) >= 1),
+            stack.enter_context(
+                mock.patch.object(
+                    retargeter,
+                    "_compute_self_collision_constraints",
+                    return_value=({}, {}),
+                ),
             )
-            self.assertLess(
-                float(np.nanmax(plan["candidate_direction_errors_rad"])),
-                np.pi,
+            candidate, cost = retargeter.solve_single_iteration(
+                q_locked=qpos,
+                q_a_n_last=qpos[retargeter.q_a_indices],
+                q_t_last=qpos,
+                target_laplacian=np.zeros(
+                    (len(robot_keys), 3),
+                    dtype=np.float64,
+                ),
+                adj_list=[[] for _ in robot_keys],
+                obj_pts_local=np.empty((0, 3), dtype=np.float64),
+                foot_sticking={"left": False, "right": False},
+                init_t=True,
+                frame_idx=0,
+                shoulder_direction_targets=targets,
             )
 
-    def test_reference_smoothing_spreads_a_discrete_branch_change(self):
-        retargeter = self.e2
-        raw = np.zeros((12, 3), dtype=np.float64)
-        raw[6:, 2] = 2.4
-        smoothed = retargeter._smooth_shoulder_reference(raw, side_index=0)
-        steps = np.abs(np.diff(smoothed, axis=0))
-        self.assertLessEqual(
-            float(np.max(steps)),
-            retargeter.shoulder_direction_config.max_frame_step_rad + 1e-7,
-        )
-        self.assertGreater(float(smoothed[5, 2]), 0.0)
-        self.assertLess(float(smoothed[6, 2]), 2.4)
-
-    def test_continuation_projection_respects_joint_step_limit(self):
-        retargeter = self.e2
-        q = retargeter.robot_model.qpos0.copy()
-        seed = q[retargeter.shoulder_joint_qpos_addresses[0]].copy()
-        projected, _ = retargeter._project_shoulder_candidate(
-            q,
-            side_index=0,
-            target_direction=np.asarray([1.0, 0.0, 0.0]),
-            seed=seed,
-            max_step_rad=0.1,
-        )
-        self.assertTrue(np.all(np.abs(projected - seed) <= 0.099 + 1e-9))
+        self.assertTrue(np.isfinite(cost))
+        self.assertEqual(candidate.shape, qpos.shape)
 
     def test_e1_wrist_joint_is_a_scalar_hinge(self):
         for spec in self.e1.shoulder_side_specs:

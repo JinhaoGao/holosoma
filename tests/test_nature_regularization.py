@@ -26,7 +26,9 @@ from holosoma_retargeting.config_types.retargeting import (  # noqa: E402
     RetargetingCommand,
     internal_config_from_command,
 )
-from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
+from holosoma_retargeting.config_types.robot_profiles import (  # noqa: E402
+    load_robot_profile,
+)
 from holosoma_retargeting.config_types.task import TaskConfig  # noqa: E402
 from holosoma_retargeting.retargeting_pipeline import (  # noqa: E402
     build_retargeter_kwargs_from_config,
@@ -36,8 +38,7 @@ from holosoma_retargeting.src.interaction_mesh_retargeter import (  # noqa: E402
     InteractionMeshRetargeter,
 )
 
-NATURE_PROFILE_DIR = PACKAGE_ROOT / "holosoma_retargeting" / "examples" / "nature_weights"
-ORIENTATION_PROFILE_DIR = PACKAGE_ROOT / "holosoma_retargeting" / "examples" / "orientation_weights"
+ROBOT_PROFILE_DIR = PACKAGE_ROOT / "holosoma_retargeting" / "examples" / "robot_profiles"
 
 
 def _command(
@@ -45,7 +46,8 @@ def _command(
     *,
     dataset: str = "noetix_mocap",
     nature_weights: float | None = None,
-    nature_config: Path | None = None,
+    natural_pose_tracking: bool | None = None,
+    robot_profile: Path | None = None,
 ) -> RetargetingCommand:
     return RetargetingCommand(
         task="robot_only",
@@ -53,7 +55,8 @@ def _command(
         dataset=dataset,
         retargeter=RetargeterRuntimeOptions(visualize=False),
         nature_weights=nature_weights,
-        nature_config=nature_config,
+        natural_pose_tracking=natural_pose_tracking,
+        robot_profile=robot_profile,
     )
 
 
@@ -61,7 +64,7 @@ def _build_retargeter(command: RetargetingCommand) -> InteractionMeshRetargeter:
     config = internal_config_from_command(command)
     robot = str(command.robot)
     constants = create_task_constants(
-        RobotConfig(robot_type=robot),
+        config.robot_config,
         MotionDataConfig(data_format=str(config.data_format), robot_type=robot),
         TaskConfig(object_name="ground"),
         "robot_only",
@@ -76,8 +79,8 @@ def _build_retargeter(command: RetargetingCommand) -> InteractionMeshRetargeter:
     )
 
 
-class NatureProfileTests(unittest.TestCase):
-    def test_optional_objectives_are_disabled_by_default(self) -> None:
+class RobotProfileTests(unittest.TestCase):
+    def test_optional_objectives_are_disabled_by_profile_default(self) -> None:
         config = internal_config_from_command(_command("g1"))
 
         self.assertEqual(config.retargeter.orientation_weights, {})
@@ -94,127 +97,88 @@ class NatureProfileTests(unittest.TestCase):
         self.assertEqual(set(config.retargeter.natural_pose_weights.values()), {0.25})
         self.assertEqual(len(retargeter.natural_pose_joint_names), 29)
 
-    def test_profiles_correspond_to_every_explicit_robot_model(self) -> None:
+    def test_one_profile_covers_each_concrete_robot(self) -> None:
         expected_joint_counts = {
             "g1": 29,
             "e1_23dof": 23,
             "e1_24dof": 24,
             "e2": 23,
         }
-        expected_active_joint_counts = {
-            "g1": 2,
-            "e1_23dof": 2,
-            "e1_24dof": 0,
-            "e2": 2,
-        }
         for robot, expected_joint_count in expected_joint_counts.items():
             with self.subTest(robot=robot):
-                profile_path = NATURE_PROFILE_DIR / f"{robot}.json"
-                profile = json.loads(profile_path.read_text(encoding="utf-8"))
-                config = internal_config_from_command(
-                    _command(robot, nature_config=NATURE_PROFILE_DIR),
-                )
+                profile = load_robot_profile(robot=robot)
+                raw = json.loads(profile.path.read_text(encoding="utf-8"))
                 retargeter = _build_retargeter(
-                    _command(robot, nature_config=profile_path),
+                    _command(robot, natural_pose_tracking=True),
                 )
 
-                self.assertEqual(profile["schema_version"], 1)
-                self.assertEqual(profile["robot"], robot)
-                self.assertEqual(set(profile["references"]), set(profile["weights"]))
-                self.assertEqual(len(profile["references"]), expected_joint_count)
+                self.assertEqual(raw["schema_version"], 1)
+                self.assertEqual(profile.robot, robot)
+                self.assertEqual(profile.robot_dof, expected_joint_count)
                 self.assertEqual(
-                    set(profile["references"]),
+                    len(profile.natural_pose.references),
+                    expected_joint_count,
+                )
+                self.assertEqual(
+                    set(profile.natural_pose.references),
+                    set(profile.natural_pose.weights),
+                )
+                self.assertEqual(
+                    set(profile.natural_pose.references),
                     set(retargeter.robot_actuated_joint_names),
                 )
-                self.assertEqual(
-                    len(retargeter.natural_pose_joint_names),
-                    expected_active_joint_counts[robot],
-                )
-                self.assertEqual(
-                    config.retargeter.natural_pose_weights,
-                    profile["weights"],
-                )
 
-    def test_profiles_regularize_only_configured_shoulder_pitch_joints(self) -> None:
-        expected_pitch_joints = {
-            "g1": {
-                "left_shoulder_pitch_joint",
-                "right_shoulder_pitch_joint",
-            },
-            "e1_23dof": {
-                "l_arm_shoulder_pitch_joint",
-                "r_arm_shoulder_pitch_joint",
-            },
-            "e1_24dof": set(),
-            "e2": {
-                "l_arm_shoulder_pitch_joint",
-                "r_arm_shoulder_pitch_joint",
-            },
+    def test_profile_natural_pose_weights_preserve_the_old_tables(self) -> None:
+        expected = {
+            "g1": ({"left_shoulder_pitch_joint", "right_shoulder_pitch_joint"}, 2.0),
+            "e1_23dof": ({"l_arm_shoulder_pitch_joint", "r_arm_shoulder_pitch_joint"}, 0.5),
+            "e1_24dof": (set(), None),
+            "e2": ({"l_arm_shoulder_pitch_joint", "r_arm_shoulder_pitch_joint"}, 0.8),
         }
-        expected_weights = {
-            "g1": 2.0,
-            "e1_23dof": 0.5,
-            "e1_24dof": None,
-            "e2": 0.8,
-        }
-        for robot, pitch_joints in expected_pitch_joints.items():
+        for robot, (joint_names, weight) in expected.items():
             with self.subTest(robot=robot):
-                profile = json.loads(
-                    (NATURE_PROFILE_DIR / f"{robot}.json").read_text(
-                        encoding="utf-8",
-                    ),
-                )
-                active_weights = {joint_name: weight for joint_name, weight in profile["weights"].items() if weight > 0}
-                self.assertEqual(set(active_weights), pitch_joints)
-                expected_weight = expected_weights[robot]
+                profile = load_robot_profile(robot=robot)
+                active = {name: value for name, value in profile.natural_pose.weights.items() if value > 0.0}
+                self.assertEqual(set(active), joint_names)
                 self.assertEqual(
-                    set(active_weights.values()),
-                    set() if expected_weight is None else {expected_weight},
+                    set(active.values()),
+                    set() if weight is None else {weight},
                 )
 
-    def test_fbx_mocap_selects_each_robot_natural_pose_table(self) -> None:
+    def test_natural_pose_switch_uses_the_profile_table(self) -> None:
         for robot in ("g1", "e1_23dof", "e1_24dof", "e2"):
             with self.subTest(robot=robot):
-                profile = json.loads(
-                    (NATURE_PROFILE_DIR / f"{robot}.json").read_text(
-                        encoding="utf-8",
-                    ),
-                )
+                profile = load_robot_profile(robot=robot)
                 config = internal_config_from_command(
-                    _command(
-                        robot,
-                        dataset="fbx_mocap",
-                        nature_config=NATURE_PROFILE_DIR,
-                    ),
+                    _command(robot, natural_pose_tracking=True),
                 )
                 self.assertEqual(
                     config.retargeter.natural_pose_joint_positions,
-                    profile["references"],
+                    profile.natural_pose.references,
                 )
                 self.assertEqual(
                     config.retargeter.natural_pose_weights,
-                    profile["weights"],
+                    profile.natural_pose.weights,
                 )
 
-    def test_g1_natural_shoulder_yaw_references_are_mirrored(self) -> None:
-        profile = json.loads(
-            (NATURE_PROFILE_DIR / "g1.json").read_text(encoding="utf-8"),
+    def test_e1_alias_resolves_the_e1_23dof_profile(self) -> None:
+        profile = load_robot_profile(robot="e1")
+        config = internal_config_from_command(_command("e1"))
+
+        self.assertEqual(profile.robot, "e1_23dof")
+        self.assertEqual(config.robot_config.ROBOT_DOF, 23)
+        self.assertEqual(config.robot_config.ROBOT_HEIGHT, 1.5)
+        self.assertEqual(
+            config.robot_config.ROBOT_URDF_FILE,
+            "models/e1/e1_23dof.urdf",
         )
-        references = profile["references"]
+
+    def test_g1_natural_shoulder_yaw_references_are_mirrored(self) -> None:
+        references = load_robot_profile(robot="g1").natural_pose.references
         self.assertAlmostEqual(
             references["left_shoulder_yaw_joint"],
             -references["right_shoulder_yaw_joint"],
         )
-
-    def test_uniform_and_profile_nature_sources_are_mutually_exclusive(self) -> None:
-        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
-            internal_config_from_command(
-                _command(
-                    "e1",
-                    nature_weights=1.0,
-                    nature_config=NATURE_PROFILE_DIR / "e1_23dof.json",
-                ),
-            )
 
     def test_nature_weight_rejects_invalid_numbers(self) -> None:
         for value in (-0.1, float("inf"), float("nan"), True):
@@ -224,41 +188,35 @@ class NatureProfileTests(unittest.TestCase):
             ):
                 internal_config_from_command(_command("g1", nature_weights=value))
 
-    def test_nature_profile_rejects_mismatched_tables(self) -> None:
-        profile = json.loads(
-            (NATURE_PROFILE_DIR / "e1_23dof.json").read_text(encoding="utf-8"),
+    def test_robot_profile_rejects_natural_pose_joint_count_mismatch(self) -> None:
+        raw = json.loads(
+            (ROBOT_PROFILE_DIR / "e1_23dof.json").read_text(encoding="utf-8"),
         )
-        profile["weights"].pop("l_arm_shoulder_yaw_joint")
+        raw["natural_pose"]["joint_names"].pop()
         with tempfile.TemporaryDirectory() as temporary_dir:
             profile_path = Path(temporary_dir) / "e1_23dof.json"
-            profile_path.write_text(json.dumps(profile), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "exactly the same joint names"):
+            profile_path.write_text(json.dumps(raw), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "every actuated joint"):
                 internal_config_from_command(
-                    _command("e1_23dof", nature_config=profile_path),
+                    _command("e1_23dof", robot_profile=profile_path),
                 )
 
     def test_underscore_cli_aliases_are_supported(self) -> None:
-        uniform = tyro.cli(
-            RetargetingCommand,
-            args=["--orientation_weights", "0.5", "--nature_weights", "0.25"],
-        )
-        configured = tyro.cli(
+        command = tyro.cli(
             RetargetingCommand,
             args=[
-                "--orientation_config",
-                str(ORIENTATION_PROFILE_DIR / "g1.json"),
-                "--nature_config",
-                str(NATURE_PROFILE_DIR / "g1.json"),
+                "--robot_profile",
+                str(ROBOT_PROFILE_DIR / "g1.json"),
+                "--orientation_weights",
+                "0.5",
+                "--nature_weights",
+                "0.25",
             ],
         )
 
-        self.assertEqual(uniform.orientation_weights, 0.5)
-        self.assertEqual(uniform.nature_weights, 0.25)
-        self.assertEqual(
-            configured.orientation_config,
-            ORIENTATION_PROFILE_DIR / "g1.json",
-        )
-        self.assertEqual(configured.nature_config, NATURE_PROFILE_DIR / "g1.json")
+        self.assertEqual(command.robot_profile, ROBOT_PROFILE_DIR / "g1.json")
+        self.assertEqual(command.orientation_weights, 0.5)
+        self.assertEqual(command.nature_weights, 0.25)
 
 
 class NatureObjectiveTests(unittest.TestCase):
@@ -314,7 +272,10 @@ class NatureObjectiveTests(unittest.TestCase):
                 q_locked=qpos,
                 q_a_n_last=qpos[retargeter.q_a_indices],
                 q_t_last=qpos,
-                target_laplacian=np.zeros((len(robot_keys), 3), dtype=np.float64),
+                target_laplacian=np.zeros(
+                    (len(robot_keys), 3),
+                    dtype=np.float64,
+                ),
                 adj_list=[[] for _ in robot_keys],
                 obj_pts_local=np.empty((0, 3), dtype=np.float64),
                 foot_sticking={"left": False, "right": False},

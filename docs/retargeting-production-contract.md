@@ -65,12 +65,12 @@ through its Layers tab.
 
 ## Orientation contract
 
-Orientation loss is disabled by default. `--orientation_weights WEIGHT` assigns one
-finite non-negative weight to every reviewed mapping. A robot-specific JSON
-profile passed with `--orientation_config` instead contains complete tables for every orientation-capable public
+Every concrete robot has one JSON in `examples/robot_profiles`. Its orientation
+section contains the complete tables for every orientation-capable public
 dataset and assigns weights by human keypoint or robot-link alias. The current
-dataset selects exactly one table; a zero weight disables that mapping's loss.
-The two options are mutually exclusive. Source data without reliable
+dataset selects one table, and `--orientation-tracking True` enables it.
+`--orientation_weights WEIGHT` overrides every reviewed mapping with one finite
+non-negative value. A zero weight disables that mapping's loss. Source data without reliable
 orientations remains valid for position-only retargeting and fails clearly if
 orientation loss is explicitly requested.
 
@@ -82,13 +82,11 @@ inspection.
 
 ## Natural-posture contract
 
-Natural-posture regularization is disabled by default. `--nature_weights
-WEIGHT` loads the selected robot's fixed reference angles from
-`examples/nature_weights` and assigns the same finite non-negative weight to
-every actuated joint. `--nature_config` instead accepts a robot-matching JSON
-file, or a directory containing the three corresponding files, with direct
-per-joint references and absolute weights. The two options are mutually
-exclusive, and zero removes a joint from the loss.
+The selected file in `examples/robot_profiles` also stores fixed natural-pose
+references and absolute per-joint weights. `--natural-pose-tracking True`
+enables that table, while `--nature_weights WEIGHT` overrides every actuated
+joint with the same finite non-negative value. Zero removes a joint from the
+loss.
 
 The SQP objective measures candidate joint angles against fixed natural-pose
 references rather than the preceding frame. Active joints are initialized to

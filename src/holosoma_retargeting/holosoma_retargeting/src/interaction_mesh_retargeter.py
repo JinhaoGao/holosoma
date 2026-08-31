@@ -17,7 +17,6 @@ import trimesh
 import viser  # type: ignore[import-not-found]
 import yourdfpy  # type: ignore[import-untyped]
 from scipy import sparse as sp  # type: ignore[import-untyped]
-from scipy.optimize import least_squares  # type: ignore[import-untyped]
 from scipy.spatial.transform import Rotation  # type: ignore[import-untyped]
 from tqdm import tqdm
 from viser.extras import ViserUrdf  # type: ignore[import-not-found]
@@ -33,11 +32,8 @@ from holosoma_retargeting.data_utils.hand_skeleton import build_hand_visualizati
 from holosoma_retargeting.foot_contact import FootContactPlan, FootContactState
 from holosoma_retargeting.shoulder_direction import (
     ShoulderSideSpec,
-    deterministic_seed_fractions,
     direction_error_angle,
     normalize_vector,
-    normalized_limit_barrier,
-    second_order_candidate_path,
     unit_direction_jacobian,
 )
 
@@ -376,18 +372,11 @@ class InteractionMeshRetargeter:
         self,
         config: ShoulderDirectionConfig | None,
     ) -> None:
-        """Discover supported upper-limb chains and validate planner settings."""
+        """Discover supported upper-limb chains and validate direction weights."""
 
         resolved = config or ShoulderDirectionConfig()
         numeric_weights = {
             "direction_weight": float(resolved.direction_weight),
-            "branch_weight": float(resolved.branch_weight),
-            "forearm_selection_weight": float(resolved.forearm_selection_weight),
-            "joint_limit_weight": float(resolved.joint_limit_weight),
-            "velocity_weight": float(resolved.velocity_weight),
-            "acceleration_weight": float(resolved.acceleration_weight),
-            "reference_tracking_weight": float(resolved.reference_tracking_weight),
-            "joint_reference_weight": float(resolved.joint_reference_weight),
             "wrist_axis_weight_scale": float(resolved.wrist_axis_weight_scale),
         }
         invalid_weights = {
@@ -400,47 +389,12 @@ class InteractionMeshRetargeter:
                 "Shoulder direction weights must be finite and non-negative: "
                 f"{invalid_weights}",
             )
-        if int(resolved.candidate_count) < 2:
-            raise ValueError("Shoulder direction candidate_count must be at least two")
-        if int(resolved.seed_count) < int(resolved.candidate_count):
-            raise ValueError("Shoulder direction seed_count must cover candidate_count")
-        if int(resolved.global_seed_stride) <= 0:
-            raise ValueError("Shoulder global seed stride must be positive")
-        if (
-            int(resolved.refresh_candidate_count) <= 0
-            or int(resolved.refresh_candidate_count) >= int(resolved.candidate_count)
-        ):
-            raise ValueError(
-                "Shoulder refresh_candidate_count must lie between zero and candidate_count",
-            )
-        if (
-            not np.isfinite(resolved.max_candidate_step_rad)
-            or resolved.max_candidate_step_rad <= 0.0
-            or not np.isfinite(resolved.max_frame_step_rad)
-            or resolved.max_frame_step_rad <= 0.0
-        ):
-            raise ValueError("Shoulder joint-step limits must be finite and positive")
-        if int(resolved.max_nfev) <= 0:
-            raise ValueError("Shoulder direction max_nfev must be positive")
-        if (
-            not np.isfinite(resolved.direction_tolerance_rad)
-            or resolved.direction_tolerance_rad <= 0.0
-            or resolved.direction_tolerance_rad >= np.pi
-        ):
-            raise ValueError(
-                "Shoulder direction tolerance must lie strictly between zero and pi",
-            )
 
         self.shoulder_direction_config = resolved
         self.shoulder_direction_enabled = bool(resolved.enable)
         self.shoulder_side_specs: tuple[ShoulderSideSpec, ...] = ()
         self.shoulder_joint_qpos_addresses = np.empty((0, 3), dtype=np.int32)
         self.shoulder_joint_reduced_indices = np.empty((0, 3), dtype=np.int32)
-        self.shoulder_joint_lower = np.empty((0, 3), dtype=np.float64)
-        self.shoulder_joint_upper = np.empty((0, 3), dtype=np.float64)
-        self.shoulder_elbow_qpos_addresses = np.empty((0,), dtype=np.int32)
-        self.shoulder_elbow_lower = np.empty((0,), dtype=np.float64)
-        self.shoulder_elbow_upper = np.empty((0,), dtype=np.float64)
         self.shoulder_wrist_reduced_indices = np.empty((0, 3), dtype=np.int32)
         self.shoulder_wrist_dof_counts = np.empty((0,), dtype=np.int32)
         self.shoulder_wrist_orientation_indices = np.empty((0,), dtype=np.int32)
@@ -449,7 +403,6 @@ class InteractionMeshRetargeter:
         self.shoulder_human_torso_origin_name = ""
         self.shoulder_human_torso_side_names: tuple[str, str] = ()
         self.shoulder_torso_link_name = ""
-        self.shoulder_plan: dict[str, np.ndarray] = {}
         if not self.shoulder_direction_enabled:
             return
 
@@ -622,11 +575,6 @@ class InteractionMeshRetargeter:
         }
         shoulder_qpos: list[list[int]] = []
         shoulder_reduced: list[list[int]] = []
-        shoulder_lower: list[list[float]] = []
-        shoulder_upper: list[list[float]] = []
-        elbow_qpos: list[int] = []
-        elbow_lower: list[float] = []
-        elbow_upper: list[float] = []
         wrist_reduced: list[list[int]] = []
         wrist_dof_counts: list[int] = []
         wrist_orientation_indices: list[int] = []
@@ -638,8 +586,6 @@ class InteractionMeshRetargeter:
         for spec in specs:
             side_qpos: list[int] = []
             side_reduced: list[int] = []
-            side_lower: list[float] = []
-            side_upper: list[float] = []
             for joint_name in spec.shoulder_joint_names:
                 joint_id = mujoco.mj_name2id(
                     self.robot_model,
@@ -653,21 +599,8 @@ class InteractionMeshRetargeter:
                     )
                 side_qpos.append(qpos_address)
                 side_reduced.append(active_index_by_qpos[qpos_address])
-                side_lower.append(float(self.robot_model.jnt_range[joint_id, 0]))
-                side_upper.append(float(self.robot_model.jnt_range[joint_id, 1]))
-            elbow_id = mujoco.mj_name2id(
-                self.robot_model,
-                mujoco.mjtObj.mjOBJ_JOINT,
-                spec.elbow_joint_name,
-            )
-            elbow_address = int(self.robot_model.jnt_qposadr[elbow_id])
             shoulder_qpos.append(side_qpos)
             shoulder_reduced.append(side_reduced)
-            shoulder_lower.append(side_lower)
-            shoulder_upper.append(side_upper)
-            elbow_qpos.append(elbow_address)
-            elbow_lower.append(float(self.robot_model.jnt_range[elbow_id, 0]))
-            elbow_upper.append(float(self.robot_model.jnt_range[elbow_id, 1]))
 
             if not spec.wrist_joint_names:
                 wrist_reduced.append([-1, -1, -1])
@@ -722,11 +655,6 @@ class InteractionMeshRetargeter:
             shoulder_reduced,
             dtype=np.int32,
         )
-        self.shoulder_joint_lower = np.asarray(shoulder_lower, dtype=np.float64)
-        self.shoulder_joint_upper = np.asarray(shoulder_upper, dtype=np.float64)
-        self.shoulder_elbow_qpos_addresses = np.asarray(elbow_qpos, dtype=np.int32)
-        self.shoulder_elbow_lower = np.asarray(elbow_lower, dtype=np.float64)
-        self.shoulder_elbow_upper = np.asarray(elbow_upper, dtype=np.float64)
         self.shoulder_wrist_reduced_indices = np.asarray(
             wrist_reduced,
             dtype=np.int32,
@@ -1060,13 +988,12 @@ class InteractionMeshRetargeter:
     def _prepare_shoulder_direction_targets(
         self,
         human_joint_motions: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Express human upper-arm and forearm directions in a torso basis."""
+    ) -> np.ndarray:
+        """Express human upper-arm directions in a torso-local basis."""
 
         frame_count = int(human_joint_motions.shape[0])
         if not self.shoulder_direction_enabled:
-            empty = np.empty((frame_count, 0, 3), dtype=np.float64)
-            return empty, empty.copy()
+            return np.empty((frame_count, 0, 3), dtype=np.float64)
         torso_origin_index = self.demo_joints.index(
             self.shoulder_human_torso_origin_name,
         )
@@ -1077,7 +1004,6 @@ class InteractionMeshRetargeter:
             self.shoulder_human_torso_side_names[1],
         )
         upper_targets = np.empty((frame_count, 2, 3), dtype=np.float64)
-        forearm_targets = np.empty_like(upper_targets)
         for frame in range(frame_count):
             positions = human_joint_motions[frame]
             basis = self._anatomical_basis(
@@ -1090,16 +1016,11 @@ class InteractionMeshRetargeter:
                 forearm = positions[
                     self.demo_joints.index(spec.human_forearm_name)
                 ]
-                hand = positions[self.demo_joints.index(spec.human_hand_name)]
                 upper_targets[frame, side_index] = basis.T @ normalize_vector(
                     forearm - arm,
                     label=f"{spec.human_arm_name} segment at frame {frame}",
                 )
-                forearm_targets[frame, side_index] = basis.T @ normalize_vector(
-                    hand - forearm,
-                    label=f"{spec.human_forearm_name} segment at frame {frame}",
-                )
-        return upper_targets, forearm_targets
+        return upper_targets
 
     def _robot_anatomical_basis_from_forward_data(self) -> np.ndarray:
         """Build the robot torso basis after ``mj_forward`` has been called."""
@@ -1241,542 +1162,6 @@ class InteractionMeshRetargeter:
             direction_array,
             np.asarray(jacobians, dtype=np.float64).reshape(2, 3, self.nq_a),
         )
-
-    def _project_shoulder_candidate(
-        self,
-        q_context: np.ndarray,
-        *,
-        side_index: int,
-        target_direction: np.ndarray,
-        seed: np.ndarray,
-        max_step_rad: float | None = None,
-    ) -> tuple[np.ndarray, float]:
-        """Project one seed onto a torso-local upper-arm direction manifold."""
-
-        lower = self.shoulder_joint_lower[side_index]
-        upper = self.shoulder_joint_upper[side_index]
-        joint_range = upper - lower
-        qpos_addresses = self.shoulder_joint_qpos_addresses[side_index]
-        reduced_indices = self.shoulder_joint_reduced_indices[side_index]
-        clipped_seed = np.clip(np.asarray(seed, dtype=np.float64), lower, upper)
-        projection_lower = lower
-        projection_upper = upper
-        if max_step_rad is not None:
-            step = float(max_step_rad)
-            if not np.isfinite(step) or step <= 0.0:
-                raise ValueError("Shoulder projection step must be finite and positive")
-            projection_lower = np.maximum(lower, clipped_seed - 0.99 * step)
-            projection_upper = np.minimum(upper, clipped_seed + 0.99 * step)
-        target = normalize_vector(target_direction, label="target upper arm")
-        anchor_scale = np.sqrt(1e-3)
-        cache_x: np.ndarray | None = None
-        cache_direction: np.ndarray | None = None
-        cache_jacobian: np.ndarray | None = None
-
-        def _evaluate(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-            nonlocal cache_x, cache_direction, cache_jacobian
-            if cache_x is not None and np.array_equal(cache_x, values):
-                if cache_direction is None or cache_jacobian is None:
-                    raise RuntimeError("Incomplete shoulder projection cache")
-                return cache_direction, cache_jacobian
-            q = np.asarray(q_context, dtype=np.float64).copy()
-            q[qpos_addresses] = values
-            directions, jacobians = self._get_shoulder_direction_data(
-                q,
-                with_jacobians=True,
-            )
-            if jacobians is None:
-                raise RuntimeError("Expected shoulder direction Jacobians")
-            cache_x = np.asarray(values, dtype=np.float64).copy()
-            cache_direction = directions[side_index]
-            cache_jacobian = jacobians[side_index][:, reduced_indices]
-            return cache_direction, cache_jacobian
-
-        def _residual(values: np.ndarray) -> np.ndarray:
-            direction, _ = _evaluate(values)
-            return np.concatenate(
-                (
-                    direction - target,
-                    anchor_scale * (values - clipped_seed) / joint_range,
-                ),
-            )
-
-        def _jacobian(values: np.ndarray) -> np.ndarray:
-            _, direction_jacobian = _evaluate(values)
-            return np.vstack(
-                (
-                    direction_jacobian,
-                    anchor_scale * np.diag(1.0 / joint_range),
-                ),
-            )
-
-        result = least_squares(
-            _residual,
-            clipped_seed,
-            jac=_jacobian,
-            bounds=(projection_lower, projection_upper),
-            max_nfev=int(self.shoulder_direction_config.max_nfev),
-            xtol=1e-9,
-            ftol=1e-9,
-            gtol=1e-9,
-        )
-        projected = np.asarray(result.x, dtype=np.float64)
-        direction, _ = _evaluate(projected)
-        return projected, direction_error_angle(direction, target)
-
-    def _forearm_direction_after_forward(
-        self,
-        side_index: int,
-        basis: np.ndarray,
-    ) -> np.ndarray:
-        """Return one torso-local robot forearm direction after FK."""
-
-        spec = self.shoulder_side_specs[side_index]
-        elbow_id = mujoco.mj_name2id(
-            self.robot_model,
-            mujoco.mjtObj.mjOBJ_BODY,
-            spec.elbow_link_name,
-        )
-        hand_id = mujoco.mj_name2id(
-            self.robot_model,
-            mujoco.mjtObj.mjOBJ_BODY,
-            spec.hand_link_name,
-        )
-        return basis.T @ normalize_vector(
-            self.robot_data.xpos[hand_id] - self.robot_data.xpos[elbow_id],
-            label="robot forearm",
-        )
-
-    def _fit_candidate_elbow(
-        self,
-        q_context: np.ndarray,
-        *,
-        side_index: int,
-        shoulder_values: np.ndarray,
-        target_forearm_direction: np.ndarray,
-    ) -> tuple[float, float]:
-        """Fit elbow pitch for branch scoring without adding an SQP task."""
-
-        q = np.asarray(q_context, dtype=np.float64).copy()
-        q[self.shoulder_joint_qpos_addresses[side_index]] = shoulder_values
-        elbow_address = int(self.shoulder_elbow_qpos_addresses[side_index])
-        lower = float(self.shoulder_elbow_lower[side_index])
-        upper = float(self.shoulder_elbow_upper[side_index])
-        seed = float(np.clip(q[elbow_address], lower, upper))
-        target = normalize_vector(
-            target_forearm_direction,
-            label="target forearm",
-        )
-
-        def _residual(value: np.ndarray) -> np.ndarray:
-            q[elbow_address] = float(value[0])
-            self.robot_data.qpos[:] = q
-            mujoco.mj_forward(self.robot_model, self.robot_data)
-            basis = self._robot_anatomical_basis_from_forward_data()
-            return self._forearm_direction_after_forward(side_index, basis) - target
-
-        result = least_squares(
-            _residual,
-            np.asarray([seed], dtype=np.float64),
-            bounds=(np.asarray([lower]), np.asarray([upper])),
-            max_nfev=max(12, int(self.shoulder_direction_config.max_nfev // 2)),
-            xtol=1e-8,
-            ftol=1e-8,
-            gtol=1e-8,
-        )
-        elbow = float(result.x[0])
-        residual = _residual(np.asarray([elbow], dtype=np.float64))
-        actual = normalize_vector(
-            target + residual,
-            label="fitted robot forearm",
-        )
-        return elbow, direction_error_angle(actual, target)
-
-    @staticmethod
-    def _diverse_candidate_indices(
-        states: np.ndarray,
-        node_costs: np.ndarray,
-        joint_ranges: np.ndarray,
-        count: int,
-        required_indices: np.ndarray | None = None,
-    ) -> np.ndarray:
-        """Keep a low-cost sample while preserving manifold coverage."""
-
-        if len(states) <= count:
-            return np.arange(len(states), dtype=np.int32)
-        normalized = np.asarray(states, dtype=np.float64) / joint_ranges[None, :]
-        costs = np.asarray(node_costs, dtype=np.float64)
-        required = (
-            np.empty((0,), dtype=np.int32)
-            if required_indices is None
-            else np.unique(np.asarray(required_indices, dtype=np.int32))
-        )
-        if np.any(required < 0) or np.any(required >= len(states)):
-            raise ValueError("required candidate indices are out of range")
-        if len(required) > count:
-            raise ValueError("required candidates exceed the retained candidate count")
-        selected = [int(index) for index in required]
-        if not selected:
-            selected = [int(np.argmin(costs))]
-        elif len(selected) < count:
-            minimum_cost_index = int(np.argmin(costs))
-            if minimum_cost_index not in selected:
-                selected.append(minimum_cost_index)
-        remaining = set(range(len(states)))
-        remaining.difference_update(selected)
-        cost_scale = max(float(np.ptp(costs)), 1e-8)
-        while remaining and len(selected) < count:
-            best_index = -1
-            best_score = -np.inf
-            for candidate in remaining:
-                distance = min(
-                    float(
-                        np.linalg.norm(
-                            normalized[candidate] - normalized[chosen],
-                        ),
-                    )
-                    for chosen in selected
-                )
-                score = distance - 0.05 * (
-                    float(costs[candidate] - np.min(costs)) / cost_scale
-                )
-                if score > best_score:
-                    best_index = candidate
-                    best_score = score
-            selected.append(best_index)
-            remaining.remove(best_index)
-        return np.asarray(selected, dtype=np.int32)
-
-    def _plan_shoulder_direction_references(
-        self,
-        q_initial: np.ndarray,
-        upper_targets: np.ndarray,
-        forearm_targets: np.ndarray,
-    ) -> dict[str, np.ndarray]:
-        """Sample per-frame direction manifolds and select continuous branches."""
-
-        frame_count = int(upper_targets.shape[0])
-        side_count = len(self.shoulder_side_specs)
-        candidate_count = int(self.shoulder_direction_config.candidate_count)
-        candidate_q = np.full(
-            (frame_count, side_count, candidate_count, 3),
-            np.nan,
-            dtype=np.float64,
-        )
-        candidate_elbow = np.full(
-            (frame_count, side_count, candidate_count),
-            np.nan,
-            dtype=np.float64,
-        )
-        candidate_node_cost = np.full(
-            (frame_count, side_count, candidate_count),
-            np.inf,
-            dtype=np.float64,
-        )
-        candidate_direction_error = np.full_like(candidate_node_cost, np.nan)
-        candidate_forearm_error = np.full_like(candidate_node_cost, np.nan)
-        candidate_valid = np.zeros(
-            (frame_count, side_count, candidate_count),
-            dtype=bool,
-        )
-        q_context = np.asarray(q_initial, dtype=np.float64).copy()
-        seed_fractions = deterministic_seed_fractions(
-            int(self.shoulder_direction_config.seed_count),
-            3,
-        )
-
-        for side_index in range(side_count):
-            lower = self.shoulder_joint_lower[side_index]
-            upper = self.shoulder_joint_upper[side_index]
-            joint_range = upper - lower
-            elbow_range = float(
-                self.shoulder_elbow_upper[side_index]
-                - self.shoulder_elbow_lower[side_index],
-            )
-            fixed_seeds = lower[None, :] + seed_fractions * joint_range[None, :]
-            center = 0.5 * (lower + upper)
-            initial = q_context[self.shoulder_joint_qpos_addresses[side_index]]
-            previous_candidates = np.empty((0, 3), dtype=np.float64)
-            for frame in tqdm(
-                range(frame_count),
-                desc=f"Planning {self.shoulder_side_specs[side_index].human_arm_name}",
-                leave=False,
-            ):
-                seeds = np.vstack((previous_candidates, initial, center))
-                if frame % int(
-                    self.shoulder_direction_config.global_seed_stride,
-                ) == 0:
-                    # A direction manifold can fold, split at a singularity, or
-                    # lose a locally propagated sample. Refreshing it globally
-                    # prevents an early local collapse from erasing a branch for
-                    # the rest of the sequence.
-                    seeds = np.vstack((seeds, fixed_seeds))
-
-                candidate_records: list[tuple[np.ndarray, float, bool]] = []
-                continuation_seed_count = len(previous_candidates)
-                for seed_index, seed in enumerate(seeds):
-                    is_continuation = seed_index < continuation_seed_count
-                    projected, direction_error = self._project_shoulder_candidate(
-                        q_context,
-                        side_index=side_index,
-                        target_direction=upper_targets[frame, side_index],
-                        seed=seed,
-                        max_step_rad=(
-                            float(
-                                self.shoulder_direction_config.max_candidate_step_rad,
-                            )
-                            if is_continuation
-                            else None
-                        ),
-                    )
-                    duplicate_index = next(
-                        (
-                            index
-                            for index, (existing, _, _) in enumerate(candidate_records)
-                            if np.linalg.norm((projected - existing) / joint_range)
-                            < 0.035
-                        ),
-                        None,
-                    )
-                    if duplicate_index is not None:
-                        if is_continuation:
-                            existing, existing_error, _ = candidate_records[
-                                duplicate_index
-                            ]
-                            candidate_records[duplicate_index] = (
-                                existing,
-                                existing_error,
-                                True,
-                            )
-                        continue
-                    candidate_records.append(
-                        (projected, direction_error, is_continuation),
-                    )
-                if not candidate_records:
-                    raise RuntimeError(
-                        f"No shoulder candidates were produced at frame {frame}",
-                    )
-
-                record_states: list[np.ndarray] = []
-                record_node_costs: list[float] = []
-                record_elbows: list[float] = []
-                record_direction_errors: list[float] = []
-                record_forearm_errors: list[float] = []
-                record_is_continuation: list[bool] = []
-                for shoulder_values, direction_error, is_continuation in candidate_records:
-                    elbow, forearm_error = self._fit_candidate_elbow(
-                        q_context,
-                        side_index=side_index,
-                        shoulder_values=shoulder_values,
-                        target_forearm_direction=forearm_targets[frame, side_index],
-                    )
-                    state = np.concatenate(
-                        (shoulder_values, np.asarray([elbow], dtype=np.float64)),
-                    )
-                    state_lower = np.concatenate(
-                        (lower, [self.shoulder_elbow_lower[side_index]]),
-                    )
-                    state_upper = np.concatenate(
-                        (upper, [self.shoulder_elbow_upper[side_index]]),
-                    )
-                    node_cost = (
-                        np.square(
-                            direction_error
-                            / float(
-                                self.shoulder_direction_config.direction_tolerance_rad,
-                            ),
-                        )
-                        + float(
-                            self.shoulder_direction_config.forearm_selection_weight,
-                        )
-                        * np.square(forearm_error)
-                        + float(self.shoulder_direction_config.joint_limit_weight)
-                        * normalized_limit_barrier(
-                            state,
-                            state_lower,
-                            state_upper,
-                        )
-                    )
-                    record_states.append(state)
-                    record_node_costs.append(float(node_cost))
-                    record_elbows.append(elbow)
-                    record_direction_errors.append(direction_error)
-                    record_forearm_errors.append(forearm_error)
-                    record_is_continuation.append(is_continuation)
-
-                state_array = np.asarray(record_states, dtype=np.float64)
-                node_array = np.asarray(record_node_costs, dtype=np.float64)
-                state_ranges = np.concatenate((joint_range, [elbow_range]))
-                continuation_indices = np.flatnonzero(record_is_continuation)
-                non_continuation_count = len(state_array) - len(
-                    continuation_indices,
-                )
-                reserved_refresh_slots = min(
-                    int(self.shoulder_direction_config.refresh_candidate_count),
-                    non_continuation_count,
-                )
-                continuation_limit = candidate_count - reserved_refresh_slots
-                if len(continuation_indices) > continuation_limit:
-                    reduced_continuation = self._diverse_candidate_indices(
-                        state_array[continuation_indices],
-                        node_array[continuation_indices],
-                        state_ranges,
-                        continuation_limit,
-                    )
-                    continuation_indices = continuation_indices[
-                        reduced_continuation
-                    ]
-                chosen = self._diverse_candidate_indices(
-                    state_array,
-                    node_array,
-                    state_ranges,
-                    candidate_count,
-                    required_indices=continuation_indices,
-                )
-                count = len(chosen)
-                candidate_q[frame, side_index, :count] = state_array[chosen, :3]
-                candidate_elbow[frame, side_index, :count] = state_array[chosen, 3]
-                candidate_node_cost[frame, side_index, :count] = node_array[chosen]
-                candidate_direction_error[frame, side_index, :count] = np.asarray(
-                    record_direction_errors,
-                    dtype=np.float64,
-                )[chosen]
-                candidate_forearm_error[frame, side_index, :count] = np.asarray(
-                    record_forearm_errors,
-                    dtype=np.float64,
-                )[chosen]
-                candidate_valid[frame, side_index, :count] = True
-                previous_candidates = state_array[chosen, :3]
-
-        selected_indices = np.empty((frame_count, side_count), dtype=np.int32)
-        raw_reference_q = np.empty((frame_count, side_count, 3), dtype=np.float64)
-        reference_q = np.empty_like(raw_reference_q)
-        reference_elbow = np.empty((frame_count, side_count), dtype=np.float64)
-        for side_index in range(side_count):
-            states = np.concatenate(
-                (
-                    candidate_q[:, side_index],
-                    candidate_elbow[:, side_index, :, None],
-                ),
-                axis=-1,
-            )
-            valid = candidate_valid[:, side_index]
-            safe_states = np.where(valid[..., None], states, 0.0)
-            joint_ranges = np.concatenate(
-                (
-                    self.shoulder_joint_upper[side_index]
-                    - self.shoulder_joint_lower[side_index],
-                    [
-                        self.shoulder_elbow_upper[side_index]
-                        - self.shoulder_elbow_lower[side_index],
-                    ],
-                ),
-            )
-            path = second_order_candidate_path(
-                safe_states,
-                candidate_node_cost[:, side_index],
-                valid,
-                joint_ranges=joint_ranges,
-                velocity_weight=float(self.shoulder_direction_config.velocity_weight),
-                acceleration_weight=float(
-                    self.shoulder_direction_config.acceleration_weight,
-                ),
-            )
-            selected_indices[:, side_index] = path
-            frame_indices = np.arange(frame_count)
-            raw_reference_q[:, side_index] = candidate_q[
-                frame_indices,
-                side_index,
-                path,
-            ]
-            reference_q[:, side_index] = self._smooth_shoulder_reference(
-                raw_reference_q[:, side_index],
-                side_index=side_index,
-            )
-            reference_elbow[:, side_index] = candidate_elbow[
-                frame_indices,
-                side_index,
-                path,
-            ]
-
-        return {
-            "target_directions": upper_targets.astype(np.float32),
-            "target_forearm_directions": forearm_targets.astype(np.float32),
-            "candidate_joint_positions": candidate_q.astype(np.float32),
-            "candidate_elbow_positions": candidate_elbow.astype(np.float32),
-            "candidate_node_costs": candidate_node_cost.astype(np.float32),
-            "candidate_direction_errors_rad": candidate_direction_error.astype(
-                np.float32,
-            ),
-            "candidate_forearm_errors_rad": candidate_forearm_error.astype(
-                np.float32,
-            ),
-            "candidate_valid": candidate_valid,
-            "selected_candidate_indices": selected_indices,
-            "raw_reference_joint_positions": raw_reference_q,
-            "reference_joint_positions": reference_q,
-            "reference_elbow_positions": reference_elbow,
-        }
-
-    def _smooth_shoulder_reference(
-        self,
-        raw_reference: np.ndarray,
-        *,
-        side_index: int,
-    ) -> np.ndarray:
-        """Spread discrete branch changes over time with one bounded convex QP."""
-
-        raw = np.asarray(raw_reference, dtype=np.float64)
-        if raw.ndim != 2 or raw.shape[1] != 3 or len(raw) == 0:
-            raise ValueError("Raw shoulder reference must have shape (frames, 3)")
-        lower = self.shoulder_joint_lower[side_index]
-        upper = self.shoulder_joint_upper[side_index]
-        joint_range = upper - lower
-        trajectory = cp.Variable(raw.shape, name=f"shoulder_reference_{side_index}")
-        normalized_tracking = cp.multiply(
-            1.0 / joint_range[None, :],
-            trajectory - raw,
-        )
-        objective_terms = [
-            float(self.shoulder_direction_config.reference_tracking_weight)
-            * cp.sum_squares(normalized_tracking),
-        ]
-        constraints = [trajectory >= lower[None, :], trajectory <= upper[None, :]]
-        if len(raw) > 1:
-            velocity = cp.multiply(
-                1.0 / joint_range[None, :],
-                trajectory[1:] - trajectory[:-1],
-            )
-            objective_terms.append(
-                float(self.shoulder_direction_config.velocity_weight)
-                * cp.sum_squares(velocity),
-            )
-            step_limit = float(self.shoulder_direction_config.max_frame_step_rad)
-            constraints.extend(
-                (
-                    trajectory[1:] - trajectory[:-1] <= step_limit,
-                    trajectory[1:] - trajectory[:-1] >= -step_limit,
-                ),
-            )
-        if len(raw) > 2:
-            acceleration = cp.multiply(
-                1.0 / joint_range[None, :],
-                trajectory[2:] - 2.0 * trajectory[1:-1] + trajectory[:-2],
-            )
-            objective_terms.append(
-                float(self.shoulder_direction_config.acceleration_weight)
-                * cp.sum_squares(acceleration),
-            )
-        problem = cp.Problem(cp.Minimize(cp.sum(objective_terms)), constraints)
-        problem.solve(solver=cp.CLARABEL)
-        if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
-            raise RuntimeError(
-                f"Shoulder reference smoothing failed with status {problem.status}",
-            )
-        smoothed = np.asarray(trajectory.value, dtype=np.float64)
-        if smoothed.shape != raw.shape or not np.isfinite(smoothed).all():
-            raise RuntimeError("Shoulder reference smoothing returned invalid values")
-        return smoothed
 
     def _init_natural_pose_regularization(
         self,
@@ -3511,18 +2896,8 @@ class InteractionMeshRetargeter:
             and orientation_target_matrices.shape[1:] != (0, 3, 3)
             else None
         )
-        (
-            shoulder_direction_targets,
-            shoulder_forearm_targets,
-        ) = self._prepare_shoulder_direction_targets(human_joint_motions)
-        self.shoulder_plan = (
-            self._plan_shoulder_direction_references(
-                q,
-                shoulder_direction_targets,
-                shoulder_forearm_targets,
-            )
-            if self.shoulder_direction_enabled
-            else {}
+        shoulder_direction_targets = self._prepare_shoulder_direction_targets(
+            human_joint_motions,
         )
 
         tetrahedra = []
@@ -3551,7 +2926,6 @@ class InteractionMeshRetargeter:
         shoulder_direction_errors_rad: list[np.ndarray] = []
         shoulder_actual_joint_positions: list[np.ndarray] = []
         shoulder_direction_singular_values: list[np.ndarray] = []
-        shoulder_nullspace_reference_errors: list[np.ndarray] = []
         root_stability_actual_positions: list[np.ndarray] = []
         root_stability_actual_matrices: list[np.ndarray] = []
         root_stability_position_errors: list[float] = []
@@ -3666,11 +3040,6 @@ class InteractionMeshRetargeter:
                     orientation_target_matrices=orientation_target_matrices[i],
                     foot_contact_state=foot_contact_plan.frames[i],
                     shoulder_direction_targets=shoulder_direction_targets[i],
-                    shoulder_reference_joint_positions=(
-                        self.shoulder_plan["reference_joint_positions"][i]
-                        if self.shoulder_direction_enabled
-                        else None
-                    ),
                     root_stability_target_position=(
                         root_stability_target_positions[i]
                         if self.root_stability_enabled
@@ -3768,20 +3137,13 @@ class InteractionMeshRetargeter:
                         raise RuntimeError("Expected final shoulder direction Jacobians")
                     actual_joint_positions = q[self.shoulder_joint_qpos_addresses]
                     singular_values = np.empty((2, 3), dtype=np.float64)
-                    nullspace_errors = np.empty((2,), dtype=np.float64)
                     direction_errors = np.empty((2,), dtype=np.float64)
-                    reference = self.shoulder_plan["reference_joint_positions"][i]
                     for side_index in range(2):
                         reduced = self.shoulder_joint_reduced_indices[side_index]
                         local_jacobian = direction_jacobians[side_index][:, reduced]
-                        _, singular_values[side_index], right_vectors = np.linalg.svd(
+                        singular_values[side_index] = np.linalg.svd(
                             local_jacobian,
-                            full_matrices=True,
-                        )
-                        nullspace = right_vectors[-1]
-                        nullspace_errors[side_index] = float(
-                            nullspace
-                            @ (actual_joint_positions[side_index] - reference[side_index]),
+                            compute_uv=False,
                         )
                         direction_errors[side_index] = direction_error_angle(
                             actual_directions[side_index],
@@ -3794,9 +3156,6 @@ class InteractionMeshRetargeter:
                     )
                     shoulder_direction_singular_values.append(
                         singular_values.astype(np.float32),
-                    )
-                    shoulder_nullspace_reference_errors.append(
-                        nullspace_errors.astype(np.float32),
                     )
                 if collect_interaction_mesh:
                     if source_vertices_w is None:
@@ -4145,12 +3504,7 @@ class InteractionMeshRetargeter:
                 dtype=str,
             ).reshape(-1, 3),
             "shoulder_direction_target_vectors": (
-                self.shoulder_plan["target_directions"]
-                if self.shoulder_direction_enabled
-                else np.empty((num_frames, 0, 3), dtype=np.float32)
-            ),
-            "shoulder_direction_target_forearm_vectors": (
-                self.shoulder_plan["target_forearm_directions"]
+                shoulder_direction_targets.astype(np.float32)
                 if self.shoulder_direction_enabled
                 else np.empty((num_frames, 0, 3), dtype=np.float32)
             ),
@@ -4169,82 +3523,13 @@ class InteractionMeshRetargeter:
                 if self.shoulder_direction_enabled
                 else np.empty((num_frames, 0, 3), dtype=np.float32)
             ),
-            "shoulder_direction_reference_joint_positions": (
-                self.shoulder_plan["reference_joint_positions"].astype(np.float32)
-                if self.shoulder_direction_enabled
-                else np.empty((num_frames, 0, 3), dtype=np.float32)
-            ),
-            "shoulder_direction_raw_reference_joint_positions": (
-                self.shoulder_plan["raw_reference_joint_positions"].astype(
-                    np.float32,
-                )
-                if self.shoulder_direction_enabled
-                else np.empty((num_frames, 0, 3), dtype=np.float32)
-            ),
-            "shoulder_direction_reference_elbow_positions": (
-                self.shoulder_plan["reference_elbow_positions"].astype(np.float32)
-                if self.shoulder_direction_enabled
-                else np.empty((num_frames, 0), dtype=np.float32)
-            ),
-            "shoulder_direction_candidate_joint_positions": (
-                self.shoulder_plan["candidate_joint_positions"]
-                if self.shoulder_direction_enabled
-                else np.empty((num_frames, 0, 0, 3), dtype=np.float32)
-            ),
-            "shoulder_direction_candidate_elbow_positions": (
-                self.shoulder_plan["candidate_elbow_positions"]
-                if self.shoulder_direction_enabled
-                else np.empty((num_frames, 0, 0), dtype=np.float32)
-            ),
-            "shoulder_direction_candidate_valid": (
-                self.shoulder_plan["candidate_valid"]
-                if self.shoulder_direction_enabled
-                else np.empty((num_frames, 0, 0), dtype=bool)
-            ),
-            "shoulder_direction_candidate_node_costs": (
-                self.shoulder_plan["candidate_node_costs"]
-                if self.shoulder_direction_enabled
-                else np.empty((num_frames, 0, 0), dtype=np.float32)
-            ),
-            "shoulder_direction_candidate_errors_rad": (
-                self.shoulder_plan["candidate_direction_errors_rad"]
-                if self.shoulder_direction_enabled
-                else np.empty((num_frames, 0, 0), dtype=np.float32)
-            ),
-            "shoulder_direction_candidate_forearm_errors_rad": (
-                self.shoulder_plan["candidate_forearm_errors_rad"]
-                if self.shoulder_direction_enabled
-                else np.empty((num_frames, 0, 0), dtype=np.float32)
-            ),
-            "shoulder_direction_selected_candidate_indices": (
-                self.shoulder_plan["selected_candidate_indices"]
-                if self.shoulder_direction_enabled
-                else np.empty((num_frames, 0), dtype=np.int32)
-            ),
             "shoulder_direction_singular_values": (
                 np.asarray(shoulder_direction_singular_values, dtype=np.float32)
                 if self.shoulder_direction_enabled
                 else np.empty((num_frames, 0, 3), dtype=np.float32)
             ),
-            "shoulder_direction_nullspace_reference_errors": (
-                np.asarray(shoulder_nullspace_reference_errors, dtype=np.float32)
-                if self.shoulder_direction_enabled
-                else np.empty((num_frames, 0), dtype=np.float32)
-            ),
             "shoulder_direction_weight": np.asarray(
                 float(self.shoulder_direction_config.direction_weight),
-            ),
-            "shoulder_direction_branch_weight": np.asarray(
-                float(self.shoulder_direction_config.branch_weight),
-            ),
-            "shoulder_direction_joint_reference_weight": np.asarray(
-                float(self.shoulder_direction_config.joint_reference_weight),
-            ),
-            "shoulder_direction_max_candidate_step_rad": np.asarray(
-                float(self.shoulder_direction_config.max_candidate_step_rad),
-            ),
-            "shoulder_direction_max_frame_step_rad": np.asarray(
-                float(self.shoulder_direction_config.max_frame_step_rad),
             ),
             "shoulder_wrist_axis_orientation_weights": (
                 self.shoulder_wrist_weights.astype(np.float64)
@@ -4545,7 +3830,6 @@ class InteractionMeshRetargeter:
         frame_idx: int = 0,
         orientation_target_matrices: np.ndarray | None = None,
         shoulder_direction_targets: np.ndarray | None = None,
-        shoulder_reference_joint_positions: np.ndarray | None = None,
         root_stability_target_position: np.ndarray | None = None,
         root_stability_target_matrix: np.ndarray | None = None,
         root_stability_bootstrap: bool = False,
@@ -4858,20 +4142,12 @@ class InteractionMeshRetargeter:
         if self.shoulder_direction_enabled:
             if shoulder_direction_targets is None:
                 raise ValueError("Shoulder direction tracking requires frame targets")
-            if shoulder_reference_joint_positions is None:
-                raise ValueError("Shoulder direction tracking requires branch references")
             direction_targets = np.asarray(
                 shoulder_direction_targets,
                 dtype=np.float64,
             )
-            references = np.asarray(
-                shoulder_reference_joint_positions,
-                dtype=np.float64,
-            )
-            if direction_targets.shape != (2, 3) or references.shape != (2, 3):
-                raise ValueError(
-                    "Shoulder frame targets and references must both have shape (2, 3)",
-                )
+            if direction_targets.shape != (2, 3):
+                raise ValueError("Shoulder frame targets must have shape (2, 3)")
             current_directions, direction_jacobians = self._get_shoulder_direction_data(
                 q,
                 with_jacobians=True,
@@ -4884,36 +4160,6 @@ class InteractionMeshRetargeter:
                 obj_terms.append(
                     float(self.shoulder_direction_config.direction_weight)
                     * cp.sum_squares(direction_jacobian @ dqa - direction_error),
-                )
-                reduced_indices = self.shoulder_joint_reduced_indices[side_index]
-                local_jacobian = direction_jacobian[:, reduced_indices]
-                _, _, right_vectors = np.linalg.svd(
-                    local_jacobian,
-                    full_matrices=True,
-                )
-                nullspace = right_vectors[-1]
-                candidate = dqa[reduced_indices] + q_a_n_last[reduced_indices]
-                if not init_t:
-                    previous = q_t_last[
-                        self.shoulder_joint_qpos_addresses[side_index]
-                    ]
-                    step_limit = float(
-                        self.shoulder_direction_config.max_frame_step_rad,
-                    )
-                    constraints.extend(
-                        (
-                            candidate >= previous - step_limit,
-                            candidate <= previous + step_limit,
-                        ),
-                    )
-                branch_error = nullspace @ (candidate - references[side_index])
-                obj_terms.append(
-                    float(self.shoulder_direction_config.branch_weight)
-                    * cp.square(branch_error),
-                )
-                obj_terms.append(
-                    float(self.shoulder_direction_config.joint_reference_weight)
-                    * cp.sum_squares(candidate - references[side_index]),
                 )
 
         # This fixed reference resolves kinematic ambiguity without inheriting
@@ -5063,7 +4309,6 @@ class InteractionMeshRetargeter:
         orientation_target_matrices: np.ndarray | None = None,
         foot_contact_state: Mapping[str, FootContactState] | None = None,
         shoulder_direction_targets: np.ndarray | None = None,
-        shoulder_reference_joint_positions: np.ndarray | None = None,
         root_stability_target_position: np.ndarray | None = None,
         root_stability_target_matrix: np.ndarray | None = None,
         root_stability_bootstrap: bool = False,
@@ -5094,7 +4339,6 @@ class InteractionMeshRetargeter:
                 frame_idx=frame_idx,
                 orientation_target_matrices=orientation_target_matrices,
                 shoulder_direction_targets=shoulder_direction_targets,
-                shoulder_reference_joint_positions=(shoulder_reference_joint_positions),
                 root_stability_target_position=root_stability_target_position,
                 root_stability_target_matrix=root_stability_target_matrix,
                 root_stability_bootstrap=root_stability_bootstrap,

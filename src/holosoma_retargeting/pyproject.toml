@@ -44,6 +44,5 @@ include = ["holosoma_retargeting*"]
 
 [tool.setuptools.package-data]
 holosoma_retargeting = [
-    "examples/orientation_weights/*.json",
-    "examples/nature_weights/*.json",
+    "examples/robot_profiles/*.json",
 ]

@@ -74,10 +74,10 @@ the root-frame offset declared by the FBX coordinate-conversion metadata. No
 position-based facing estimate is used. Optional link orientation tracking uses
 an independent bind-pose-to-robot-T-pose calibration for every mapped link.
 
-The FBX entries in `examples/orientation_weights` remain zero so orientation
+The G1 FBX entry in `examples/robot_profiles/g1.json` remains zero so orientation
 tracking stays opt-in. Pass `--orientation_weights WEIGHT` to apply one positive
-weight to every independently calibrated mapped link, or provide a custom
-positive per-link table with `--orientation_config`. Without either option,
+weight to every independently calibrated mapped link, or edit the selected
+robot profile and enable its orientation section. Without either option,
 source orientations remain available for calibration and visual inspection but
 do not affect retargeting.
 

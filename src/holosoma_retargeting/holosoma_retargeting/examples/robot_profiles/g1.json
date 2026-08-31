@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "robot": "g1",
+  "robot_dof": 29,
+  "robot_height": 1.32,
+  "robot_urdf_file": "models/g1/g1_29dof.urdf",
+  "retargeting": {
+    "dynamic_ground_window": true,
+    "interaction_mesh_weight": 10.0,
+    "arm_interaction_mesh_weight_scale": 1.0,
+    "root_position_weight": 0.0,
+    "root_orientation_weight": 0.0,
+    "q_a_init_idx": -7,
+    "activate_joint_limits": true,
+    "activate_obj_non_penetration": true,
+    "foot_sticking": true,
+    "penetration_tolerance": 0.001,
+    "foot_sticking_tolerance": 0.001,
+    "step_size": 0.2,
+    "w_nominal_tracking_init": 5.0,
+    "nominal_tracking_tau": 1000000.0
+  },
+  "planar_foot_contact": {
+    "smoothing_window_seconds": 0.1,
+    "static_speed": 0.025,
+    "release_speed": 0.06,
+    "normal_speed": 0.08,
+    "pivot_angular_speed": 0.12,
+    "slide_speed": 0.08,
+    "ground_clearance": 0.04,
+    "minimum_phase_seconds": 0.1,
+    "elevated_support_seconds": 0.2,
+    "heading_tolerance": 0.002,
+    "slide_tracking_tolerance": 0.005
+  },
+  "shoulder_direction": {
+    "enable": false,
+    "direction_weight": 100.0,
+    "wrist_axis_weight_scale": 1.0
+  },
+  "orientation": {
+    "enable": false,
+    "preview": false,
+    "datasets": {
+      "amass": {"default_weight": 1.0, "overrides": {}},
+      "fbx_mocap": {"default_weight": 0.0, "overrides": {}},
+      "gvhmr": {"default_weight": 1.0, "overrides": {}},
+      "lafan": {"default_weight": 1.0, "overrides": {}},
+      "noetix_csv_climb": {"default_weight": 1.0, "overrides": {}},
+      "noetix_mocap": {"default_weight": 1.0, "overrides": {}},
+      "OMOMO_new": {"default_weight": 1.0, "overrides": {}}
+    }
+  },
+  "natural_pose": {
+    "enable": false,
+    "joint_names": [
+      "left_hip_pitch_joint",
+      "left_hip_roll_joint",
+      "left_hip_yaw_joint",
+      "left_knee_joint",
+      "left_ankle_pitch_joint",
+      "left_ankle_roll_joint",
+      "right_hip_pitch_joint",
+      "right_hip_roll_joint",
+      "right_hip_yaw_joint",
+      "right_knee_joint",
+      "right_ankle_pitch_joint",
+      "right_ankle_roll_joint",
+      "waist_yaw_joint",
+      "waist_roll_joint",
+      "waist_pitch_joint",
+      "left_shoulder_pitch_joint",
+      "left_shoulder_roll_joint",
+      "left_shoulder_yaw_joint",
+      "left_elbow_joint",
+      "left_wrist_roll_joint",
+      "left_wrist_pitch_joint",
+      "left_wrist_yaw_joint",
+      "right_shoulder_pitch_joint",
+      "right_shoulder_roll_joint",
+      "right_shoulder_yaw_joint",
+      "right_elbow_joint",
+      "right_wrist_roll_joint",
+      "right_wrist_pitch_joint",
+      "right_wrist_yaw_joint"
+    ],
+    "reference_default": 0.0,
+    "reference_overrides": {
+      "left_shoulder_pitch_joint": -0.09,
+      "left_shoulder_roll_joint": 0.41,
+      "left_shoulder_yaw_joint": 0.38,
+      "right_shoulder_pitch_joint": -0.09,
+      "right_shoulder_roll_joint": -0.25,
+      "right_shoulder_yaw_joint": -0.38
+    },
+    "weight_default": 0.0,
+    "weight_overrides": {
+      "left_shoulder_pitch_joint": 2.0,
+      "right_shoulder_pitch_joint": 2.0
+    }
+  }
+}

@@ -42,8 +42,7 @@ python examples/parallel_robot_retarget.py \
   --motion actor_170/yuezhanggaotai-dongzuo2-man-box-170
 ```
 
-需要为一个动作自定义朝向权重时，编辑 G1 的完整示例配置中
-`noetix_csv_climb` 对应的权重表：
+需要为一个动作启用 G1 表中 `noetix_csv_climb` 的朝向权重时，可直接使用：
 
 ```bash
 python examples/parallel_robot_retarget.py \
@@ -51,11 +50,12 @@ python examples/parallel_robot_retarget.py \
   --robot g1 \
   --dataset noetix_csv_climb \
   --motion actor_170/yuezhanggaotai-dongzuo2-man-box-170 \
-  --orientation_config examples/orientation_weights/g1.json
+  --orientation-tracking True
 ```
 
-表中的 15 个映射必须完整保留，将某个关键点或对应 link 的权重改为
-`0` 即可取消该项朝向损失。
+持久权重统一维护在 `examples/robot_profiles/g1.json` 中，将某个覆盖值写为
+`0` 即可取消该项朝向损失；单次运行可用 `--orientation-weights WEIGHT`
+覆盖全部映射。
 
 仓库旧 `climbing` preset 中的 NPY 只有人体位置，不带直接朝向；它可以完成位置与 Interaction Mesh 重定向，但不能开启朝向损失。`noetix_csv_climb` 的标准 NPZ 带直接朝向，因此能够开启。
 
