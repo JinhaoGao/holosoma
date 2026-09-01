@@ -1162,9 +1162,7 @@ def build_retargeter_kwargs_from_config(
         "debug": retargeter_config.debug,
         "dynamic_ground_window": retargeter_config.dynamic_ground_window,
         "interaction_mesh_weight": retargeter_config.interaction_mesh_weight,
-        "arm_interaction_mesh_weight_scale": (
-            retargeter_config.arm_interaction_mesh_weight_scale
-        ),
+        "arm_interaction_mesh_weight_scale": (retargeter_config.arm_interaction_mesh_weight_scale),
         "root_stability": retargeter_config.root_stability,
         "show_interaction_mesh": False,
         "save_interaction_mesh": True,
@@ -1526,6 +1524,8 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         baseline_path=job.baseline_path,
     )
     if retargeter.natural_pose_tracking_enabled:
+        if q_init is None:
+            raise ValueError("Natural-pose tracking requires an initialized robot pose")
         q_init = retargeter.apply_natural_pose_to_initial_qpos(q_init)
     orientation_target_world_rotation_deltas_wxyz = _object_pose_rotation_deltas_wxyz(
         object_poses,

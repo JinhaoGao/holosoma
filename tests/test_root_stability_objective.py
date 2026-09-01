@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -38,13 +39,7 @@ def _build_retargeter(
     q_a_init_idx: int = -7,
     orientation_weights: dict[str, float] | None = None,
 ) -> InteractionMeshRetargeter:
-    robot_urdf = (
-        PACKAGE_ROOT
-        / "holosoma_retargeting"
-        / "models"
-        / "e1"
-        / "e1_23dof.urdf"
-    )
+    robot_urdf = PACKAGE_ROOT / "holosoma_retargeting" / "models" / "e1" / "e1_23dof.urdf"
     constants = create_task_constants(
         RobotConfig(
             robot_type="e1",
@@ -73,6 +68,8 @@ def _build_retargeter(
 
 
 class RootStabilityObjectiveTests(unittest.TestCase):
+    retargeter: ClassVar[InteractionMeshRetargeter]
+
     @classmethod
     def setUpClass(cls):
         cls.retargeter = _build_retargeter(
@@ -100,26 +97,18 @@ class RootStabilityObjectiveTests(unittest.TestCase):
         source_translation = np.asarray((0.12, -0.03, 0.04))
         for joint_index in (root_index, left_index, right_index):
             relative = motion[0, joint_index] - motion[0, root_index]
-            motion[1, joint_index] = (
-                source_rotation @ relative
-                + motion[0, root_index]
-                + source_translation
-            )
+            motion[1, joint_index] = source_rotation @ relative + motion[0, root_index] + source_translation
         return motion
 
     def test_targets_preserve_source_root_delta_and_torso_rotation(self):
         initial_q = self.retargeter.robot_model.qpos0.copy()
-        target_positions, target_matrices = (
-            self.retargeter._prepare_root_stability_targets(
-                self._human_motion(),
-                initial_q,
-            )
+        target_positions, target_matrices = self.retargeter._prepare_root_stability_targets(
+            self._human_motion(),
+            initial_q,
         )
-        robot_position, robot_matrix, _, _ = (
-            self.retargeter._get_root_stability_data(
-                initial_q,
-                with_jacobians=False,
-            )
+        robot_position, robot_matrix, _, _ = self.retargeter._get_root_stability_data(
+            initial_q,
+            with_jacobians=False,
         )
 
         np.testing.assert_allclose(target_positions[0], robot_position)
@@ -157,11 +146,9 @@ class RootStabilityObjectiveTests(unittest.TestCase):
             initial_q,
             root_orientation_reference_matrices=source_matrices,
         )
-        _, initial_robot_matrix, _, _ = (
-            self.retargeter._get_root_stability_data(
-                initial_q,
-                with_jacobians=False,
-            )
+        _, initial_robot_matrix, _, _ = self.retargeter._get_root_stability_data(
+            initial_q,
+            with_jacobians=False,
         )
 
         np.testing.assert_allclose(

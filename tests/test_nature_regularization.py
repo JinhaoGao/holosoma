@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Literal
 from unittest import mock
 
 import mujoco
@@ -22,8 +21,10 @@ if str(PACKAGE_ROOT) not in sys.path:
 
 from holosoma_retargeting.config_types.data_type import MotionDataConfig  # noqa: E402
 from holosoma_retargeting.config_types.retargeting import (  # noqa: E402
+    DatasetName,
     RetargeterRuntimeOptions,
     RetargetingCommand,
+    RobotName,
     internal_config_from_command,
 )
 from holosoma_retargeting.config_types.robot_profiles import (  # noqa: E402
@@ -42,9 +43,9 @@ ROBOT_PROFILE_DIR = PACKAGE_ROOT / "holosoma_retargeting" / "examples" / "robot_
 
 
 def _command(
-    robot: Literal["g1", "e1", "e1_23dof", "e1_24dof", "e2"],
+    robot: RobotName,
     *,
-    dataset: str = "noetix_mocap",
+    dataset: DatasetName = "noetix_mocap",
     nature_weights: float | None = None,
     natural_pose_tracking: bool | None = None,
     robot_profile: Path | None = None,
@@ -98,7 +99,7 @@ class RobotProfileTests(unittest.TestCase):
         self.assertEqual(len(retargeter.natural_pose_joint_names), 29)
 
     def test_one_profile_covers_each_concrete_robot(self) -> None:
-        expected_joint_counts = {
+        expected_joint_counts: dict[RobotName, int] = {
             "g1": 29,
             "e1_23dof": 23,
             "e1_24dof": 24,

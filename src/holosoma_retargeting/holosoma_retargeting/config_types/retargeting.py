@@ -25,6 +25,7 @@ from holosoma_retargeting.config_types.robot_profiles import (
 from holosoma_retargeting.config_types.task import TaskConfig
 
 TaskType = Literal["robot_only", "object_interaction", "climbing"]
+RobotName = Literal["g1", "e1", "e1_23dof", "e1_24dof", "e2"]
 DatasetName = Literal[
     "amass",
     "climbing",
@@ -102,7 +103,7 @@ class RetargetingCommand:
     task: TaskType = "object_interaction"
     """Retargeting task."""
 
-    robot: Literal["g1", "e1", "e1_23dof", "e1_24dof", "e2"] = "g1"
+    robot: RobotName = "g1"
     """Target robot."""
 
     dataset: DatasetName = "OMOMO_new"

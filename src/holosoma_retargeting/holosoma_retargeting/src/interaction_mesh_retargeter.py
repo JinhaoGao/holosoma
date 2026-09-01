@@ -9,6 +9,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import cvxpy as cp  # type: ignore[import-not-found]
 import mujoco  # type: ignore[import-not-found]
@@ -174,6 +175,7 @@ class InteractionMeshRetargeter:
 
         self.task_constants = task_constants
         self.robot_model_path = task_constants.ROBOT_URDF_FILE
+        self.object_model_path: str | None
         if object_urdf_path:
             object_path = Path(object_urdf_path).expanduser()
             if not object_path.is_absolute():
@@ -227,17 +229,11 @@ class InteractionMeshRetargeter:
         self.arm_interaction_mesh_weight_scale = float(
             arm_interaction_mesh_weight_scale,
         )
-        if (
-            not np.isfinite(self.interaction_mesh_weight)
-            or self.interaction_mesh_weight < 0.0
-        ):
+        if not np.isfinite(self.interaction_mesh_weight) or self.interaction_mesh_weight < 0.0:
             raise ValueError(
                 "interaction_mesh_weight must be finite and non-negative",
             )
-        if (
-            not np.isfinite(self.arm_interaction_mesh_weight_scale)
-            or self.arm_interaction_mesh_weight_scale < 0.0
-        ):
+        if not np.isfinite(self.arm_interaction_mesh_weight_scale) or self.arm_interaction_mesh_weight_scale < 0.0:
             raise ValueError(
                 "arm_interaction_mesh_weight_scale must be finite and non-negative",
             )
@@ -380,14 +376,11 @@ class InteractionMeshRetargeter:
             "wrist_axis_weight_scale": float(resolved.wrist_axis_weight_scale),
         }
         invalid_weights = {
-            name: value
-            for name, value in numeric_weights.items()
-            if not np.isfinite(value) or value < 0.0
+            name: value for name, value in numeric_weights.items() if not np.isfinite(value) or value < 0.0
         }
         if invalid_weights:
             raise ValueError(
-                "Shoulder direction weights must be finite and non-negative: "
-                f"{invalid_weights}",
+                f"Shoulder direction weights must be finite and non-negative: {invalid_weights}",
             )
 
         self.shoulder_direction_config = resolved
@@ -401,7 +394,7 @@ class InteractionMeshRetargeter:
         self.shoulder_wrist_weights = np.empty((0,), dtype=np.float64)
         self.shoulder_reserved_orientation_indices = np.empty((0,), dtype=np.int32)
         self.shoulder_human_torso_origin_name = ""
-        self.shoulder_human_torso_side_names: tuple[str, str] = ()
+        self.shoulder_human_torso_side_names: tuple[str, ...] = ()
         self.shoulder_torso_link_name = ""
         if not self.shoulder_direction_enabled:
             return
@@ -482,6 +475,7 @@ class InteractionMeshRetargeter:
             human_side_names,
             strict=True,
         ):
+            wrist_joint_names: tuple[str, ...]
             if is_g1:
                 shoulder_joint_names = (
                     f"{long_prefix}_shoulder_pitch_joint",
@@ -506,22 +500,10 @@ class InteractionMeshRetargeter:
                 )
                 torso_basis_link = f"{short_prefix}_arm_shoulder_pitch_link"
                 shoulder_anchor_link = f"{short_prefix}_arm_shoulder_roll_link"
-                elbow_link = (
-                    f"{short_prefix}_arm_elbow_pitch_link"
-                    if is_e1
-                    else f"{short_prefix}_arm_elbow_link"
-                )
-                elbow_joint = (
-                    f"{short_prefix}_arm_elbow_pitch_joint"
-                    if is_e1
-                    else f"{short_prefix}_arm_elbow_joint"
-                )
+                elbow_link = f"{short_prefix}_arm_elbow_pitch_link" if is_e1 else f"{short_prefix}_arm_elbow_link"
+                elbow_joint = f"{short_prefix}_arm_elbow_pitch_joint" if is_e1 else f"{short_prefix}_arm_elbow_joint"
                 hand_link = f"{short_prefix}_hand_sphere_link"
-                wrist_joint_names = (
-                    (f"{short_prefix}_arm_elbow_yaw_joint",)
-                    if is_e1
-                    else ()
-                )
+                wrist_joint_names = (f"{short_prefix}_arm_elbow_yaw_joint",) if is_e1 else ()
             spec = ShoulderSideSpec(
                 human_arm_name=human_names[0],
                 human_forearm_name=human_names[1],
@@ -569,20 +551,14 @@ class InteractionMeshRetargeter:
             raise ValueError("Could not resolve the shoulder parent torso body")
         self.shoulder_torso_link_name = str(torso_name)
 
-        active_index_by_qpos = {
-            int(address): index
-            for index, address in enumerate(self.q_a_indices)
-        }
+        active_index_by_qpos = {int(address): index for index, address in enumerate(self.q_a_indices)}
         shoulder_qpos: list[list[int]] = []
         shoulder_reduced: list[list[int]] = []
         wrist_reduced: list[list[int]] = []
         wrist_dof_counts: list[int] = []
         wrist_orientation_indices: list[int] = []
         wrist_weights: list[float] = []
-        orientation_index_by_human = {
-            name: index
-            for index, name in enumerate(self.orientation_human_joint_names)
-        }
+        orientation_index_by_human = {name: index for index, name in enumerate(self.orientation_human_joint_names)}
         for spec in specs:
             side_qpos: list[int] = []
             side_reduced: list[int] = []
@@ -633,8 +609,7 @@ class InteractionMeshRetargeter:
             wrist_weights.append(
                 0.0
                 if orientation_index < 0
-                else float(self.orientation_weight_values[orientation_index])
-                * float(resolved.wrist_axis_weight_scale)
+                else float(self.orientation_weight_values[orientation_index]) * float(resolved.wrist_axis_weight_scale)
             )
 
         reserved_names = {
@@ -669,11 +644,7 @@ class InteractionMeshRetargeter:
         )
         self.shoulder_wrist_weights = np.asarray(wrist_weights, dtype=np.float64)
         self.shoulder_reserved_orientation_indices = np.asarray(
-            [
-                index
-                for index, name in enumerate(self.orientation_human_joint_names)
-                if name in reserved_names
-            ],
+            [index for index, name in enumerate(self.orientation_human_joint_names) if name in reserved_names],
             dtype=np.int32,
         )
 
@@ -696,8 +667,7 @@ class InteractionMeshRetargeter:
         }
         if invalid:
             raise ValueError(
-                "Root stability weights must be finite and non-negative: "
-                f"{invalid}",
+                f"Root stability weights must be finite and non-negative: {invalid}",
             )
 
         self.root_stability_config = resolved
@@ -708,8 +678,7 @@ class InteractionMeshRetargeter:
             joint_id
             for joint_id in range(self.robot_model.njnt)
             if int(self.robot_model.jnt_qposadr[joint_id]) == 0
-            and int(self.robot_model.jnt_type[joint_id])
-            == int(mujoco.mjtJoint.mjJNT_FREE)
+            and int(self.robot_model.jnt_type[joint_id]) == int(mujoco.mjtJoint.mjJNT_FREE)
         ]
         if len(root_joint_candidates) != 1:
             raise ValueError(
@@ -726,9 +695,7 @@ class InteractionMeshRetargeter:
         if not root_body_name:
             raise ValueError("Could not resolve the robot free-root body name")
         self.root_stability_robot_link_name = str(root_body_name)
-        self.root_stability_robot_link_index = self.robot_link_name_to_index[
-            self.root_stability_robot_link_name
-        ]
+        self.root_stability_robot_link_index = self.robot_link_name_to_index[self.root_stability_robot_link_name]
 
         human_root_indices = np.flatnonzero(
             self.human_joint_parent_indices == -1,
@@ -736,15 +703,12 @@ class InteractionMeshRetargeter:
         if len(human_root_indices) != 1:
             raise ValueError("Human skeleton must contain exactly one root joint")
         self.root_stability_human_root_index = int(human_root_indices[0])
-        self.root_stability_human_root_name = self.demo_joints[
-            self.root_stability_human_root_index
-        ]
+        self.root_stability_human_root_name = self.demo_joints[self.root_stability_human_root_index]
         self.root_stability_orientation_index = (
             self.orientation_human_joint_names.index(
                 self.root_stability_human_root_name,
             )
-            if self.root_stability_human_root_name
-            in self.orientation_human_joint_names
+            if self.root_stability_human_root_name in self.orientation_human_joint_names
             else -1
         )
         self.root_stability_orientation_source = "disabled"
@@ -753,11 +717,7 @@ class InteractionMeshRetargeter:
             ("L_Shoulder", "R_Shoulder"),
         )
         self.root_stability_human_shoulder_names = next(
-            (
-                pair
-                for pair in shoulder_name_pairs
-                if pair[0] in self.demo_joints and pair[1] in self.demo_joints
-            ),
+            (pair for pair in shoulder_name_pairs if pair[0] in self.demo_joints and pair[1] in self.demo_joints),
             (),
         )
         if not self.root_stability_enabled:
@@ -804,8 +764,7 @@ class InteractionMeshRetargeter:
         expected_shape = (frame_count, len(self.demo_joints), 3)
         if motions.shape != expected_shape or not np.isfinite(motions).all():
             raise ValueError(
-                "Root stability requires finite human joint positions with "
-                f"shape {expected_shape}",
+                f"Root stability requires finite human joint positions with shape {expected_shape}",
             )
         q = np.asarray(initial_q, dtype=np.float64)
         self.robot_data.qpos[:] = q
@@ -829,15 +788,9 @@ class InteractionMeshRetargeter:
             :,
             self.root_stability_human_root_index,
         ]
-        target_positions = (
-            initial_robot_position[None, :]
-            + human_root_positions
-            - human_root_positions[0]
-        )
+        target_positions = initial_robot_position[None, :] + human_root_positions - human_root_positions[0]
 
-        if (
-            float(self.root_stability_config.orientation_weight) <= 0.0
-        ):
+        if float(self.root_stability_config.orientation_weight) <= 0.0:
             self.root_stability_orientation_source = "disabled"
             return target_positions, np.empty(
                 (frame_count, 0, 3, 3),
@@ -851,8 +804,7 @@ class InteractionMeshRetargeter:
             )
             if human_matrices.shape != (frame_count, 3, 3):
                 raise ValueError(
-                    "Root orientation references must have shape "
-                    f"{(frame_count, 3, 3)}, got {human_matrices.shape}",
+                    f"Root orientation references must have shape {(frame_count, 3, 3)}, got {human_matrices.shape}",
                 )
             if not np.isfinite(human_matrices).all():
                 raise ValueError("Root orientation references must be finite")
@@ -921,11 +873,7 @@ class InteractionMeshRetargeter:
             positions["root"],
             matrices[0],
             position_jacobians["root"] if with_jacobians else None,
-            (
-                orientation_jacobians[0]
-                if with_jacobians and orientation_jacobians is not None
-                else None
-            ),
+            (orientation_jacobians[0] if with_jacobians and orientation_jacobians is not None else None),
         )
 
     @staticmethod
@@ -933,10 +881,7 @@ class InteractionMeshRetargeter:
         """Return whether a mapped human anchor belongs to either upper limb."""
 
         normalized = name.lower().replace("_", "")
-        return any(
-            token in normalized
-            for token in ("shoulder", "arm", "elbow", "wrist", "hand")
-        )
+        return any(token in normalized for token in ("shoulder", "arm", "elbow", "wrist", "hand"))
 
     def _interaction_mesh_vertex_weights(
         self,
@@ -968,9 +913,7 @@ class InteractionMeshRetargeter:
             np.asarray(left_shoulder) - np.asarray(right_shoulder),
             label="shoulder lateral axis",
         )
-        shoulder_midpoint = 0.5 * (
-            np.asarray(left_shoulder) + np.asarray(right_shoulder)
-        )
+        shoulder_midpoint = 0.5 * (np.asarray(left_shoulder) + np.asarray(right_shoulder))
         up_hint = normalize_vector(
             shoulder_midpoint - np.asarray(torso_origin),
             label="torso up axis",
@@ -1013,9 +956,7 @@ class InteractionMeshRetargeter:
             )
             for side_index, spec in enumerate(self.shoulder_side_specs):
                 arm = positions[self.demo_joints.index(spec.human_arm_name)]
-                forearm = positions[
-                    self.demo_joints.index(spec.human_forearm_name)
-                ]
+                forearm = positions[self.demo_joints.index(spec.human_forearm_name)]
                 upper_targets[frame, side_index] = basis.T @ normalize_vector(
                     forearm - arm,
                     label=f"{spec.human_arm_name} segment at frame {frame}",
@@ -1100,11 +1041,7 @@ class InteractionMeshRetargeter:
         self.robot_data.qpos[:] = np.asarray(q, dtype=np.float64)
         mujoco.mj_forward(self.robot_model, self.robot_data)
         basis = self._robot_anatomical_basis_from_forward_data()
-        transform = (
-            self._build_transform_qdot_to_qvel_fast()
-            if with_jacobians
-            else None
-        )
+        transform = self._build_transform_qdot_to_qvel_fast() if with_jacobians else None
         directions: list[np.ndarray] = []
         jacobians: list[np.ndarray] = []
         for side_index, spec in enumerate(self.shoulder_side_specs):
@@ -2784,6 +2721,10 @@ class InteractionMeshRetargeter:
         visual_human_parents = None
         visual_human_quaternions = None
         if all(visualization_fields_present):
+            assert visualization_human_joint_motions is not None
+            assert visualization_human_joint_names is not None
+            assert visualization_human_joint_parent_indices is not None
+            assert visualization_human_joint_quaternions_wxyz is not None
             visual_human_joints = np.asarray(visualization_human_joint_motions, dtype=np.float32).copy()
             visual_human_names = tuple(str(name) for name in visualization_human_joint_names)
             visual_joint_count = len(visual_human_names)
@@ -2892,8 +2833,7 @@ class InteractionMeshRetargeter:
                 :,
                 self.root_stability_orientation_index,
             ]
-            if self.root_stability_orientation_index >= 0
-            and orientation_target_matrices.shape[1:] != (0, 3, 3)
+            if self.root_stability_orientation_index >= 0 and orientation_target_matrices.shape[1:] != (0, 3, 3)
             else None
         )
         shoulder_direction_targets = self._prepare_shoulder_direction_targets(
@@ -2932,7 +2872,7 @@ class InteractionMeshRetargeter:
         root_stability_orientation_errors: list[float] = []
         collect_interaction_mesh = self.save_interaction_mesh or (self.visualize and self.show_interaction_mesh)
         collect_object_point_trajectories = self.has_dynamic_object or self.visualize
-        interaction_mesh_handle_list: list[object] = []
+        interaction_mesh_handle_list: list[Any] = []
 
         def _clear_interaction_mesh_handles() -> None:
             for handle in interaction_mesh_handle_list:
@@ -3042,8 +2982,7 @@ class InteractionMeshRetargeter:
                     shoulder_direction_targets=shoulder_direction_targets[i],
                     root_stability_target_position=(
                         root_stability_target_positions[i]
-                        if self.root_stability_enabled
-                        and not root_stability_bootstrap
+                        if self.root_stability_enabled and not root_stability_bootstrap
                         else None
                     ),
                     root_stability_target_matrix=(
@@ -3066,9 +3005,7 @@ class InteractionMeshRetargeter:
                     ) = self._prepare_root_stability_targets(
                         human_joint_motions,
                         q,
-                        root_orientation_reference_matrices=(
-                            root_orientation_reference_matrices
-                        ),
+                        root_orientation_reference_matrices=(root_orientation_reference_matrices),
                     )
 
                 (
@@ -3081,12 +3018,8 @@ class InteractionMeshRetargeter:
                 robot_link_positions = all_robot_link_positions[mapped_robot_link_indices]
                 mapped_robot_joints_w_list.append(robot_link_positions.astype(np.float32))
                 if self.root_stability_enabled:
-                    root_position = all_robot_link_positions[
-                        self.root_stability_robot_link_index
-                    ]
-                    root_matrix = all_robot_link_matrices[
-                        self.root_stability_robot_link_index
-                    ]
+                    root_position = all_robot_link_positions[self.root_stability_robot_link_index]
+                    root_matrix = all_robot_link_matrices[self.root_stability_robot_link_index]
                     root_stability_actual_positions.append(
                         root_position.astype(np.float32),
                     )
@@ -3096,8 +3029,7 @@ class InteractionMeshRetargeter:
                     root_stability_position_errors.append(
                         float(
                             np.linalg.norm(
-                                root_stability_target_positions[i]
-                                - root_position,
+                                root_stability_target_positions[i] - root_position,
                             ),
                         ),
                     )
@@ -3367,9 +3299,7 @@ class InteractionMeshRetargeter:
             "foot_contact_confidences": foot_contact_plan.confidences,
             "foot_contact_pivot_regions": foot_contact_plan.pivot_regions,
             "foot_contact_pivot_uv": foot_contact_plan.pivot_uv,
-            "foot_contact_reference_displacements_xy": (
-                foot_contact_plan.reference_displacements_xy
-            ),
+            "foot_contact_reference_displacements_xy": (foot_contact_plan.reference_displacements_xy),
             "foot_contact_plan_version": np.asarray(1, dtype=np.int32),
             "interaction_mesh_weight": np.asarray(
                 self.interaction_mesh_weight,
@@ -3399,9 +3329,7 @@ class InteractionMeshRetargeter:
             "root_stability_orientation_weight": np.asarray(
                 float(self.root_stability_config.orientation_weight),
             ),
-            "root_stability_target_positions": (
-                root_stability_target_positions.astype(np.float32)
-            ),
+            "root_stability_target_positions": (root_stability_target_positions.astype(np.float32)),
             "root_stability_actual_positions": (
                 np.asarray(root_stability_actual_positions, dtype=np.float32)
                 if self.root_stability_enabled
@@ -3531,19 +3459,12 @@ class InteractionMeshRetargeter:
             "shoulder_direction_weight": np.asarray(
                 float(self.shoulder_direction_config.direction_weight),
             ),
-            "shoulder_wrist_axis_orientation_weights": (
-                self.shoulder_wrist_weights.astype(np.float64)
-            ),
-            "shoulder_wrist_orientation_weights": (
-                self.shoulder_wrist_weights.astype(np.float64)
-            ),
-            "shoulder_wrist_dof_counts": (
-                self.shoulder_wrist_dof_counts.astype(np.int32)
-            ),
+            "shoulder_wrist_axis_orientation_weights": (self.shoulder_wrist_weights.astype(np.float64)),
+            "shoulder_wrist_orientation_weights": (self.shoulder_wrist_weights.astype(np.float64)),
+            "shoulder_wrist_dof_counts": (self.shoulder_wrist_dof_counts.astype(np.int32)),
             "shoulder_wrist_joint_names": np.asarray(
                 [
-                    list(spec.wrist_joint_names)
-                    + [""] * (3 - len(spec.wrist_joint_names))
+                    list(spec.wrist_joint_names) + [""] * (3 - len(spec.wrist_joint_names))
                     for spec in self.shoulder_side_specs
                 ],
                 dtype=str,
@@ -4067,10 +3988,8 @@ class InteractionMeshRetargeter:
                 orientation_target_matrices,
                 current_orientation_matrices,
             )
-            reserved_orientation_indices = (
-                self._reserved_orientation_objective_indices(
-                    root_stability_bootstrap=root_stability_bootstrap,
-                )
+            reserved_orientation_indices = self._reserved_orientation_objective_indices(
+                root_stability_bootstrap=root_stability_bootstrap,
             )
             for link_idx, weight in enumerate(self.orientation_weight_values):
                 if link_idx in reserved_orientation_indices:
@@ -4090,11 +4009,7 @@ class InteractionMeshRetargeter:
                         side_index,
                         :wrist_dof_count,
                     ]
-                    if (
-                        weight <= 0.0
-                        or orientation_index < 0
-                        or wrist_dof_count <= 0
-                    ):
+                    if weight <= 0.0 or orientation_index < 0 or wrist_dof_count <= 0:
                         continue
                     if wrist_dof_count == 1:
                         wrist_reduced_index = int(wrist_reduced_indices[0])
@@ -4110,8 +4025,7 @@ class InteractionMeshRetargeter:
                             )
                         wrist_axis_world = wrist_axis_world / axis_norm
                         wrist_error = float(
-                            wrist_axis_world
-                            @ orientation_errors[orientation_index],
+                            wrist_axis_world @ orientation_errors[orientation_index],
                         )
                         wrist_jacobian = np.zeros(self.nq_a, dtype=np.float64)
                         wrist_jacobian[wrist_reduced_index] = float(
@@ -4123,18 +4037,14 @@ class InteractionMeshRetargeter:
                             ],
                         )
                         obj_terms.append(
-                            float(weight)
-                            * cp.square(wrist_jacobian @ dqa - wrist_error),
+                            float(weight) * cp.square(wrist_jacobian @ dqa - wrist_error),
                         )
                     else:
-                        wrist_orientation_jacobian = orientation_jacobians[
-                            orientation_index,
-                        ][:, wrist_reduced_indices]
+                        wrist_orientation_jacobian = orientation_jacobians[orientation_index,][:, wrist_reduced_indices]
                         obj_terms.append(
                             float(weight)
                             * cp.sum_squares(
-                                wrist_orientation_jacobian
-                                @ dqa[wrist_reduced_indices]
+                                wrist_orientation_jacobian @ dqa[wrist_reduced_indices]
                                 - orientation_errors[orientation_index],
                             ),
                         )

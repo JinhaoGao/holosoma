@@ -42,3 +42,4 @@ jobs:
           git diff --name-only "origin/${GITHUB_BASE_REF:-main}" "${GITHUB_SHA}" -- | xargs pre-commit run --files \
             || ( git diff --exit-code && echo "pre-commit checks failed" )
           mypy .
+          mypy --config-file src/holosoma_retargeting/mypy.ini

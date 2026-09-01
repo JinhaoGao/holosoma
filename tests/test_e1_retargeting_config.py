@@ -6,12 +6,14 @@ from pathlib import Path
 
 import mujoco
 import tyro
+
 from holosoma_retargeting.config_types.data_type import (
     DEMO_JOINTS_REGISTRY,
     MotionDataConfig,
 )
 from holosoma_retargeting.config_types.retargeting import (
     RetargetingCommand,
+    RobotName,
     internal_config_from_command,
 )
 from holosoma_retargeting.config_types.robot import RobotConfig
@@ -45,6 +47,7 @@ def test_e1_variants_select_the_expected_assets_and_dofs() -> None:
     e1_24 = RobotConfig(robot_type="e1_24dof")
 
     assert legacy.ROBOT_URDF_FILE == e1_23.ROBOT_URDF_FILE
+    assert legacy.ROBOT_HEIGHT == e1_23.ROBOT_HEIGHT == 1.5
     assert e1_23.ROBOT_DOF == 23
     assert e1_24.ROBOT_DOF == 24
     assert e1_24.ROBOT_URDF_FILE == "models/e1/e1_24dof.urdf"
@@ -108,7 +111,8 @@ def test_fbx_e1_variants_share_the_waist_roll_torso_mapping() -> None:
 
 
 def test_e1_variants_have_independent_natural_pose_profiles() -> None:
-    for robot, joint_count in (("e1_23dof", 23), ("e1_24dof", 24)):
+    variants: tuple[tuple[RobotName, int], ...] = (("e1_23dof", 23), ("e1_24dof", 24))
+    for robot, joint_count in variants:
         profile = load_robot_profile(robot=robot)
         config = internal_config_from_command(
             RetargetingCommand(
@@ -181,4 +185,6 @@ def test_e1_23dof_is_available_from_the_public_cli() -> None:
     )
 
     assert command.robot == "e1_23dof"
-    assert internal_config_from_command(command).robot == "e1_23dof"
+    config = internal_config_from_command(command)
+    assert config.robot == "e1_23dof"
+    assert config.robot_config.ROBOT_HEIGHT == 1.5

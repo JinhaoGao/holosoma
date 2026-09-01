@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import numpy as np
+
 from holosoma_retargeting.visualization.shoulder_direction import (
     load_shoulder_direction_diagnostics,
     save_shoulder_direction_diagnostics,

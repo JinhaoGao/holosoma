@@ -11,7 +11,13 @@ repos:
   - id: mypy
     pass_filenames: true
     additional_dependencies: [pydantic]
-    exclude: ^src/holosoma_inference/
+    exclude: ^(src/holosoma_inference/|src/holosoma_retargeting/|tests/test_.*\.py$)
+  - id: mypy
+    name: mypy (retargeting Python 3.11)
+    args: [--config-file=src/holosoma_retargeting/mypy.ini]
+    pass_filenames: true
+    additional_dependencies: [pydantic]
+    files: ^(src/holosoma_retargeting/holosoma_retargeting/.*\.py|tests/test_.*\.py)$
 - repo: https://github.com/pre-commit/mirrors-clang-format
   rev: v20.1.3
   hooks:
