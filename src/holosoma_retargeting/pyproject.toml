@@ -45,4 +45,5 @@ include = ["holosoma_retargeting*"]
 [tool.setuptools.package-data]
 holosoma_retargeting = [
     "examples/robot_profiles/*.json",
+    "examples/robot_profiles/*.md",
 ]
