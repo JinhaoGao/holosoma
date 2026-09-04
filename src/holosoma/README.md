@@ -2,11 +2,13 @@
 
 Core training framework for humanoid robot reinforcement learning with support for locomotion (velocity tracking) and whole-body tracking tasks.
 
+For the end-to-end Noetix E2 motion conversion, training, monitoring, resume, and playback workflow, see the [E2 Whole-Body Tracking training guide](../../docs/e2-whole-body-tracking-training.md).
+
 | **Category** | **Supported Options** |
 |-------------|----------------------|
 | **Simulators** | IsaacGym, IsaacSim, MJWarp (training) \| Mujoco (evaluation) |
 | **Algorithms** | PPO, FastSAC |
-| **Robots** | Unitree G1, Booster T1 |
+| **Robots** | Unitree G1, Booster T1, Noetix E2 (WBT) |
 
 ## Training
 
@@ -84,7 +86,7 @@ python src/holosoma/holosoma/train_agent.py \
 
 Train robots to track full-body motion sequences.
 
-**Note**: Currently only supported for Unitree G1 / IsaacSim.
+**Note**: Currently supported for Unitree G1 and Noetix E2 with IsaacSim.
 
 ```bash
 # G1 with FastSAC
@@ -99,6 +101,13 @@ python src/holosoma/holosoma/train_agent.py \
     exp:g1-29dof-wbt \
     logger:wandb
 
+# Noetix E2 cat-crawl with PPO
+source scripts/source_isaacsim_setup.sh
+python src/holosoma/holosoma/train_agent.py \
+    exp:e2-23dof-wbt \
+    logger:wandb \
+    --training.seed 1
+
 # Custom motion file
 source scripts/source_isaacsim_setup.sh
 python src/holosoma/holosoma/train_agent.py \
@@ -112,7 +121,79 @@ python src/holosoma/holosoma/replay.py \
     exp:g1-29dof-wbt \
     --training.headless=False \
     --training.num_envs=1
+
+# Visualize the bundled Noetix E2 cat-crawl motion
+source scripts/source_isaacsim_setup.sh
+python src/holosoma/holosoma/replay.py \
+    exp:e2-23dof-wbt \
+    --training.headless False \
+    --training.num-envs 1
 ```
+
+#### Noetix E2 Training Workflow
+
+The `exp:e2-23dof-wbt` preset uses PPO and IsaacSim to track the bundled 50 Hz E2 cat-crawl motion. It controls 23 joints and loads the E2 robot, motion, reward, termination, randomization, and curriculum settings automatically. Use the project `hssim` environment for replay, training, TensorBoard, resume, and policy evaluation. If the current shell is in `hsretargeting`, clear the inherited environment name before sourcing the IsaacSim setup script.
+
+```bash
+cd /home/jinhaogao/holosoma
+conda deactivate 2>/dev/null || true
+unset CONDA_ENV_NAME
+export CONDA_ENV_NAME=hssim
+source scripts/source_isaacsim_setup.sh
+
+which python
+pytest -q src/holosoma/tests/test_e2_wbt_config.py
+```
+
+Before a long run, use the replay command above to inspect the reference motion, then run a two-iteration smoke test. On a headless server, the following formal-training command uses offline W&B logging and disables video while retaining TensorBoard logs and checkpoints.
+
+```bash
+# Two-iteration smoke test
+python src/holosoma/holosoma/train_agent.py \
+    exp:e2-23dof-wbt \
+    --training.num-envs 16 \
+    --algo.config.num-learning-iterations 2
+
+# Formal training
+python src/holosoma/holosoma/train_agent.py \
+    exp:e2-23dof-wbt \
+    logger:wandb-offline \
+    --training.seed 1 \
+    --logger.video.enabled False
+```
+
+To train another converted E2 motion without changing the preset, override the motion path. The NPZ must follow the same 23-joint ordering and 50 Hz Whole-Body Tracking format as the bundled motion.
+
+```bash
+python src/holosoma/holosoma/train_agent.py \
+    exp:e2-23dof-wbt \
+    logger:wandb-offline \
+    --training.seed 1 \
+    --logger.video.enabled False \
+    --command.setup-terms.motion-command.params.motion-config.motion-file \
+    holosoma/data/motions/e2_23dof/whole_body_tracking/<your_e2_motion_fps50.npz>
+```
+
+Use a `.pt` checkpoint to resume PPO training or play the trained policy. Resuming restores the policy, critic, optimizers, and observation normalization; `num-learning-iterations` is the number of additional iterations to run after loading. `eval_agent.py` restores the saved experiment configuration automatically and keeps running until interrupted.
+
+```bash
+# Resume training
+python src/holosoma/holosoma/train_agent.py \
+    exp:e2-23dof-wbt \
+    logger:wandb-offline \
+    --training.checkpoint /absolute/path/to/model_04000.pt \
+    --algo.config.num-learning-iterations 26000 \
+    --logger.video.enabled False
+
+# Play a trained policy
+python src/holosoma/holosoma/eval_agent.py \
+    --checkpoint /absolute/path/to/model_04000.pt
+
+# Monitor all E2 WBT runs
+tensorboard --logdir /home/jinhaogao/holosoma/logs/WholeBodyTracking --port 6006
+```
+
+For motion conversion, multi-motion training, checkpoint behavior, troubleshooting, and the complete tested workflow, see the [E2 Whole-Body Tracking training guide](../../docs/e2-whole-body-tracking-training.md).
 
 Once checkpoints are saved, you can evaluate policies using [In-Training Evaluation](#in-training-evaluation) (same simulator as training) or cross-simulator evaluation in MuJoCo (see [holosoma_inference](../holosoma_inference/README.md)).
 
