@@ -13,6 +13,13 @@ from holosoma.utils.sim_utils import close_simulation_app
 from holosoma.utils.tyro_utils import TYRO_CONIFG
 
 
+def run_reference_replay(env) -> None:
+    """Render a reference clip without advancing the physics simulation."""
+    done = False
+    while not done:
+        done = env.step_visualize_motion(None)  # type: ignore[attr-defined]
+
+
 def replay(tyro_config: ExperimentConfig):
     simulation_app = init_sim_imports(tyro_config)
 
@@ -27,10 +34,7 @@ def replay(tyro_config: ExperimentConfig):
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     env = get_class(env_target)(tyro_env_config, device=device)
 
-    done = False
-    while not done:
-        env.simulator.sim.step()
-        done = env.step_visualize_motion(None)  # type: ignore[attr-defined]
+    run_reference_replay(env)
 
     close_simulation_app(simulation_app)
 

@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 
 import torch
-
 from holosoma.envs.base_task.base_task import BaseTask
 
 # from holosoma.envs.legged_base_task.legged_robot_base import LeggedRobotBase
@@ -188,21 +187,23 @@ class WholeBodyTrackingManager(BaseTask):
             )
 
     def _draw_debug_vis(self):
+        if self.viewer is None:
+            return
         if self.simulator.get_simulator_type() == SimulatorType.ISAACSIM:
             self._draw_debug_vis_isaacsim()
         elif self.simulator.get_simulator_type() == SimulatorType.ISAACGYM:
             self._draw_debug_vis_isaacgym()
 
     def step_visualize_motion(self, actions):
+        """Render one kinematic reference frame without advancing physics."""
+        frame_started_at = time.perf_counter()
         motion_command = self.command_manager.get_state("motion_command")
         dt = 1.0 / float(motion_command.motion.fps)
         motion_command.step()
-        print("time_steps: ", motion_command.time_steps[0].item())
-        self._draw_debug_vis()
 
         # set root_states_from_motion_command
         root_pos = motion_command.root_pos_w.clone()
-        root_ori = motion_command.root_quat_w.clone()  # wxyz
+        root_ori = motion_command.root_quat_w.clone()  # xyzw
         root_lin_vel = motion_command.body_lin_vel_w[:, 0].clone()
         root_ang_vel = motion_command.body_ang_vel_w[:, 0].clone()
 
@@ -236,9 +237,12 @@ class WholeBodyTrackingManager(BaseTask):
 
         self.simulator.scene.write_data_to_sim()
         self.simulator.sim.forward()
-        self.simulator.sim.render()
         self.simulator.refresh_sim_tensors()
+        self._draw_debug_vis()
+        self.simulator.sim.render()
 
-        time.sleep(dt)
+        remaining_frame_time = dt - (time.perf_counter() - frame_started_at)
+        if remaining_frame_time > 0.0:
+            time.sleep(remaining_frame_time)
 
         return motion_command.time_steps[0].item() >= motion_command.motion.time_step_total - 2
