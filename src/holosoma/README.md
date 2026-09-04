@@ -1,5 +1,7 @@
 # Holosoma Training Framework
 
+[English](README.md) | [简体中文](README_zh.md)
+
 Core training framework for humanoid robot reinforcement learning with support for locomotion (velocity tracking) and whole-body tracking tasks.
 
 For the end-to-end Noetix E2 motion conversion, training, monitoring, resume, and playback workflow, see the [E2 Whole-Body Tracking training guide](../../docs/e2-whole-body-tracking-training.md).
