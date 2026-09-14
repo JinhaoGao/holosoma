@@ -527,6 +527,7 @@ def build_planar_foot_contact_plan(
     elevated_support_triangles: np.ndarray | None = None,
     source_heel_positions: np.ndarray | None = None,
     source_toe_positions: np.ndarray | None = None,
+    reference_sole_centers: np.ndarray | None = None,
 ) -> FootContactPlan:
     """Infer contact modes and phases from a complete source motion sequence.
 
@@ -537,6 +538,8 @@ def build_planar_foot_contact_plan(
     scaled source sole path into the target world frame. Elevated contacts are
     accepted only when an explicit upward-facing support triangle confirms
     the source sole height and XY location.
+    Explicit reference_sole_centers are already in target meters; they replace
+    uniformly scaled centers only when constructing reference displacements.
     """
     config = config or PlanarFootContactConfig()
     _validate_config(config)
@@ -622,12 +625,20 @@ def build_planar_foot_contact_plan(
             elevated_support_triangles=elevated_support_triangles,
         )
 
+    if reference_sole_centers is not None:
+        reference_sole_centers = np.asarray(reference_sole_centers, dtype=np.float64)
+        if reference_sole_centers.shape != (frame_count, 2, 3) or not np.isfinite(reference_sole_centers).all():
+            raise ValueError("reference_sole_centers must be a finite [frames, 2, 3] array in target meters")
     reference_centers_by_side = {
         side: (
             np.einsum(
                 "tij,tj->ti",
                 reference_rotations,
-                per_side[side][4] * reference_position_scale,
+                (
+                    per_side[side][4] * reference_position_scale
+                    if reference_sole_centers is None
+                    else reference_sole_centers[:, FOOT_CONTACT_SIDE_NAMES.index(side)]
+                ),
             )
             + target_translations
         )

@@ -1165,6 +1165,7 @@ def build_retargeter_kwargs_from_config(
         "foot_sticking_tolerance": retargeter_config.foot_sticking_tolerance,
         "self_collision": retargeter_config.self_collision,
         "step_size": retargeter_config.step_size,
+        "sqp": retargeter_config.sqp,
         "visualize": retargeter_config.visualize,
         "mesh_opacity": 1.0,
         "debug": retargeter_config.debug,
@@ -1497,7 +1498,13 @@ def _run_retargeting_job_unlocked(job: RetargetJob, *, motion: SourceMotion | No
     )
 
     toe_names = cfg.motion_data_config.toe_names
-    if task_type == "robot_only":
+    if motion.position_targets is not None:
+        if task_type != "robot_only":
+            raise ValueError("Prepared source position targets currently support robot_only tasks")
+        human_joints = np.asarray(motion.position_targets, dtype=np.float64).copy()
+        if human_joints.shape != motion.joints.shape or not np.isfinite(human_joints).all():
+            raise ValueError("Prepared position targets must match source positions and contain finite values")
+    elif task_type == "robot_only":
         human_joints = preprocess_motion_data(
             human_joints,
             retargeter,
@@ -1564,6 +1571,7 @@ def _run_retargeting_job_unlocked(job: RetargetJob, *, motion: SourceMotion | No
         reference_translations=foot_reference_translations,
         source_heel_positions=motion.foot_heel_positions,
         source_toe_positions=motion.foot_toe_positions,
+        reference_sole_centers=motion.foot_reference_centers,
         elevated_support_triangles=_climbing_elevated_support_triangles(
             task_type,
             constants,
@@ -1588,6 +1596,8 @@ def _run_retargeting_job_unlocked(job: RetargetJob, *, motion: SourceMotion | No
             else "ground_align_and_uniform_scale"
         ),
     }
+    if motion.position_targets is not None:
+        result_metadata.pop("human_position_scale")
     result_metadata.update(motion.metadata)
     if data_format == "fbx_mocap":
         with np.load(job.source_path, allow_pickle=False) as source_data:

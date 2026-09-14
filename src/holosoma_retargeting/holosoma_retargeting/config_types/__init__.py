@@ -8,6 +8,7 @@ from holosoma_retargeting.config_types.retargeter import (
     RetargeterConfig,
     RootStabilityConfig,
     ShoulderDirectionConfig,
+    SqpConfig,
 )
 from holosoma_retargeting.config_types.retargeting import (
     RetargetingCommand,
@@ -42,6 +43,7 @@ __all__ = [
     "RobotConfig",
     "RootStabilityConfig",
     "ShoulderDirectionConfig",
+    "SqpConfig",
     "TaskConfig",
     "ViserConfig",
 ]

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -110,6 +111,32 @@ class RootStabilityConfig:
 
 
 @dataclass(frozen=True)
+class SqpConfig:
+    """Shared numerical convergence policy for every retargeting frame."""
+
+    max_iterations: int = 100
+    """Hard cap, including the first frame; converged frames stop early."""
+    cost_rtol: float = 1e-5
+    """Relative tolerance for successive local QP objective values."""
+    cost_atol: float = 1e-8
+    """Absolute tolerance for successive local QP objective values."""
+    step_tolerance: float = 1e-4
+    """Maximum optimized qpos change: meters, radians, or quaternion components."""
+    stable_iterations: int = 2
+    """Consecutive iterations satisfying both cost and step tolerances."""
+
+    def __post_init__(self) -> None:
+        for name in ("max_iterations", "stable_iterations"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"sqp.{name} must be a positive integer")
+        for name in ("cost_rtol", "cost_atol", "step_tolerance"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"sqp.{name} must be finite and non-negative")
+
+
+@dataclass(frozen=True)
 class RetargeterConfig:
     """Configuration for retargeter parameters.
 
@@ -169,6 +196,9 @@ class RetargeterConfig:
 
     step_size: float = 0.2
     """Trust region for each SQP iteration."""
+
+    sqp: SqpConfig = field(default_factory=SqpConfig)
+    """Convergence tolerances and iteration cap shared by all frames."""
 
     self_collision: SelfCollisionConfig = field(default_factory=SelfCollisionConfig)
     """Configuration for self-collision avoidance."""

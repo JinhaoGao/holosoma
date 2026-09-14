@@ -149,3 +149,5 @@ The final audit also verifies the exact public scripts, task matrix, result
 directory layout, default-off orientation behavior, and that this work created
 no untracked files. It also verifies default-on foot sticking and explicit
 `True`/`False` CLI parsing.
+
+The shared SQP loop now uses the same convergence policy for every frame and source type. `--sqp.max-iterations` defaults to 100. Early termination requires two consecutive iterations with both a stable local QP cost (absolute tolerance 1e-8 and relative tolerance 1e-5) and an optimized qpos infinity-norm step no larger than 1e-4. Root quaternion signs are aligned before measuring the step. These are numerical stopping criteria, not a certificate of global optimality or physical feasibility. The policy and tolerances participate in resume identity. Capped frames are reported and stored as `sqp_converged=False` with `sqp_stop_reasons=max_iterations`; successful early termination is `converged`. Per-frame iteration counts, final step norms, and final cost changes are saved. See `robot2robot-retargeting.md` for CLI details and morphology preprocessing.

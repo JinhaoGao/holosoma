@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
+import warnings
 from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from holosoma_retargeting.config_types.retargeter import (
     RootStabilityConfig,
     SelfCollisionConfig,
     ShoulderDirectionConfig,
+    SqpConfig,
 )
 from holosoma_retargeting.data_utils.hand_skeleton import build_hand_visualization_spec
 from holosoma_retargeting.foot_contact import FootContactPlan, FootContactState
@@ -136,6 +138,7 @@ class InteractionMeshRetargeter:
         shoulder_direction: ShoulderDirectionConfig | None = None,
         natural_pose_joint_positions: dict[str, float] | None = None,
         natural_pose_weights: dict[str, float] | None = None,
+        sqp: SqpConfig | None = None,
     ):
         """This kinematic retargeter solves the diffIK problem with hard constraints in SQP style.
         During each SQP iteration, the problem is solved with the following constraints and costs:
@@ -193,6 +196,7 @@ class InteractionMeshRetargeter:
         if not np.isfinite(self.penetration_tolerance) or self.penetration_tolerance < 0:
             raise ValueError("penetration_tolerance must be finite and non-negative")
         self.step_size = step_size
+        self.sqp = sqp or SqpConfig()
         self.visualize = visualize
         self.mesh_opacity = float(mesh_opacity)
         self.debug = debug
@@ -340,6 +344,8 @@ class InteractionMeshRetargeter:
 
         self.last_sqp_iteration_count = 0
         self.last_sqp_stop_reason = "not_started"
+        self.last_sqp_step_norm: float = np.inf
+        self.last_sqp_cost_change: float = np.inf
 
         self.w_nominal_tracking_init = w_nominal_tracking_init
         self.nominal_tracking_tau = nominal_tracking_tau
@@ -2874,6 +2880,8 @@ class InteractionMeshRetargeter:
         frame_costs = []
         sqp_iteration_counts = []
         sqp_stop_reasons = []
+        sqp_final_step_norms = []
+        sqp_final_cost_changes = []
         orientation_robot_quaternions_wxyz: list[np.ndarray] = []
         orientation_errors_rad: list[np.ndarray] = []
         orientation_frame_costs: list[float] = []
@@ -2990,7 +2998,6 @@ class InteractionMeshRetargeter:
                     w_nominal_tracking=w_nominal_tracking,
                     q_a_nominal=(q_nominal_list[i, self.q_a_indices] if q_nominal_list is not None else None),
                     init_t=i == 0,
-                    n_iter=50 if i == 0 else 10,
                     frame_idx=i,
                     orientation_target_matrices=orientation_target_matrices[i],
                     foot_contact_state=foot_contact_plan.frames[i],
@@ -3012,6 +3019,8 @@ class InteractionMeshRetargeter:
                 frame_costs.append(float(cost))
                 sqp_iteration_counts.append(self.last_sqp_iteration_count)
                 sqp_stop_reasons.append(self.last_sqp_stop_reason)
+                sqp_final_step_norms.append(self.last_sqp_step_norm)
+                sqp_final_cost_changes.append(self.last_sqp_cost_change)
 
                 if root_stability_bootstrap:
                     (
@@ -3382,6 +3391,10 @@ class InteractionMeshRetargeter:
             "frame_costs": np.asarray(frame_costs, dtype=np.float64),
             "sqp_iteration_counts": np.asarray(sqp_iteration_counts, dtype=np.int32),
             "sqp_stop_reasons": np.asarray(sqp_stop_reasons, dtype=str),
+            "sqp_converged": np.asarray(sqp_stop_reasons) == "converged",
+            "sqp_final_step_norms": np.asarray(sqp_final_step_norms, dtype=np.float64),
+            "sqp_final_cost_changes": np.asarray(sqp_final_cost_changes, dtype=np.float64),
+            "sqp_convergence_policy": "cost_and_qpos_step_v1",
             "orientation_tracking_enabled": np.asarray(self.orientation_tracking_enabled),
             "orientation_diagnostics_enabled": np.asarray(self.orientation_diagnostics_enabled),
             "orientation_human_joint_names": np.asarray(
@@ -3590,6 +3603,14 @@ class InteractionMeshRetargeter:
         destination.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(destination, **save_payload)
         print("Saving results to path:", dest_res_path)
+        capped_frames = np.flatnonzero(np.asarray(sqp_stop_reasons) == "max_iterations")
+        if len(capped_frames):
+            warnings.warn(
+                f"SQP reached its hard cap without convergence in {len(capped_frames)}/{num_frames} frames "
+                f"(first frame indices: {capped_frames[:10].tolist()}); inspect sqp_converged in the saved NPZ.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         if self.visualize:
             saved_foot_sticking_enabled = bool(
@@ -4230,7 +4251,7 @@ class InteractionMeshRetargeter:
         w_nominal_tracking: float = 0.0,
         q_a_nominal: np.ndarray | None = None,
         init_t: bool = False,
-        n_iter: int = 10,
+        n_iter: int | None = None,
         frame_idx: int = 0,
         orientation_target_matrices: np.ndarray | None = None,
         foot_contact_state: Mapping[str, FootContactState] | None = None,
@@ -4239,18 +4260,25 @@ class InteractionMeshRetargeter:
         root_stability_target_matrix: np.ndarray | None = None,
         root_stability_bootstrap: bool = False,
     ):
-        """Apply each successful linearized QP step directly, matching main."""
-        max_iterations = int(n_iter)
-        if max_iterations <= 0:
-            raise ValueError("n_iter must be positive")
+        """Stop on consecutive stable costs and small steps, or the hard cap.
+
+        n_iter optionally overrides the cap for direct programmatic callers.
+        All production frames use the same configured policy.
+        """
+        policy = self.sqp
+        max_iterations = policy.max_iterations if n_iter is None else n_iter
+        if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations <= 0:
+            raise ValueError("n_iter must be a positive integer")
         if foot_contact_state is None:
             self._active_planar_foot_targets = None
         else:
             self._prepare_planar_foot_targets(q_t_last, foot_contact_state)
 
         last_cost = np.inf
+        stable_count = 0
         stop_reason = "max_iterations"
         for iteration_idx in range(max_iterations):
+            previous_q = q_n.copy()
             q_n, cost = self.solve_single_iteration(
                 q_locked=q_locked,
                 q_a_n_last=q_n[self.q_a_indices],
@@ -4273,8 +4301,21 @@ class InteractionMeshRetargeter:
                 raise RuntimeError(
                     f"SQP returned a non-finite local cost at frame {frame_idx}, iteration {iteration_idx}: {cost}",
                 )
-            if np.isclose(cost, last_cost):
-                stop_reason = "cost_stable"
+            if not np.isfinite(q_n).all():
+                raise RuntimeError(f"SQP returned non-finite qpos at frame {frame_idx}, iteration {iteration_idx}")
+            # Quaternions q and -q encode the same pose; align signs before
+            # measuring changes in the solver's normalized qpos coordinates.
+            aligned_q = q_n.copy()
+            if len(aligned_q) >= 7 and np.dot(aligned_q[3:7], previous_q[3:7]) < 0:
+                aligned_q[3:7] *= -1
+            self.last_sqp_step_norm = float(np.max(np.abs(aligned_q[self.q_a_indices] - previous_q[self.q_a_indices])))
+            self.last_sqp_cost_change = abs(float(cost) - last_cost)
+            cost_stable = np.isfinite(last_cost) and self.last_sqp_cost_change <= (
+                policy.cost_atol + policy.cost_rtol * max(abs(float(cost)), abs(last_cost))
+            )
+            stable_count = stable_count + 1 if cost_stable and self.last_sqp_step_norm <= policy.step_tolerance else 0
+            if stable_count >= policy.stable_iterations:
+                stop_reason = "converged"
                 break
             last_cost = cost
 

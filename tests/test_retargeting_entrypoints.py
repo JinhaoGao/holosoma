@@ -363,6 +363,10 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 "250",
                 "--root-orientation-weight",
                 "80",
+                "--sqp.max-iterations",
+                "150",
+                "--sqp.step-tolerance",
+                "0.0002",
             ],
         )
         config = internal_config_from_command(command)
@@ -384,6 +388,8 @@ class RetargetingEntrypointTests(unittest.TestCase):
         self.assertEqual(kwargs["arm_interaction_mesh_weight_scale"], 0.4)
         self.assertEqual(kwargs["root_stability"].position_weight, 250.0)
         self.assertEqual(kwargs["root_stability"].orientation_weight, 80.0)
+        self.assertEqual(kwargs["sqp"].max_iterations, 150)
+        self.assertEqual(kwargs["sqp"].step_tolerance, 0.0002)
 
     def test_cli_values_override_robot_profile_defaults(self):
         with tempfile.TemporaryDirectory() as temporary_dir:
@@ -572,6 +578,7 @@ class RetargetingEntrypointTests(unittest.TestCase):
         self.assertEqual(
             tuple(field.name for field in fields(RetargetingCommand)),
             (
+                "sqp",
                 "task",
                 "robot",
                 "dataset",

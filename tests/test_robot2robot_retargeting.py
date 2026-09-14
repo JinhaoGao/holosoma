@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import tyro
+from holosoma_retargeting.config_types.retargeter import SqpConfig
 from holosoma_retargeting.config_types.retargeting import RetargeterRuntimeOptions
 from holosoma_retargeting.config_types.robot_profiles import load_robot_profile
 from holosoma_retargeting.config_types.viser import ViserConfig
@@ -114,9 +115,14 @@ def test_shared_solver_and_both_outputs(tmp_path: Path, source: str, target: str
         assert data["source_robot_type"] == source
         assert data["orientation_source"] == "robot_fk"
         assert data["orientation_tracking_enabled"]
+        assert data["human_position_preprocessing"] == "robot_segment_lengths_v1"
+        assert "human_position_scale" not in data
+        np.testing.assert_array_equal(data["body_proportion_source_contact_modes"], data["foot_contact_modes"])
         assert data["interaction_mesh_weight"] > 0
         assert data["orientation_frame_costs"].shape == (4,)
         assert np.isfinite(data["frame_costs"]).all()
+        np.testing.assert_array_equal(data["sqp_converged"], data["sqp_stop_reasons"] == "converged")
+        assert (data["sqp_iteration_counts"] <= command.sqp.max_iterations).all()
         assert data["foot_contact_modes"].shape == (4, 2)
         assert data["human_points_world"].shape == data["robot_points_world"].shape
         assert any("mesh" in name for name in data.files)
@@ -134,6 +140,26 @@ def test_shared_solver_and_both_outputs(tmp_path: Path, source: str, target: str
     assert result.csv_path.is_file()
     with pytest.raises(ValueError, match="different solver configuration"):
         main(replace(command, fps=30))
+    with pytest.raises(ValueError, match="different solver configuration"):
+        main(replace(command, position_scaling="uniform"))
+    with pytest.raises(ValueError, match="different solver configuration"):
+        main(replace(command, sqp=SqpConfig(max_iterations=200)))
+
+
+def test_uniform_fallback_and_hard_cap_are_recorded(tmp_path: Path) -> None:
+    csv, _ = write_motion(tmp_path, "g1")
+    command = replace(
+        command_for(csv, "g1", "e2", tmp_path), position_scaling="uniform", sqp=SqpConfig(max_iterations=1)
+    )
+    with pytest.warns(RuntimeWarning, match="4/4 frames"):
+        result = main(command)
+    with np.load(result.job.output_path, allow_pickle=False) as data:
+        assert data["human_position_preprocessing"] == "ground_align_and_uniform_scale"
+        assert "human_position_scale" in data
+        assert "body_proportion_target_lengths_m" not in data
+        np.testing.assert_array_equal(data["sqp_iteration_counts"], np.ones(4, dtype=int))
+        assert not data["sqp_converged"].any()
+        assert (data["sqp_stop_reasons"] == "max_iterations").all()
 
 
 def test_custom_robot_name_uses_profiles_without_pair_registration(tmp_path: Path) -> None:
@@ -173,6 +199,7 @@ def test_custom_robot_name_uses_profiles_without_pair_registration(tmp_path: Pat
     xml_tree.write(custom_urdf.with_suffix(".xml"))
     custom["robot_urdf_file"] = str(custom_urdf)
     motion_profile = custom["robot_motion"]
+    motion_profile["position_scaling"]["torso_link"] = renamed_links[motion_profile["position_scaling"]["torso_link"]]
     for key in ("position_links", "orientation_links"):
         motion_profile[key] = {name: renamed_links[link] for name, link in motion_profile[key].items()}
     motion_profile["reference_joint_positions"] = {

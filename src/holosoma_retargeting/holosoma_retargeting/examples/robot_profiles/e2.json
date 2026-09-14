@@ -257,6 +257,13 @@
         20,
         21
       ]
+    },
+    "position_scaling": {
+      "torso_link": "waist_pitch_link",
+      "torso_anchor_names": [
+        "LeftArm",
+        "RightArm"
+      ]
     }
   }
 }

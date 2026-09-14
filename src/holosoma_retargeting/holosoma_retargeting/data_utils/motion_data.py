@@ -83,6 +83,12 @@ class SourceMotion:
     foot_heel_positions: np.ndarray | None = None
     foot_toe_positions: np.ndarray | None = None
     """Optional measured sole landmarks, shaped [frames, left/right, xyz]."""
+    foot_polygon_positions: np.ndarray | None = None
+    position_frame_quaternions_wxyz: dict[str, np.ndarray] = field(default_factory=dict)
+    position_targets: np.ndarray | None = None
+    """Optional already-preprocessed position references in target meters."""
+    foot_reference_centers: np.ndarray | None = None
+    """Optional target-sized sole centers for contact reference displacement."""
     metadata: dict[str, object] = field(default_factory=dict)
 
     @property

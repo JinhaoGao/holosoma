@@ -15,6 +15,7 @@ from holosoma_retargeting.config_types.retargeter import (
     RetargeterConfig,
     RootStabilityConfig,
     ShoulderDirectionConfig,
+    SqpConfig,
 )
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.robot_profiles import (
@@ -100,6 +101,9 @@ class RetargeterRuntimeOptions:
 @dataclass(frozen=True)
 class RetargetingOptions:
     """Shared CLI controls for human and robot source commands."""
+
+    sqp: SqpConfig = field(default_factory=SqpConfig)
+    """Shared per-frame convergence conditions and hard iteration cap."""
 
     task: TaskType = "object_interaction"
     """Retargeting task."""
@@ -371,6 +375,7 @@ def config_from_robot_profile(
             ),
             planar_foot_contact=profile.planar_foot_contact,
             step_size=(defaults.step_size if command.step_size is None else command.step_size),
+            sqp=command.sqp,
             w_nominal_tracking_init=(
                 defaults.w_nominal_tracking_init
                 if command.w_nominal_tracking_init is None

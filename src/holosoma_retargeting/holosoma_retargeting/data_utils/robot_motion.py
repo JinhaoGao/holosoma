@@ -38,6 +38,8 @@ class RobotMotionProfile:
     reference_base: tuple[float, ...]
     reference_joints: dict[str, float]
     orientation_weights: dict[str, float]
+    torso_link: str | None = None
+    torso_anchor_names: tuple[str, ...] = ()
 
     @classmethod
     def from_profile(cls, profile: RobotProfile) -> RobotMotionProfile:
@@ -55,8 +57,17 @@ class RobotMotionProfile:
             "orientation_weights",
             "robot_config",
         }
-        if table is None or set(table) != required:
+        if table is None or not required.issubset(table) or set(table) - required - {"position_scaling"}:
             raise ValueError(f"{profile.path}: robot_motion must define exactly {sorted(required)}")
+        scaling = table.get("position_scaling", {})
+        if not isinstance(scaling, dict) or (scaling and set(scaling) != {"torso_link", "torso_anchor_names"}):
+            raise ValueError("position_scaling must declare torso_link and torso_anchor_names")
+        torso_link = scaling.get("torso_link")
+        torso_anchors = scaling.get("torso_anchor_names", [])
+        if scaling and (not isinstance(torso_link, str) or not torso_link):
+            raise ValueError("position_scaling/torso_link must be a body name")
+        if not isinstance(torso_anchors, list) or any(not isinstance(n, str) for n in torso_anchors):
+            raise ValueError("position_scaling/torso_anchor_names must be semantic landmark names")
         position_links = _string_mapping(table["position_links"], "position_links")
         orientation_links = _string_mapping(table["orientation_links"], "orientation_links")
         names = tuple(position_links)
@@ -111,6 +122,8 @@ class RobotMotionProfile:
             robot_urdf_file=str(urdf.resolve()),
             **{**overrides, "nominal_tracking_indices": np.asarray(overrides["nominal_tracking_indices"], dtype=int)},
         )
+        if any(n not in position_links or parents[n] != root for n in torso_anchors):
+            raise ValueError("Torso anchors must be position landmarks directly below the semantic root")
         result = cls(
             robot=config,
             position_links=position_links,
@@ -121,6 +134,8 @@ class RobotMotionProfile:
             reference_base=tuple(reference_base),
             reference_joints=reference_joints,
             orientation_weights=weights,
+            torso_link=torso_link,
+            torso_anchor_names=tuple(torso_anchors),
         )
         # Reuse the shared rooted-tree validation, including cycles.
         _ = result.motion_config().resolved_joint_parent_indices
@@ -201,6 +216,7 @@ class RobotKinematics:
         ):
             raise ValueError("The semantic root must use the floating-root body for position and orientation")
         self.sole_ids = {}
+        self.sole_geometry_ids = {}
         for side in ("left", "right"):
             regions = profile.robot.FOOT_CONTACT_LINKS[side]
             self.sole_ids[side] = self.body_ids(
@@ -210,6 +226,16 @@ class RobotKinematics:
                     regions["toe"],
                 ]
             )
+            self.sole_geometry_ids[side] = self.body_ids(
+                [
+                    regions["heel_positive_lateral"],
+                    regions["heel_negative_lateral"],
+                    regions["forefoot_positive_lateral"],
+                    regions["forefoot_negative_lateral"],
+                    regions["toe"],
+                ]
+            )
+        self.torso_id = None if profile.torso_link is None else int(self.body_ids([profile.torso_link])[0])
         unknown = set(profile.reference_joints) - set(self.joint_addresses)
         if unknown:
             raise ValueError(f"Unknown reference-pose joints: {sorted(unknown)}")
@@ -222,6 +248,10 @@ class RobotKinematics:
             self.reference_qpos[self.joint_addresses[name]] = value
         self.forward(self.reference_qpos)
         self.reference_orientations = self.data.xquat[self.orientation_ids].copy()
+        self.reference_positions = self.data.xpos[self.position_ids].copy()
+        self.reference_sole_points = np.stack([self.data.xpos[self.sole_geometry_ids[s]] for s in ("left", "right")])
+        self.reference_torso_position = None if self.torso_id is None else self.data.xpos[self.torso_id].copy()
+        self.reference_torso_quaternion = None if self.torso_id is None else self.data.xquat[self.torso_id].copy()
 
     def body_ids(self, names) -> np.ndarray:
         names = tuple(names)
@@ -262,14 +292,19 @@ def load_robot_motion(path: Path, *, source: RobotKinematics, target: RobotMotio
     orientations = np.empty((frame_count, len(profile.orientation_links), 4))
     heels = np.empty((frame_count, 2, 3))
     toes = np.empty_like(heels)
+    sole_points = np.empty((frame_count, 2, 5, 3))
+    torso_quaternions = None if source.torso_id is None else np.empty((frame_count, 4))
     for index, pose in enumerate(qpos):
         source.forward(pose)
         positions[index] = source.data.xpos[source.position_ids]
         orientations[index] = source.data.xquat[source.orientation_ids]
+        if torso_quaternions is not None:
+            torso_quaternions[index] = source.data.xquat[source.torso_id]
         for side_index, side in enumerate(("left", "right")):
             points = source.data.xpos[source.sole_ids[side]]
             heels[index, side_index] = points[:2].mean(axis=0)
             toes[index, side_index] = points[2]
+            sole_points[index, side_index] = source.data.xpos[source.sole_geometry_ids[side]]
     source_root = profile.reference_base
     root_alignment = Rotation.from_quat(np.asarray(source_root)[[1, 2, 3, 0]]).inv() * Rotation.from_quat(
         np.asarray(target.reference_base)[[1, 2, 3, 0]],
@@ -290,6 +325,8 @@ def load_robot_motion(path: Path, *, source: RobotKinematics, target: RobotMotio
         root_frame_to_robot_base_quaternion_wxyz=root_alignment.as_quat()[[3, 0, 1, 2]],
         foot_heel_positions=heels,
         foot_toe_positions=toes,
+        foot_polygon_positions=sole_points,
+        position_frame_quaternions_wxyz={} if torso_quaternions is None else {"torso": torso_quaternions},
         metadata={
             "source_kind": "robot",
             "source_robot_type": profile.robot.robot_type,

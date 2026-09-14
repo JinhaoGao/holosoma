@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from typing import Literal
 
 import tyro
 
@@ -13,6 +14,7 @@ from holosoma_retargeting.config_types.retargeting import RetargetingOptions, co
 from holosoma_retargeting.config_types.robot_profiles import load_robot_profile
 from holosoma_retargeting.data_utils.npz_to_csv import convert_npz_to_csv
 from holosoma_retargeting.data_utils.robot_motion import RobotKinematics, RobotMotionProfile, load_robot_motion
+from holosoma_retargeting.data_utils.robot_proportions import ROBOT_POSITION_SCALING_VERSION, rebuild_robot_positions
 from holosoma_retargeting.retargeting_pipeline import RetargetJobResult, build_retarget_job, run_retargeting_job
 
 
@@ -28,6 +30,8 @@ class Robot2RobotCommand(RetargetingOptions):
     """Numeric CSV exported in root xyz, root xyzw, then source URDF joint order."""
     fps: float = tyro.MISSING
     """Source frame rate. CSV contains no timing metadata."""
+    position_scaling: Literal["segment", "uniform"] = "segment"
+    """Rebuild target segment lengths, or select the legacy uniform height ratio."""
     source_robot_profile: Path | None = None
     """Source robot JSON or profile directory, including its robot_motion section."""
 
@@ -64,7 +68,7 @@ def main(command: Robot2RobotCommand) -> Robot2RobotResult:
     source = RobotKinematics(RobotMotionProfile.from_profile(source_profile))
     target = RobotMotionProfile.from_profile(target_profile)
     # Validate target model, joint order, and reference pose before beginning an expensive solve.
-    RobotKinematics(target)
+    target_kinematics = RobotKinematics(target)
     missing_positions = set(target.position_links) - set(source.profile.position_links)
     missing_orientations = set(target.orientation_links) - set(source.profile.orientation_links)
     if missing_positions or missing_orientations:
@@ -100,7 +104,23 @@ def main(command: Robot2RobotCommand) -> Robot2RobotResult:
         motion_data_config=motion_config,
         robot_config=target.robot,
     )
-    config.source_motion_options = {"fps": command.fps, "source_profile": asdict(source.profile)}
+    config.source_motion_options = {
+        "fps": command.fps,
+        "source_profile": asdict(source.profile),
+        "position_scaling": command.position_scaling,
+        "position_scaling_version": ROBOT_POSITION_SCALING_VERSION
+        if command.position_scaling == "segment"
+        else "uniform",
+        "target_torso_link": target.torso_link,
+        "target_torso_anchor_names": target.torso_anchor_names,
+    }
+    if command.position_scaling == "segment":
+        motion = rebuild_robot_positions(
+            motion,
+            source=source,
+            target=target_kinematics,
+            contact_config=config.retargeter.planar_foot_contact,
+        )
     job = build_retarget_job(
         config,
         source_path=source_path,

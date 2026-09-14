@@ -270,6 +270,13 @@
         17,
         18
       ]
+    },
+    "position_scaling": {
+      "torso_link": "torso_link",
+      "torso_anchor_names": [
+        "LeftArm",
+        "RightArm"
+      ]
     }
   }
 }

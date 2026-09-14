@@ -18,7 +18,7 @@ if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
 from holosoma_retargeting.config_types.data_type import MotionDataConfig  # noqa: E402
-from holosoma_retargeting.config_types.retargeter import RetargeterConfig  # noqa: E402
+from holosoma_retargeting.config_types.retargeter import RetargeterConfig, SqpConfig  # noqa: E402
 from holosoma_retargeting.config_types.robot import RobotConfig  # noqa: E402
 from holosoma_retargeting.config_types.task import TaskConfig  # noqa: E402
 from holosoma_retargeting.data_utils.omomo import OMOMO_OBJECT_NAMES  # noqa: E402
@@ -496,6 +496,7 @@ class MainStyleSqpIterationTests(unittest.TestCase):
     ) -> tuple[InteractionMeshRetargeter, list[dict], int]:
         retargeter = InteractionMeshRetargeter.__new__(InteractionMeshRetargeter)
         retargeter.q_a_indices = np.asarray([0], dtype=int)
+        retargeter.sqp = SqpConfig()
         retargeter.last_sqp_iteration_count = 0
         retargeter.last_sqp_stop_reason = "not_started"
 
@@ -517,7 +518,7 @@ class MainStyleSqpIterationTests(unittest.TestCase):
     def _iterate(
         retargeter: InteractionMeshRetargeter,
         *,
-        max_iterations: int,
+        max_iterations: int | None,
     ):
         return retargeter.iterate(
             q_locked=np.zeros(1),
@@ -533,13 +534,14 @@ class MainStyleSqpIterationTests(unittest.TestCase):
             n_iter=max_iterations,
         )
 
-    def test_cost_stability_stops_and_keeps_latest_qp_step(self):
+    def test_cost_and_step_stability_stop_and_keep_latest_qp_step(self):
         retargeter, calls, max_iterations = self._retargeter_with_candidates(
             [
                 self._candidate(1.0, cost=10.0),
                 self._candidate(2.0, cost=9.0),
                 self._candidate(3.0, cost=9.0),
-                self._candidate(4.0, cost=8.0),
+                self._candidate(3.00001, cost=9.0),
+                self._candidate(3.00002, cost=9.0),
             ],
         )
 
@@ -548,11 +550,76 @@ class MainStyleSqpIterationTests(unittest.TestCase):
             max_iterations=max_iterations,
         )
 
-        self.assertEqual(len(calls), 3)
-        self.assertEqual(retargeter.last_sqp_iteration_count, 3)
-        self.assertEqual(retargeter.last_sqp_stop_reason, "cost_stable")
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(retargeter.last_sqp_iteration_count, 5)
+        self.assertEqual(retargeter.last_sqp_stop_reason, "converged")
         self.assertEqual(cost, 9.0)
-        np.testing.assert_array_equal(q, np.asarray([3.0]))
+        np.testing.assert_array_equal(q, np.asarray([3.00002]))
+
+    def test_flat_cost_with_large_steps_does_not_converge(self):
+        retargeter, calls, cap = self._retargeter_with_candidates(
+            [self._candidate(float(i), cost=1.0) for i in range(1, 5)],
+            max_iterations=4,
+        )
+        self._iterate(retargeter, max_iterations=cap)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(retargeter.last_sqp_stop_reason, "max_iterations")
+
+    def test_temporary_stability_resets_consecutive_counter(self):
+        retargeter, calls, cap = self._retargeter_with_candidates(
+            [self._candidate(q, cost=1.0) for q in (1.0, 1.0, 2.0, 2.0, 2.0)],
+            max_iterations=5,
+        )
+        self._iterate(retargeter, max_iterations=cap)
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(retargeter.last_sqp_stop_reason, "converged")
+
+    def test_small_steps_with_changing_cost_do_not_converge(self):
+        retargeter, calls, cap = self._retargeter_with_candidates(
+            [self._candidate(0.0, cost=float(i)) for i in range(1, 5)],
+            max_iterations=4,
+        )
+        self._iterate(retargeter, max_iterations=cap)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(retargeter.last_sqp_stop_reason, "max_iterations")
+
+    def test_configured_cap_applies_without_n_iter_override(self):
+        retargeter, calls, _ = self._retargeter_with_candidates(
+            [self._candidate(float(i), cost=1.0) for i in range(1, 5)],
+        )
+        retargeter.sqp = SqpConfig(max_iterations=4)
+        self._iterate(retargeter, max_iterations=None)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(retargeter.last_sqp_stop_reason, "max_iterations")
+
+    def test_equivalent_quaternion_signs_do_not_prevent_convergence(self):
+        pose = np.asarray([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
+        opposite = -pose
+        retargeter, calls, _ = self._retargeter_with_candidates([(pose, 1.0), (opposite, 1.0), (pose, 1.0)])
+        retargeter.q_a_indices = np.arange(7)
+        retargeter.iterate(
+            q_locked=pose,
+            q_n=pose,
+            q_t_last=pose,
+            target_laplacian=np.zeros((1, 3)),
+            adj_list=[],
+            obj_pts_local=np.zeros((0, 3)),
+            foot_sticking={"left": False, "right": False},
+        )
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(retargeter.last_sqp_stop_reason, "converged")
+
+    def test_invalid_convergence_parameters_are_rejected(self):
+        for kwargs in (
+            {"max_iterations": 0},
+            {"max_iterations": 1.5},
+            {"stable_iterations": -1},
+            {"cost_atol": -1.0},
+            {"cost_rtol": float("nan")},
+            {"step_tolerance": float("inf")},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                SqpConfig(**kwargs)
 
     def test_iteration_cap_returns_latest_qp_step(self):
         retargeter, calls, max_iterations = self._retargeter_with_candidates(

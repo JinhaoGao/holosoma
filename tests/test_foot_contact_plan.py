@@ -7,7 +7,6 @@ from typing import Any
 
 import cvxpy as cp
 import numpy as np
-
 from holosoma_retargeting.config_types.retargeter import PlanarFootContactConfig
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.foot_contact import (
@@ -410,3 +409,33 @@ def test_saved_contact_plan_metadata_round_trips(tmp_path) -> None:
     np.testing.assert_array_equal(metadata["phase_ids"], phase_ids)
     np.testing.assert_array_equal(metadata["pivot_uv"], pivot_uv)
     assert metadata["plan_version"] == 1
+
+
+def test_explicit_target_sole_centers_preserve_detection_and_slide_displacement() -> None:
+    joints = _empty_motion()
+    _set_flat_foot(joints, ankle_index=1, toe_index=2, xy=(0.0, 0.1))
+    _set_flat_foot(joints, ankle_index=3, toe_index=4, xy=(0.0, -0.1))
+    joints[:, 1:, 0] += np.linspace(0, 0.5, len(joints))[:, None]
+    original = build_planar_foot_contact_plan(joints, _JOINT_NAMES, _PARENT_INDICES, _TOE_NAMES, fps=30)
+    centers = joints[:, [2, 4]].copy()
+    centers[..., 0] *= 0.4
+    centers[..., 1] *= 0.7
+    transformed = build_planar_foot_contact_plan(
+        joints,
+        _JOINT_NAMES,
+        _PARENT_INDICES,
+        _TOE_NAMES,
+        fps=30,
+        reference_position_scale=9.0,
+        reference_sole_centers=centers,
+    )
+    np.testing.assert_array_equal(transformed.modes, original.modes)
+    np.testing.assert_array_equal(transformed.phase_ids, original.phase_ids)
+    assert "slide" in transformed.modes
+    for side in range(2):
+        indices = np.flatnonzero(transformed.modes[:, side] == "slide")
+        first = indices[0]
+        np.testing.assert_allclose(
+            transformed.reference_displacements_xy[indices, side],
+            centers[indices, side, :2] - centers[first, side, :2],
+        )
