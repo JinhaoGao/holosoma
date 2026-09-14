@@ -18,6 +18,7 @@ from holosoma_retargeting.config_types.retargeter import (
 )
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.robot_profiles import (
+    RobotProfile,
     load_robot_profile,
     resolve_natural_pose,
     resolve_orientation_weights,
@@ -97,13 +98,13 @@ class RetargeterRuntimeOptions:
 
 
 @dataclass(frozen=True)
-class RetargetingCommand:
-    """Small user-facing command shared by both retargeting entry points."""
+class RetargetingOptions:
+    """Shared CLI controls for human and robot source commands."""
 
     task: TaskType = "object_interaction"
     """Retargeting task."""
 
-    robot: RobotName = "g1"
+    robot: str = "g1"
     """Target robot."""
 
     dataset: DatasetName = "OMOMO_new"
@@ -217,6 +218,13 @@ class RetargetingCommand:
     """Override every natural-pose joint weight with one value."""
 
 
+@dataclass(frozen=True)
+class RetargetingCommand(RetargetingOptions):
+    """Human-motion entry points retain their reviewed robot choices."""
+
+    robot: RobotName = "g1"
+
+
 def internal_config_from_command(command: RetargetingCommand) -> RetargetingConfig:
     """Resolve the compact public command into the internal solver config."""
 
@@ -236,17 +244,38 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         robot=command.robot,
         config_path=command.robot_profile,
     )
+    return config_from_robot_profile(
+        command,
+        profile,
+        dataset=dataset,
+        data_format=data_format,
+        default_data_path=default_data_path,
+    )
+
+
+def config_from_robot_profile(
+    command: RetargetingOptions,
+    profile: RobotProfile,
+    *,
+    dataset: str | None,
+    data_format: str,
+    default_data_path: Path,
+    motion_data_config: MotionDataConfig | None = None,
+    robot_config: RobotConfig | None = None,
+) -> RetargetingConfig:
+    """Resolve shared solver controls for human and robot source commands."""
     defaults = profile.retargeting
     orientation_enabled = (
         profile.orientation_enabled if command.orientation_tracking is None else command.orientation_tracking
     )
     orientation_weights = resolve_orientation_weights(
         profile=profile,
-        dataset=dataset,
+        dataset=dataset or data_format,
         data_format=data_format,
         enabled=orientation_enabled,
         uniform_weight=command.orientation_weights,
         robot=command.robot,
+        mapping=None if motion_data_config is None else motion_data_config.resolved_orientation_joints_mapping,
     )
     natural_pose_enabled = (
         profile.natural_pose_enabled if command.natural_pose_tracking is None else command.natural_pose_tracking
@@ -280,7 +309,9 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         save_dir=command.save_dir,
         output_name=command.output_name,
         overwrite_existing=command.overwrite,
-        robot_config=RobotConfig(
+        motion_data_config=motion_data_config or MotionDataConfig(data_format=data_format, robot_type=command.robot),
+        robot_config=robot_config
+        or RobotConfig(
             robot_type=command.robot,
             robot_dof=robot_dof,
             robot_height=robot_height,
@@ -405,6 +436,9 @@ class RetargetingConfig:
 
     output_name: str | None = None
     """Optional filename override for the saved NPZ artifact."""
+
+    source_motion_options: dict[str, object] = field(default_factory=dict)
+    """Source adapter settings retained in the reproducible job configuration."""
 
     augmentation: bool = False
     """Whether to use augmentation."""

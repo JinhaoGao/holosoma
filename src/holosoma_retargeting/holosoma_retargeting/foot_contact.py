@@ -525,6 +525,8 @@ def build_planar_foot_contact_plan(
     reference_rotation_matrices: np.ndarray | None = None,
     reference_translations: np.ndarray | None = None,
     elevated_support_triangles: np.ndarray | None = None,
+    source_heel_positions: np.ndarray | None = None,
+    source_toe_positions: np.ndarray | None = None,
 ) -> FootContactPlan:
     """Infer contact modes and phases from a complete source motion sequence.
 
@@ -582,17 +584,35 @@ def build_planar_foot_contact_plan(
         raise ValueError("Each source toe must have a foot or ankle parent")
     floor_height = float(np.percentile(np.min(joints[:, toe_indices, 2], axis=1), 2.0))
 
+    explicit_soles = source_heel_positions is not None or source_toe_positions is not None
+    if explicit_soles:
+        source_heel_positions = np.asarray(source_heel_positions, dtype=np.float64)
+        source_toe_positions = np.asarray(source_toe_positions, dtype=np.float64)
+        for points in (source_heel_positions, source_toe_positions):
+            if points.shape != (frame_count, 2, 3) or not np.isfinite(points).all():
+                raise ValueError("Explicit heel and toe positions must both be finite [frames, 2, 3] arrays")
+        floor_height = float(
+            np.percentile(
+                np.minimum(source_heel_positions[..., 2], source_toe_positions[..., 2]).min(axis=1),
+                2.0,
+            )
+        )
+
     per_side = {}
     for side_index, side in enumerate(FOOT_CONTACT_SIDE_NAMES):
         toe_index = toe_indices[side_index]
         heel_index = heel_indices[side_index]
-        heel, toe = _foot_proxy_trajectories(
-            joints,
-            toe_index=toe_index,
-            heel_joint_index=heel_index,
-            floor_height=floor_height,
-            ground_clearance=config.ground_clearance,
-        )
+        if explicit_soles:
+            heel = source_heel_positions[:, side_index].copy()
+            toe = source_toe_positions[:, side_index].copy()
+        else:
+            heel, toe = _foot_proxy_trajectories(
+                joints,
+                toe_index=toe_index,
+                heel_joint_index=heel_index,
+                floor_height=floor_height,
+                ground_clearance=config.ground_clearance,
+            )
         per_side[side] = _classify_one_foot(
             heel,
             toe,

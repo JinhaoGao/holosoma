@@ -7,7 +7,7 @@ upstream or remote `dev` branch is explicitly outside this work.
 
 ## Public interfaces
 
-The package exposes three retargeting commands.
+The package exposes four retargeting commands.
 
 `robot_retarget.py` retargets one explicitly selected motion without dataset
 discovery. It writes the identity result under `demo_results`.
@@ -20,6 +20,12 @@ command must not walk a dataset directory. It writes results under
 `paired_retargeting/robot_refine.py` jointly refines two synchronized
 robot-only results. Its implementation and player are isolated under the
 `paired_retargeting` package.
+
+`examples/robot2robot_retarget.py` adapts a robot CSV through source-model FK
+and runs the same single-motion Interaction Mesh pipeline. Source and target
+robots are independently described by their robot profiles. It writes NPZ and
+CSV together under `demo_results/<target>/robot_only/robot2robot/<source>/<motion>`.
+See [the robot2robot interface](robot2robot-retargeting.md) for the input contract.
 
 Ablation runners, weight searches, comparison batches, full-dataset traversal,
 result rebuilding, and result promotion are not production interfaces. Both

@@ -49,8 +49,8 @@ class MotionFormatSpec:
 
 
 @dataclass(frozen=True)
-class HumanMotion:
-    """Validated source motion consumed by the retargeting pipeline.
+class SourceMotion:
+    """Validated human or robot source motion consumed by the retargeting pipeline.
 
     Orientations contain only frames that were present directly in the source
     representation. ``orientation_joint_names`` therefore need not cover the
@@ -79,6 +79,11 @@ class HumanMotion:
     joint_parent_indices: tuple[int, ...] = ()
     _canonical_joint_names: tuple[str, ...] = field(default=(), repr=False)
     _root_joint_name: str | None = field(default=None, repr=False)
+
+    foot_heel_positions: np.ndarray | None = None
+    foot_toe_positions: np.ndarray | None = None
+    """Optional measured sole landmarks, shaped [frames, left/right, xyz]."""
+    metadata: dict[str, object] = field(default_factory=dict)
 
     @property
     def canonical_joint_names(self) -> tuple[str, ...]:
@@ -112,6 +117,10 @@ class HumanMotion:
             return self.orientation_quaternions_wxyz
         indices = [self.orientation_joint_names.index(name) for name in self._canonical_joint_names]
         return self.orientation_quaternions_wxyz[:, indices]
+
+
+# Backward-compatible name for existing human adapters.
+HumanMotion = SourceMotion
 
 
 def validate_motion_skeleton_contract(
@@ -178,6 +187,14 @@ def validate_motion_skeleton_contract(
 
 
 MOTION_FORMATS: dict[str, MotionFormatSpec] = {
+    "robot": MotionFormatSpec(
+        name="robot",
+        suffixes=(".csv",),
+        task_types=frozenset({"robot_only"}),
+        root_joint="Hips",
+        orientation_mode="bvh",
+        default_fps=0.0,
+    ),
     "amass": MotionFormatSpec(
         name="amass",
         suffixes=(".npz",),
@@ -569,8 +586,7 @@ def _validate_motion(
         unknown_t_pose_names = set(validated_t_pose_names).difference(canonical_joint_names)
         if unknown_t_pose_names:
             raise ValueError(
-                f"{spec.name} bind-pose orientation joints are not canonical: "
-                f"{sorted(unknown_t_pose_names)}",
+                f"{spec.name} bind-pose orientation joints are not canonical: {sorted(unknown_t_pose_names)}",
             )
         validated_t_pose_quaternions = np.asarray(
             t_pose_orientation_quaternions,
@@ -620,9 +636,7 @@ def _validate_motion(
             )
         indices = np.arange(source_joint_count, dtype=np.int32)
         if np.any((parents < -1) | (parents >= indices) | (parents == indices)) or np.count_nonzero(parents == -1) != 1:
-            raise ValueError(
-                f"{spec.name} complete source-skeleton parents must describe one parent-first rooted tree"
-            )
+            raise ValueError(f"{spec.name} complete source-skeleton parents must describe one parent-first rooted tree")
         validated_source_skeleton_parents = tuple(int(parent) for parent in parents)
         validated_source_skeleton_positions = np.asarray(source_skeleton_positions, dtype=np.float32).copy()
         expected_source_positions_shape = (joints.shape[0], source_joint_count, 3)

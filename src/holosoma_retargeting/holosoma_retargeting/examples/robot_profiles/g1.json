@@ -98,5 +98,178 @@
       "left_shoulder_pitch_joint": 2.0,
       "right_shoulder_pitch_joint": 2.0
     }
+  },
+  "robot_motion": {
+    "position_links": {
+      "Hips": "pelvis",
+      "LeftUpLeg": "left_hip_yaw_link",
+      "RightUpLeg": "right_hip_yaw_link",
+      "LeftLeg": "left_knee_link",
+      "RightLeg": "right_knee_link",
+      "LeftArm": "left_shoulder_yaw_link",
+      "RightArm": "right_shoulder_yaw_link",
+      "LeftForeArm": "left_elbow_link",
+      "RightForeArm": "right_elbow_link",
+      "LeftFoot": "left_ankle_roll_link",
+      "RightFoot": "right_ankle_roll_link",
+      "LeftToeBase": "left_ankle_roll_sphere_5_link",
+      "RightToeBase": "right_ankle_roll_sphere_5_link",
+      "LeftHand": "left_rubber_hand_link",
+      "RightHand": "right_rubber_hand_link"
+    },
+    "parents": {
+      "Hips": null,
+      "LeftUpLeg": "Hips",
+      "RightUpLeg": "Hips",
+      "LeftLeg": "LeftUpLeg",
+      "RightLeg": "RightUpLeg",
+      "LeftArm": "Hips",
+      "RightArm": "Hips",
+      "LeftForeArm": "LeftArm",
+      "RightForeArm": "RightArm",
+      "LeftFoot": "LeftLeg",
+      "RightFoot": "RightLeg",
+      "LeftToeBase": "LeftFoot",
+      "RightToeBase": "RightFoot",
+      "LeftHand": "LeftForeArm",
+      "RightHand": "RightForeArm"
+    },
+    "root_joint": "Hips",
+    "toe_names": [
+      "LeftToeBase",
+      "RightToeBase"
+    ],
+    "orientation_links": {
+      "Hips": "pelvis",
+      "LeftUpLeg": "left_hip_yaw_link",
+      "RightUpLeg": "right_hip_yaw_link",
+      "LeftLeg": "left_knee_link",
+      "RightLeg": "right_knee_link",
+      "LeftFoot": "left_ankle_roll_link",
+      "RightFoot": "right_ankle_roll_link",
+      "LeftToeBase": "left_ankle_roll_sphere_5_link",
+      "RightToeBase": "right_ankle_roll_sphere_5_link",
+      "LeftArm": "left_shoulder_yaw_link",
+      "RightArm": "right_shoulder_yaw_link",
+      "LeftForeArm": "left_elbow_link",
+      "RightForeArm": "right_elbow_link",
+      "LeftHand": "left_rubber_hand_link",
+      "RightHand": "right_rubber_hand_link"
+    },
+    "reference_base_quaternion_wxyz": [
+      0.7071067811865476,
+      0.0,
+      0.0,
+      0.7071067811865475
+    ],
+    "reference_joint_positions": {
+      "left_shoulder_pitch_joint": 0.2006477150487628,
+      "left_shoulder_roll_joint": 1.476490678407796,
+      "left_shoulder_yaw_joint": 0.8742948427729365,
+      "left_elbow_joint": 1.414980653432781,
+      "right_shoulder_pitch_joint": 0.2006477150487628,
+      "right_shoulder_roll_joint": -1.476490678407796,
+      "right_shoulder_yaw_joint": -0.8742948427729365,
+      "right_elbow_joint": 1.414980653432781
+    },
+    "orientation_weights": {
+      "Hips": 1.0,
+      "LeftUpLeg": 1.0,
+      "RightUpLeg": 1.0,
+      "LeftLeg": 1.0,
+      "RightLeg": 1.0,
+      "LeftFoot": 1.0,
+      "RightFoot": 1.0,
+      "LeftToeBase": 1.0,
+      "RightToeBase": 1.0,
+      "LeftArm": 1.0,
+      "RightArm": 1.0,
+      "LeftForeArm": 1.0,
+      "RightForeArm": 1.0,
+      "LeftHand": 1.0,
+      "RightHand": 1.0
+    },
+    "robot_config": {
+      "foot_sticking_links": [
+        "left_ankle_roll_sphere_1_link",
+        "right_ankle_roll_sphere_1_link",
+        "left_ankle_roll_sphere_2_link",
+        "right_ankle_roll_sphere_2_link",
+        "left_ankle_roll_sphere_3_link",
+        "right_ankle_roll_sphere_3_link",
+        "left_ankle_roll_sphere_4_link",
+        "right_ankle_roll_sphere_4_link"
+      ],
+      "foot_contact_links": {
+        "left": {
+          "heel_positive_lateral": "left_ankle_roll_sphere_1_link",
+          "heel_negative_lateral": "left_ankle_roll_sphere_2_link",
+          "forefoot_positive_lateral": "left_ankle_roll_sphere_3_link",
+          "forefoot_negative_lateral": "left_ankle_roll_sphere_4_link",
+          "toe": "left_ankle_roll_sphere_5_link"
+        },
+        "right": {
+          "heel_positive_lateral": "right_ankle_roll_sphere_1_link",
+          "heel_negative_lateral": "right_ankle_roll_sphere_2_link",
+          "forefoot_positive_lateral": "right_ankle_roll_sphere_3_link",
+          "forefoot_negative_lateral": "right_ankle_roll_sphere_4_link",
+          "toe": "right_ankle_roll_sphere_5_link"
+        }
+      },
+      "manual_lb": {
+        "3": -1.0,
+        "4": -1.0,
+        "5": -1.0,
+        "6": -1.0,
+        "20": -0.3,
+        "21": -0.1,
+        "26": -0.1,
+        "27": -0.1,
+        "28": -0.05,
+        "33": -0.1,
+        "34": -0.1,
+        "35": -0.05
+      },
+      "manual_ub": {
+        "3": 1.0,
+        "4": 1.0,
+        "5": 1.0,
+        "6": 1.0,
+        "20": 0.3,
+        "25": 1.4,
+        "26": 0.2,
+        "27": 0.3,
+        "28": 0.05,
+        "32": 1.4,
+        "33": 0.2,
+        "34": 0.3,
+        "35": 0.05
+      },
+      "manual_cost": {
+        "19": 0.2,
+        "20": 0.2
+      },
+      "nominal_tracking_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ]
+    }
   }
 }

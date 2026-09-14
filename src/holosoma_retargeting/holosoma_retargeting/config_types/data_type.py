@@ -1272,6 +1272,8 @@ def normalize_data_format(data_format: str) -> str:
     """Return the canonical user-facing name for a supported data format."""
 
     normalized = DATA_FORMAT_ALIASES.get(data_format.lower(), data_format.lower())
+    if normalized == "robot":
+        return normalized  # Robot profiles provide a dynamic skeleton, outside the human registry.
     if normalized not in DEMO_JOINTS_REGISTRY:
         available = ", ".join(sorted(DEMO_JOINTS_REGISTRY.keys()))
         raise ValueError(f"Invalid data_format: '{data_format}'. Available data formats: {available}.")
@@ -1284,6 +1286,8 @@ class MotionDataConfig:
     # Use str instead of Literal to allow dynamic robot types
     robot_type: str = "g1"
     robot_defaults: dict[str, RobotDefaults] = field(default_factory=_default_robot_defaults)
+    source_root_joint: str | None = None
+    source_toe_names: tuple[str, str] | None = None
     human_height: float | None = None
     """Optional subject height in meters. Overrides the data-format default height."""
 
@@ -1320,6 +1324,8 @@ class MotionDataConfig:
         if self.demo_joints is not None:
             return self.demo_joints
 
+        if self.data_format == "robot":
+            raise ValueError("Robot motion requires explicit profile keypoints and topology")
         return DEMO_JOINTS_REGISTRY[self.data_format]
 
     @property
@@ -1397,9 +1403,7 @@ class MotionDataConfig:
 
         if self.orientation_t_pose_robot_base_quaternion_wxyz is not None:
             return self.orientation_t_pose_robot_base_quaternion_wxyz
-        return ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ.get(
-            (self.data_format, robot_family(self.robot_type))
-        )
+        return ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ.get((self.data_format, robot_family(self.robot_type)))
 
     @property
     def resolved_orientation_t_pose_robot_joint_positions(
@@ -1430,6 +1434,8 @@ class MotionDataConfig:
     @property
     def toe_names(self) -> list[str]:
         """Get toe joint names for this data format."""
+        if self.source_toe_names is not None:
+            return list(self.source_toe_names)
         if self.data_format not in TOE_NAMES_BY_FORMAT:
             raise ValueError(
                 f"Toe names not defined for data_format: {self.data_format}. "

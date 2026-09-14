@@ -1,6 +1,8 @@
 # Holosoma 人体到机器人重定向
 
-当前生产设计包含三个重定向入口。`examples/robot_retarget.py` 对一个明确指定的动作执行普通重定向，`examples/parallel_robot_retarget.py` 对一个明确指定的 object-interaction 或 climbing 动作执行 identity 与增强变体。第二个入口名称中的 `parallel` 是历史名称，不表示遍历数据集；两个入口都不会自动扫描并重定向全部动作。`paired_retargeting/robot_refine.py` 读取两份同步的 robot-only 结果，在保留两条 nominal 轨迹的同时执行跨 actor 联合 refinement；双人部分的配置、求解、结果、场景和可视化均集中在 `paired_retargeting/`，完整契约见 [paired_retargeting/README.md](paired_retargeting/README.md)。
+当前生产设计包含四个重定向入口。`examples/robot_retarget.py` 对一个明确指定的动作执行普通重定向，`examples/parallel_robot_retarget.py` 对一个明确指定的 object-interaction 或 climbing 动作执行 identity 与增强变体。第二个入口名称中的 `parallel` 是历史名称，不表示遍历数据集；两个入口都不会自动扫描并重定向全部动作。`paired_retargeting/robot_refine.py` 读取两份同步的 robot-only 结果，在保留两条 nominal 轨迹的同时执行跨 actor 联合 refinement；双人部分的配置、求解、结果、场景和可视化均集中在 `paired_retargeting/`，完整契约见 [paired_retargeting/README.md](paired_retargeting/README.md)。
+
+`examples/robot2robot_retarget.py` 读取源机器人 CSV，以源模型 FK 提供位置和朝向，使用相同的 Interaction Mesh 重定向流水线求解目标机器人，并同时输出 NPZ 与 CSV。机器人按各自配置表组合，G1→E2 为首个测试用例。使用和扩展方法见 [robot2robot 文档](../../../docs/robot2robot-retargeting.md)。
 
 对于来自同一个多 actor FBX 的结果，联合 refinement 会恢复转换阶段保存的 `source_xy_origin_m` 相对偏移，将恢复后的相对 root 位置和跨 actor Interaction Mesh 一起纳入优化。联合结果使用项目现有的 Viser 播放控件和图层系统显示两个机器人、源人体骨架、优化后的机器人映射骨架以及 Interaction Mesh，不使用 MuJoCo viewer，也不会为了排版给任一 actor 添加额外显示偏移。播放器还会从两份单机器人结果追溯到 actor 级 FBX 转换数据，并提供独立的 `Original FBX skeletons` 图层；该图层不进行任何尺度变换，只通过一个共同平移恢复原始 actor XY 和共享地面，因此保留 FBX 的原始人体尺寸、两人间距和高度差，两幅骨架统一显示为黑色。现有 `Human skeleton` 图层继续保留各 actor 经过机器人尺度预处理后的参考骨架。
 

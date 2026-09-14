@@ -134,6 +134,7 @@ class VariantResult:
     interaction_mesh: dict[str, np.ndarray | int] | None
     interaction_mesh_edges_default: str | None
     foot_sticking: dict[str, object] | None
+    robot_urdf: str | None = None
 
 
 def split_result_family(path: str | Path) -> tuple[str, str | None]:
@@ -606,6 +607,7 @@ def load_variant_result(
         )
         fps = float(_npz_scalar(data, "fps", 30.0))
         robot_type = str(_npz_scalar(data, "robot_type", ""))
+        robot_urdf = _optional_npz_text(data, "robot_urdf")
         config_json = _optional_npz_text(data, "config_json")
         dataset_partition = _optional_npz_text(data, "dataset_partition")
         sequence_key = _optional_npz_text(data, "sequence_key")
@@ -801,6 +803,7 @@ def load_variant_result(
         interaction_mesh=interaction_mesh,
         interaction_mesh_edges_default=interaction_mesh_edges_default,
         foot_sticking=foot_sticking,
+        robot_urdf=robot_urdf,
     )
 
 
@@ -817,6 +820,7 @@ def variant_result_metadata(result: VariantResult) -> dict[str, object]:
     return {
         "variant": result.variant,
         "config_json": result.config_json,
+        "robot_urdf": result.robot_urdf,
         "dataset_partition": result.dataset_partition,
         "sequence_key": result.sequence_key,
         "experiment_name": result.experiment_name,
@@ -867,7 +871,7 @@ def _resolve_asset_path(value: str | Path) -> Path:
 
 
 def _resolve_robot_urdf(config: AugmentationViserConfig, result: VariantResult) -> Path:
-    value = config.robot_urdf
+    value = config.robot_urdf or result.robot_urdf
     if value is None:
         if not result.robot_type:
             raise ValueError(f"{result.path} has no robot_type metadata; pass --robot-urdf explicitly.")

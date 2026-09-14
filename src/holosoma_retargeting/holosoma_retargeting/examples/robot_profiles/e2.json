@@ -104,5 +104,159 @@
       "l_arm_shoulder_pitch_joint": 0.8,
       "r_arm_shoulder_pitch_joint": 0.8
     }
+  },
+  "robot_motion": {
+    "position_links": {
+      "Hips": "base_link",
+      "LeftUpLeg": "l_leg_hip_yaw_link",
+      "RightUpLeg": "r_leg_hip_yaw_link",
+      "LeftLeg": "l_leg_knee_link",
+      "RightLeg": "r_leg_knee_link",
+      "LeftArm": "l_arm_shoulder_roll_link",
+      "RightArm": "r_arm_shoulder_roll_link",
+      "LeftForeArm": "l_arm_elbow_link",
+      "RightForeArm": "r_arm_elbow_link",
+      "LeftFoot": "l_leg_ankle_roll_link",
+      "RightFoot": "r_leg_ankle_roll_link",
+      "LeftToeBase": "l_foot_sphere_5_link",
+      "RightToeBase": "r_foot_sphere_5_link",
+      "LeftHand": "l_hand_sphere_link",
+      "RightHand": "r_hand_sphere_link"
+    },
+    "parents": {
+      "Hips": null,
+      "LeftUpLeg": "Hips",
+      "RightUpLeg": "Hips",
+      "LeftLeg": "LeftUpLeg",
+      "RightLeg": "RightUpLeg",
+      "LeftArm": "Hips",
+      "RightArm": "Hips",
+      "LeftForeArm": "LeftArm",
+      "RightForeArm": "RightArm",
+      "LeftFoot": "LeftLeg",
+      "RightFoot": "RightLeg",
+      "LeftToeBase": "LeftFoot",
+      "RightToeBase": "RightFoot",
+      "LeftHand": "LeftForeArm",
+      "RightHand": "RightForeArm"
+    },
+    "root_joint": "Hips",
+    "toe_names": [
+      "LeftToeBase",
+      "RightToeBase"
+    ],
+    "orientation_links": {
+      "Hips": "base_link",
+      "LeftUpLeg": "l_leg_hip_yaw_link",
+      "RightUpLeg": "r_leg_hip_yaw_link",
+      "LeftLeg": "l_leg_knee_link",
+      "RightLeg": "r_leg_knee_link",
+      "LeftFoot": "l_leg_ankle_roll_link",
+      "RightFoot": "r_leg_ankle_roll_link",
+      "LeftToeBase": "l_foot_sphere_5_link",
+      "RightToeBase": "r_foot_sphere_5_link",
+      "LeftArm": "l_arm_shoulder_yaw_link",
+      "RightArm": "r_arm_shoulder_yaw_link",
+      "LeftForeArm": "l_arm_elbow_link",
+      "RightForeArm": "r_arm_elbow_link",
+      "LeftHand": "l_hand_sphere_link",
+      "RightHand": "r_hand_sphere_link"
+    },
+    "reference_base_quaternion_wxyz": [
+      0.7071067811865476,
+      0.0,
+      0.0,
+      0.7071067811865475
+    ],
+    "reference_joint_positions": {
+      "l_arm_shoulder_roll_joint": 1.5707963267948966,
+      "l_arm_elbow_joint": 1.0025094781323536,
+      "r_arm_shoulder_roll_joint": -1.5707963267948966,
+      "r_arm_elbow_joint": 1.0043259754318
+    },
+    "orientation_weights": {
+      "Hips": 1.0,
+      "LeftUpLeg": 1.0,
+      "RightUpLeg": 1.0,
+      "LeftLeg": 1.0,
+      "RightLeg": 1.0,
+      "LeftFoot": 1.0,
+      "RightFoot": 1.0,
+      "LeftToeBase": 1.0,
+      "RightToeBase": 1.0,
+      "LeftArm": 1.0,
+      "RightArm": 1.0,
+      "LeftForeArm": 1.0,
+      "RightForeArm": 1.0,
+      "LeftHand": 1.0,
+      "RightHand": 1.0
+    },
+    "robot_config": {
+      "foot_sticking_links": [
+        "l_foot_sphere_1_link",
+        "r_foot_sphere_1_link",
+        "l_foot_sphere_2_link",
+        "r_foot_sphere_2_link",
+        "l_foot_sphere_3_link",
+        "r_foot_sphere_3_link",
+        "l_foot_sphere_4_link",
+        "r_foot_sphere_4_link",
+        "l_foot_sphere_5_link",
+        "r_foot_sphere_5_link"
+      ],
+      "foot_contact_links": {
+        "left": {
+          "heel_positive_lateral": "l_foot_sphere_1_link",
+          "heel_negative_lateral": "l_foot_sphere_2_link",
+          "forefoot_positive_lateral": "l_foot_sphere_3_link",
+          "forefoot_negative_lateral": "l_foot_sphere_4_link",
+          "toe": "l_foot_sphere_5_link"
+        },
+        "right": {
+          "heel_positive_lateral": "r_foot_sphere_1_link",
+          "heel_negative_lateral": "r_foot_sphere_2_link",
+          "forefoot_positive_lateral": "r_foot_sphere_3_link",
+          "forefoot_negative_lateral": "r_foot_sphere_4_link",
+          "toe": "r_foot_sphere_5_link"
+        }
+      },
+      "manual_lb": {
+        "3": -1.0,
+        "4": -1.0,
+        "5": -1.0,
+        "6": -1.0
+      },
+      "manual_ub": {
+        "3": 1.0,
+        "4": 1.0,
+        "5": 1.0,
+        "6": 1.0
+      },
+      "manual_cost": {},
+      "nominal_tracking_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21
+      ]
+    }
   }
 }

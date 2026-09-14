@@ -164,6 +164,7 @@ class _LayerState:
     visible: bool
     callback: Callable[[bool], None]
     unavailable_reason: str | None
+    label: str | None = None
     checkbox: object | None = None
     updating: bool = False
 
@@ -182,6 +183,7 @@ class LayerController:
         visible: bool,
         callback: Callable[[bool], None],
         unavailable_reason: str | None = None,
+        label: str | None = None,
     ) -> None:
         """Register a layer before building controls."""
 
@@ -193,6 +195,7 @@ class LayerController:
             visible=initial_visible,
             callback=callback,
             unavailable_reason=unavailable_reason,
+            label=label,
         )
         if available:
             callback(initial_visible)
@@ -248,7 +251,7 @@ class LayerController:
                         reason = state.unavailable_reason or "Required data is not present in this input."
                         hint = f"{hint} Unavailable: {reason}"
                     checkbox = gui.add_checkbox(
-                        spec.label,
+                        state.label or spec.label,
                         initial_value=state.visible,
                         disabled=not state.available,
                         hint=hint,

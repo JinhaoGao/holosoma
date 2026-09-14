@@ -464,7 +464,10 @@ class InteractionMeshRetargeter:
         is_g1 = _joint_exists("left_elbow_joint") and _joint_exists(
             "left_wrist_roll_joint",
         )
-        if sum((is_e1, is_e2, is_g1)) != 1:
+        configured_chains = getattr(self.task_constants, "SHOULDER_DIRECTION_CHAINS", None)
+        if configured_chains is not None and len(configured_chains) != 2:
+            raise ValueError("shoulder_direction_chains must contain left and right arm specifications")
+        if configured_chains is None and sum((is_e1, is_e2, is_g1)) != 1:
             raise ValueError(
                 "Shoulder direction tracking supports the G1, E1, and E2 arm chains only",
             )
@@ -516,6 +519,18 @@ class InteractionMeshRetargeter:
                 elbow_joint_name=elbow_joint,
                 wrist_joint_names=wrist_joint_names,
             )
+            if configured_chains is not None:
+                chain = dict(configured_chains[len(specs)])
+                chain["shoulder_joint_names"] = tuple(chain["shoulder_joint_names"])
+                chain["wrist_joint_names"] = tuple(chain["wrist_joint_names"])
+                spec = ShoulderSideSpec(
+                    human_arm_name=human_names[0],
+                    human_forearm_name=human_names[1],
+                    human_hand_name=human_names[2],
+                    **chain,
+                )
+                if len(spec.shoulder_joint_names) != 3 or len(spec.wrist_joint_names) > 3:
+                    raise ValueError("Shoulder chains require three shoulder joints and at most three wrist joints")
             model_names = (
                 *spec.shoulder_joint_names,
                 spec.elbow_joint_name,
@@ -3276,6 +3291,7 @@ class InteractionMeshRetargeter:
             ),
             "source_data_format": np.asarray(self.task_constants.SOURCE_DATA_FORMAT),
             "robot_type": np.asarray(self.task_constants.ROBOT_TYPE),
+            "robot_urdf": np.asarray(self.task_constants.ROBOT_URDF_FILE),
             "task_type": np.asarray(getattr(self.task_constants, "TASK_TYPE", "")),
             "object_name": np.asarray(self.object_name),
             "object_urdf": np.asarray(self.object_model_path or ""),

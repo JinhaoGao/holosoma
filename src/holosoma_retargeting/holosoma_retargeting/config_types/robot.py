@@ -92,6 +92,10 @@ class RobotConfig:
     # Joint definitions (optional overrides)
     foot_sticking_links: list[str] | None = None
     foot_contact_links: dict[str, dict[str, str]] | None = None
+    shoulder_direction_chains: list[dict[str, object]] | None = None
+    """Optional left/right arm chain specifications for custom robot models."""
+
+    SHOULDER_DIRECTION_CHAINS = property(lambda self: self.shoulder_direction_chains)
 
     # Manual joint limits
     manual_lb: dict[str, float] | None = None

@@ -31,6 +31,7 @@ from holosoma_retargeting.config_types.retargeting import (
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.task import TaskConfig
 from holosoma_retargeting.data_utils.motion_data import (
+    SourceMotion,
     get_motion_format_spec,
     load_human_motion,
     resolve_motion_path,
@@ -243,6 +244,13 @@ def _normalized_job_payload(
     sequence_key: str,
 ) -> str:
     solver_config = asdict(normalized)
+    if not solver_config["source_motion_options"]:
+        solver_config.pop("source_motion_options")
+    for field_name in ("source_root_joint", "source_toe_names"):
+        if solver_config["motion_data_config"][field_name] is None:
+            solver_config["motion_data_config"].pop(field_name)
+    if solver_config["robot_config"].get("shoulder_direction_chains") is None:
+        solver_config["robot_config"].pop("shoulder_direction_chains", None)
     # Live display choices do not change solver output and must not split
     # otherwise identical saved trajectories.
     solver_config["retargeter"].pop("visualize", None)
@@ -610,7 +618,7 @@ def create_task_constants(
     task_constants.SOURCE_FPS = 30.0
     task_constants.SOURCE_ROOT_QUATERNIONS = None
     format_spec = get_motion_format_spec(motion_data_config.data_format)
-    task_constants.SOURCE_ROOT_JOINT = format_spec.root_joint
+    task_constants.SOURCE_ROOT_JOINT = motion_data_config.source_root_joint or format_spec.root_joint
     task_constants.SOURCE_ORIENTATION_MODE = format_spec.orientation_mode
 
     # Task-specific object setup
@@ -1347,7 +1355,7 @@ def _validate_existing_job_result(job: RetargetJob) -> None:
         )
 
 
-def run_retargeting_job(job: RetargetJob) -> RetargetJobResult:
+def run_retargeting_job(job: RetargetJob, *, motion: SourceMotion | None = None) -> RetargetJobResult:
     """Execute one job, or reuse its existing output unless overwrite is set."""
 
     _validate_job_semantics(
@@ -1357,10 +1365,12 @@ def run_retargeting_job(job: RetargetJob) -> RetargetJobResult:
     if job.output_path.exists() and not job.config.overwrite_existing:
         _validate_existing_job_result(job)
         return _resumed_job_result(job)
-    return _run_retargeting_job_unlocked(job)
+    if motion is None:
+        return _run_retargeting_job_unlocked(job)
+    return _run_retargeting_job_unlocked(job, motion=motion)
 
 
-def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
+def _run_retargeting_job_unlocked(job: RetargetJob, *, motion: SourceMotion | None = None) -> RetargetJobResult:
     """Execute the sole load/preprocess/solve/save lifecycle."""
 
     _validate_job_semantics(
@@ -1375,12 +1385,15 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
     task_name = cfg.task_name
     task_type = cfg.task_type
     data_format = str(cfg.data_format)
-    motion = load_human_motion(
-        data_format,
-        cfg.data_path,
-        task_name,
-        human_height=cfg.motion_data_config.human_height,
-    )
+    if motion is None:
+        if data_format == "robot":
+            raise ValueError("Robot jobs require a SourceMotion from the robot CSV adapter")
+        motion = load_human_motion(
+            data_format,
+            cfg.data_path,
+            task_name,
+            human_height=cfg.motion_data_config.human_height,
+        )
     if motion.source_path.resolve() != job.source_path:
         raise ValueError(
             "Normalized job source does not match the motion adapter: "
@@ -1549,6 +1562,8 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         reference_position_scale=smpl_scale,
         reference_rotation_matrices=foot_reference_rotation_matrices,
         reference_translations=foot_reference_translations,
+        source_heel_positions=motion.foot_heel_positions,
+        source_toe_positions=motion.foot_toe_positions,
         elevated_support_triangles=_climbing_elevated_support_triangles(
             task_type,
             constants,
@@ -1573,6 +1588,7 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
             else "ground_align_and_uniform_scale"
         ),
     }
+    result_metadata.update(motion.metadata)
     if data_format == "fbx_mocap":
         with np.load(job.source_path, allow_pickle=False) as source_data:
             source_scene_fields = (

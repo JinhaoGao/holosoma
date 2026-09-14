@@ -14,6 +14,7 @@ from holosoma_retargeting.config_types.retargeter import (
     PlanarFootContactConfig,
     ShoulderDirectionConfig,
 )
+from holosoma_retargeting.config_types.robot import _default_robot_defaults
 
 ROBOT_PROFILE_SCHEMA_VERSION = 1
 ORIENTATION_PROFILE_DATASETS = (
@@ -84,6 +85,7 @@ class RobotProfile:
     orientation_weights_by_dataset: dict[str, dict[str, float]]
     natural_pose_enabled: bool
     natural_pose: NaturalPoseProfile
+    robot_motion: dict[str, object] | None = None
 
 
 def concrete_robot_name(robot: str) -> str:
@@ -296,6 +298,12 @@ def _load_orientation(
         label="orientation",
     )
     datasets = _object(table["datasets"], label="orientation/datasets")
+    if robot not in _default_robot_defaults() and not datasets:
+        return (
+            _boolean(table["enable"], label="orientation/enable"),
+            _boolean(table["preview"], label="orientation/preview"),
+            {},
+        )
     _exact_fields(
         datasets,
         set(ORIENTATION_PROFILE_DATASETS),
@@ -386,6 +394,9 @@ def load_robot_profile(
     concrete_robot = concrete_robot_name(robot)
     path = _profile_path(config_path, robot=concrete_robot)
     profile = _read_profile(path)
+    robot_motion = profile.pop("robot_motion", None)
+    if robot_motion is not None:
+        robot_motion = _object(robot_motion, label="robot_motion")
     _exact_fields(
         profile,
         {
@@ -453,6 +464,7 @@ def load_robot_profile(
         orientation_weights_by_dataset=orientation_weights,
         natural_pose_enabled=natural_pose_enabled,
         natural_pose=natural_pose,
+        robot_motion=robot_motion,
     )
 
 
@@ -464,6 +476,7 @@ def resolve_orientation_weights(
     enabled: bool,
     uniform_weight: float | None,
     robot: str,
+    mapping: dict[str, str] | None = None,
 ) -> dict[str, float]:
     """Resolve profile weights or an explicit uniform CLI override."""
 
@@ -475,10 +488,11 @@ def resolve_orientation_weights(
         )
         if weight == 0.0:
             return {}
-        mapping = MotionDataConfig(
-            data_format=data_format,
-            robot_type=robot,
-        ).resolved_orientation_joints_mapping
+        if mapping is None:
+            mapping = MotionDataConfig(
+                data_format=data_format,
+                robot_type=robot,
+            ).resolved_orientation_joints_mapping
         if not mapping:
             raise ValueError(
                 f"dataset={dataset!r} does not provide direct source orientations",

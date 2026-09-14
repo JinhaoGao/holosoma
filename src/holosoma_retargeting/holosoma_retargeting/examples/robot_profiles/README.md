@@ -139,3 +139,6 @@ python -m holosoma_retargeting.examples.robot_retarget \
 只修改 `schema_version` 或 `robot` 不属于调参：正确值只用于校验，错误值会阻止运行。只开启 `orientation.preview` 会改变保存的诊断信息而不会改变 SQP 目标。修改某个已关闭功能内部的权重通常也不会改变轨迹，例如 `orientation.enable` 为 `false` 且没有 `--orientation-weights` 时，朝向数据集权重不参与求解；`natural_pose.enable` 为 `false` 且没有 `--nature-weights` 时，自然姿态参考和权重不参与求解；`foot_sticking` 为 `false` 时，接触检测参数只改变接触计划诊断；`shoulder_direction.enable` 为 `false` 时，两个肩部权重不参与求解。
 
 相反，机器人模型与缩放字段、所有已经启用的目标权重、活动自由度范围、硬约束开关和容差都会实际进入重定向流程。比较参数效果时，应保持输入动作、输出版本和其他配置不变，并为不同实验使用不同 `--output-name`，以免误看旧结果。
+
+
+`robot_motion` 是通用 robot2robot 入口使用的可选配置部分。每个机器人独立声明语义位置和朝向 link、骨架拓扑、参考姿态及足底几何，源目标按相同语义组合，不维护成对机器人配置。完整字段、命令和自定义机器人接入方式见 [robot2robot 文档](../../../../../docs/robot2robot-retargeting.md)。

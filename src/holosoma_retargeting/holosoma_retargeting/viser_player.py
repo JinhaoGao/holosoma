@@ -108,7 +108,7 @@ def _resolve_runtime_config(config: ViserConfig, metadata: dict[str, object]) ->
     if robot_type is not None:
         robot_type = str(robot_type)
 
-    robot_urdf = config.robot_urdf
+    robot_urdf = config.robot_urdf or metadata.get("robot_urdf")
     if robot_urdf is None:
         if robot_type is None:
             raise ValueError("Result has no robot_type metadata; pass --robot-urdf explicitly.")
@@ -1840,7 +1840,8 @@ def make_player(
         available=mapped_skeleton_overlay is not None,
         visible=bool(show_human_skeleton),
         callback=_set_human_skeleton_visibility,
-        unavailable_reason="Mapped source-human joints are not available.",
+        unavailable_reason="Mapped source joints are not available.",
+        label="Source robot skeleton" if (npz_metadata or {}).get("source_data_format") == "robot" else None,
     )
     layer_controller.register(
         LayerId.ROBOT_SKELETON,
@@ -2128,7 +2129,7 @@ def main(cfg: ViserConfig) -> None:
         )
     input_kind = resolve_input_kind(input_path, cfg.input_kind)
     if input_kind == "raw":
-        from holosoma_retargeting.visualization.raw_scene import (  # noqa: I001
+        from holosoma_retargeting.visualization.raw_scene import (  # noqa: PLC0415, I001
             Config as RawViewerConfig,
             main as raw_viewer_main,
         )
@@ -2157,7 +2158,7 @@ def main(cfg: ViserConfig) -> None:
         )
         return
     if input_kind == "converted":
-        from holosoma_retargeting.visualization.body_velocity_scene import (  # noqa: I001
+        from holosoma_retargeting.visualization.body_velocity_scene import (  # noqa: PLC0415, I001
             Config as BodyVelocityConfig,
             main as body_velocity_main,
         )
