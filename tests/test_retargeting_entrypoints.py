@@ -365,6 +365,8 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 "80",
                 "--sqp.max-iterations",
                 "150",
+                "--sqp.initial-max-iterations",
+                "120",
                 "--sqp.step-tolerance",
                 "0.0002",
             ],
@@ -389,6 +391,7 @@ class RetargetingEntrypointTests(unittest.TestCase):
         self.assertEqual(kwargs["root_stability"].position_weight, 250.0)
         self.assertEqual(kwargs["root_stability"].orientation_weight, 80.0)
         self.assertEqual(kwargs["sqp"].max_iterations, 150)
+        self.assertEqual(kwargs["sqp"].initial_max_iterations, 120)
         self.assertEqual(kwargs["sqp"].step_tolerance, 0.0002)
 
     def test_cli_values_override_robot_profile_defaults(self):

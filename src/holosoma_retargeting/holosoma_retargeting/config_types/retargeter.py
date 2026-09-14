@@ -114,8 +114,10 @@ class RootStabilityConfig:
 class SqpConfig:
     """Shared numerical convergence policy for every retargeting frame."""
 
-    max_iterations: int = 100
-    """Hard cap, including the first frame; converged frames stop early."""
+    max_iterations: int = 10
+    """Hard cap for subsequent frames; converged frames stop early."""
+    initial_max_iterations: int = 50
+    """First-frame hard cap, allowing more work before a previous solution exists."""
     cost_rtol: float = 1e-5
     """Relative tolerance for successive local QP objective values."""
     cost_atol: float = 1e-8
@@ -126,7 +128,7 @@ class SqpConfig:
     """Consecutive iterations satisfying both cost and step tolerances."""
 
     def __post_init__(self) -> None:
-        for name in ("max_iterations", "stable_iterations"):
+        for name in ("max_iterations", "initial_max_iterations", "stable_iterations"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"sqp.{name} must be a positive integer")

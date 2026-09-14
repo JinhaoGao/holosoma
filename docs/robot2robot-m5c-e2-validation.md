@@ -7,3 +7,5 @@
 旧模式有 133/160 帧满足数值收敛条件，27 帧触及上限；逐骨段模式 160/160 帧全部收敛，迭代次数中位数 17，最大 61。收敛判据为连续两次局部 QP 代价变化满足绝对 1e-8、相对 1e-5 容差，同时优化 qpos 最大分量变化不超过 1e-4。运行保留了未收敛状态的明确诊断，不把触及上限算作收敛。这些结果是运动学重定向验证，未进行动力学仿真或实机执行验证。
 
 最终本地输出位于 `src/holosoma_retargeting/holosoma_retargeting/demo_results/e2/robot_only/robot2robot/m5c/`，文件为 `run_CSC_001_segment.npz`、同名 CSV、`run_CSC_001_validation.json` 和 `run_CSC_001_comparison.png`。检查了 CSV 按目标关节名称读回后与 NPZ qpos 一致、四元数归一化、数值有限及全部帧的收敛标记。对照图为第 0 和第 145 帧的 MuJoCo 离屏渲染，蓝线为送入优化器的位置参考。
+
+上述数值对应当时首帧及后续帧均为 100 的实验预算。公共默认预算现已恢复为首帧 50、后续 10；复现实验需显式传入 `--sqp.initial-max-iterations 100 --sqp.max-iterations 100`。

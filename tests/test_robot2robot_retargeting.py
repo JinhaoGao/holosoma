@@ -122,7 +122,11 @@ def test_shared_solver_and_both_outputs(tmp_path: Path, source: str, target: str
         assert data["orientation_frame_costs"].shape == (4,)
         assert np.isfinite(data["frame_costs"]).all()
         np.testing.assert_array_equal(data["sqp_converged"], data["sqp_stop_reasons"] == "converged")
-        assert (data["sqp_iteration_counts"] <= command.sqp.max_iterations).all()
+        np.testing.assert_array_equal(
+            data["sqp_iteration_limits"],
+            [command.sqp.initial_max_iterations] + [command.sqp.max_iterations] * 3,
+        )
+        assert (data["sqp_iteration_counts"] <= data["sqp_iteration_limits"]).all()
         assert data["foot_contact_modes"].shape == (4, 2)
         assert data["human_points_world"].shape == data["robot_points_world"].shape
         assert any("mesh" in name for name in data.files)
@@ -149,7 +153,9 @@ def test_shared_solver_and_both_outputs(tmp_path: Path, source: str, target: str
 def test_uniform_fallback_and_hard_cap_are_recorded(tmp_path: Path) -> None:
     csv, _ = write_motion(tmp_path, "g1")
     command = replace(
-        command_for(csv, "g1", "e2", tmp_path), position_scaling="uniform", sqp=SqpConfig(max_iterations=1)
+        command_for(csv, "g1", "e2", tmp_path),
+        position_scaling="uniform",
+        sqp=SqpConfig(max_iterations=1, initial_max_iterations=1),
     )
     with pytest.warns(RuntimeWarning, match="4/4 frames"):
         result = main(command)

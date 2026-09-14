@@ -609,10 +609,33 @@ class MainStyleSqpIterationTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertEqual(retargeter.last_sqp_stop_reason, "converged")
 
+    def test_first_frame_has_a_separate_cap(self):
+        self.assertEqual(SqpConfig().initial_max_iterations, 50)
+        self.assertEqual(SqpConfig().max_iterations, 10)
+        for initial, expected in ((True, 5), (False, 2)):
+            with self.subTest(initial=initial):
+                retargeter, calls, _ = self._retargeter_with_candidates(
+                    [self._candidate(float(i), cost=1.0) for i in range(1, 6)],
+                )
+                retargeter.sqp = SqpConfig(initial_max_iterations=5, max_iterations=2)
+                retargeter.iterate(
+                    q_locked=np.zeros(1),
+                    q_n=np.zeros(1),
+                    q_t_last=np.zeros(1),
+                    target_laplacian=np.zeros((1, 3)),
+                    adj_list=[],
+                    obj_pts_local=np.zeros((0, 3)),
+                    foot_sticking={"left": False, "right": False},
+                    init_t=initial,
+                )
+                self.assertEqual(len(calls), expected)
+                self.assertEqual(retargeter.last_sqp_stop_reason, "max_iterations")
+
     def test_invalid_convergence_parameters_are_rejected(self):
         for kwargs in (
             {"max_iterations": 0},
             {"max_iterations": 1.5},
+            {"initial_max_iterations": 0},
             {"stable_iterations": -1},
             {"cost_atol": -1.0},
             {"cost_rtol": float("nan")},

@@ -3148,7 +3148,7 @@ class InteractionMeshRetargeter:
                     foot_sticking_state=foot_sticking_states[i],
                 )
 
-                pbar.set_postfix(cost=cost)
+                pbar.set_postfix(cost=cost, iterations=self.last_sqp_iteration_count, stop=self.last_sqp_stop_reason)
 
         # Remove previous debug visualization
         if self.debug:
@@ -3390,6 +3390,10 @@ class InteractionMeshRetargeter:
             ),
             "frame_costs": np.asarray(frame_costs, dtype=np.float64),
             "sqp_iteration_counts": np.asarray(sqp_iteration_counts, dtype=np.int32),
+            "sqp_iteration_limits": np.asarray(
+                [self.sqp.initial_max_iterations] + [self.sqp.max_iterations] * (num_frames - 1),
+                dtype=np.int32,
+            ),
             "sqp_stop_reasons": np.asarray(sqp_stop_reasons, dtype=str),
             "sqp_converged": np.asarray(sqp_stop_reasons) == "converged",
             "sqp_final_step_norms": np.asarray(sqp_final_step_norms, dtype=np.float64),
@@ -4263,10 +4267,12 @@ class InteractionMeshRetargeter:
         """Stop on consecutive stable costs and small steps, or the hard cap.
 
         n_iter optionally overrides the cap for direct programmatic callers.
-        All production frames use the same configured policy.
+        All production frames use the same convergence conditions. The first
+        frame has a separate cap because it lacks a previous-frame solution.
         """
         policy = self.sqp
-        max_iterations = policy.max_iterations if n_iter is None else n_iter
+        default_cap = policy.initial_max_iterations if init_t else policy.max_iterations
+        max_iterations = default_cap if n_iter is None else n_iter
         if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations <= 0:
             raise ValueError("n_iter must be a positive integer")
         if foot_contact_state is None:
