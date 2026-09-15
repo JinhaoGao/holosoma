@@ -1,0 +1,260 @@
+{
+  "schema_version": 1,
+  "robot": "t1",
+  "robot_dof": 23,
+  "robot_height": 1.2,
+  "robot_urdf_file": "models/t1/t1_23dof.urdf",
+  "retargeting": {
+    "dynamic_ground_window": true,
+    "interaction_mesh_weight": 10.0,
+    "arm_interaction_mesh_weight_scale": 1.0,
+    "root_position_weight": 1.0,
+    "root_orientation_weight": 1.0,
+    "q_a_init_idx": -7,
+    "activate_joint_limits": true,
+    "activate_obj_non_penetration": true,
+    "foot_sticking": true,
+    "penetration_tolerance": 0.001,
+    "foot_sticking_tolerance": 0.001,
+    "step_size": 0.2,
+    "w_nominal_tracking_init": 5.0,
+    "nominal_tracking_tau": 1000000.0
+  },
+  "planar_foot_contact": {
+    "smoothing_window_seconds": 0.1,
+    "static_speed": 0.025,
+    "release_speed": 0.06,
+    "normal_speed": 0.08,
+    "pivot_angular_speed": 0.12,
+    "slide_speed": 0.08,
+    "ground_clearance": 0.04,
+    "minimum_phase_seconds": 0.1,
+    "elevated_support_seconds": 0.2,
+    "heading_tolerance": 0.002,
+    "slide_tracking_tolerance": 0.005
+  },
+  "shoulder_direction": {
+    "enable": true,
+    "direction_weight": 100.0,
+    "wrist_axis_weight_scale": 1.0
+  },
+  "orientation": {
+    "enable": true,
+    "preview": false,
+    "datasets": {}
+  },
+  "natural_pose": {
+    "enable": false,
+    "joint_names": [
+      "AAHead_yaw",
+      "Head_pitch",
+      "Left_Shoulder_Pitch",
+      "Left_Shoulder_Roll",
+      "Left_Elbow_Pitch",
+      "Left_Elbow_Yaw",
+      "Right_Shoulder_Pitch",
+      "Right_Shoulder_Roll",
+      "Right_Elbow_Pitch",
+      "Right_Elbow_Yaw",
+      "Waist",
+      "Left_Hip_Pitch",
+      "Left_Hip_Roll",
+      "Left_Hip_Yaw",
+      "Left_Knee_Pitch",
+      "Left_Ankle_Pitch",
+      "Left_Ankle_Roll",
+      "Right_Hip_Pitch",
+      "Right_Hip_Roll",
+      "Right_Hip_Yaw",
+      "Right_Knee_Pitch",
+      "Right_Ankle_Pitch",
+      "Right_Ankle_Roll"
+    ],
+    "reference_default": 0.0,
+    "reference_overrides": {},
+    "weight_default": 0.0,
+    "weight_overrides": {}
+  },
+  "robot_motion": {
+    "position_links": {
+      "Hips": "Trunk",
+      "LeftUpLeg": "Hip_Pitch_Left",
+      "RightUpLeg": "Hip_Pitch_Right",
+      "LeftLeg": "Shank_Left",
+      "RightLeg": "Shank_Right",
+      "LeftArm": "AL2",
+      "RightArm": "AR2",
+      "LeftForeArm": "left_hand_link",
+      "RightForeArm": "right_hand_link",
+      "LeftFoot": "Ankle_Cross_Left",
+      "RightFoot": "Ankle_Cross_Right",
+      "LeftToeBase": "left_foot_sphere_5_link",
+      "RightToeBase": "right_foot_sphere_5_link",
+      "LeftHand": "left_hand_sphere_link",
+      "RightHand": "right_hand_sphere_link"
+    },
+    "parents": {
+      "Hips": null,
+      "LeftUpLeg": "Hips",
+      "RightUpLeg": "Hips",
+      "LeftLeg": "LeftUpLeg",
+      "RightLeg": "RightUpLeg",
+      "LeftArm": "Hips",
+      "RightArm": "Hips",
+      "LeftForeArm": "LeftArm",
+      "RightForeArm": "RightArm",
+      "LeftFoot": "LeftLeg",
+      "RightFoot": "RightLeg",
+      "LeftToeBase": "LeftFoot",
+      "RightToeBase": "RightFoot",
+      "LeftHand": "LeftForeArm",
+      "RightHand": "RightForeArm"
+    },
+    "root_joint": "Hips",
+    "toe_names": [
+      "LeftToeBase",
+      "RightToeBase"
+    ],
+    "orientation_links": {
+      "Hips": "Trunk",
+      "LeftUpLeg": "Hip_Yaw_Left",
+      "RightUpLeg": "Hip_Yaw_Right",
+      "LeftLeg": "Shank_Left",
+      "RightLeg": "Shank_Right",
+      "LeftFoot": "left_foot_link",
+      "RightFoot": "right_foot_link",
+      "LeftToeBase": "left_foot_sphere_5_link",
+      "RightToeBase": "right_foot_sphere_5_link",
+      "LeftArm": "AL3",
+      "RightArm": "AR3",
+      "LeftForeArm": "left_hand_link",
+      "RightForeArm": "right_hand_link",
+      "LeftHand": "left_hand_sphere_link",
+      "RightHand": "right_hand_sphere_link"
+    },
+    "reference_base_quaternion_wxyz": [
+      0.7071067811865476,
+      0.0,
+      0.0,
+      0.7071067811865475
+    ],
+    "reference_joint_positions": {},
+    "orientation_weights": {
+      "Hips": 1.0,
+      "LeftUpLeg": 1.0,
+      "RightUpLeg": 1.0,
+      "LeftLeg": 1.0,
+      "RightLeg": 1.0,
+      "LeftFoot": 1.0,
+      "RightFoot": 1.0,
+      "LeftToeBase": 1.0,
+      "RightToeBase": 1.0,
+      "LeftArm": 0.0,
+      "RightArm": 0.0,
+      "LeftForeArm": 1.0,
+      "RightForeArm": 1.0,
+      "LeftHand": 0.0,
+      "RightHand": 0.0
+    },
+    "robot_config": {
+      "foot_sticking_links": [
+        "left_foot_sphere_1_link",
+        "right_foot_sphere_1_link",
+        "left_foot_sphere_2_link",
+        "right_foot_sphere_2_link",
+        "left_foot_sphere_3_link",
+        "right_foot_sphere_3_link",
+        "left_foot_sphere_4_link",
+        "right_foot_sphere_4_link",
+        "left_foot_sphere_5_link",
+        "right_foot_sphere_5_link"
+      ],
+      "foot_contact_links": {
+        "left": {
+          "heel_positive_lateral": "left_foot_sphere_1_link",
+          "heel_negative_lateral": "left_foot_sphere_2_link",
+          "forefoot_positive_lateral": "left_foot_sphere_3_link",
+          "forefoot_negative_lateral": "left_foot_sphere_4_link",
+          "toe": "left_foot_sphere_5_link"
+        },
+        "right": {
+          "heel_positive_lateral": "right_foot_sphere_1_link",
+          "heel_negative_lateral": "right_foot_sphere_2_link",
+          "forefoot_positive_lateral": "right_foot_sphere_3_link",
+          "forefoot_negative_lateral": "right_foot_sphere_4_link",
+          "toe": "right_foot_sphere_5_link"
+        }
+      },
+      "manual_lb": {
+        "3": -1.0,
+        "4": -1.0,
+        "5": -1.0,
+        "6": -1.0
+      },
+      "manual_ub": {
+        "3": 1.0,
+        "4": 1.0,
+        "5": 1.0,
+        "6": 1.0
+      },
+      "manual_cost": {},
+      "nominal_tracking_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29
+      ],
+      "shoulder_direction_chains": [
+        {
+          "shoulder_joint_names": [
+            "Left_Shoulder_Pitch",
+            "Left_Shoulder_Roll",
+            "Left_Elbow_Pitch"
+          ],
+          "torso_basis_link_name": "AL1",
+          "shoulder_anchor_link_name": "AL2",
+          "elbow_link_name": "left_hand_link",
+          "hand_link_name": "left_hand_sphere_link",
+          "elbow_joint_name": "Left_Elbow_Yaw",
+          "wrist_joint_names": []
+        },
+        {
+          "shoulder_joint_names": [
+            "Right_Shoulder_Pitch",
+            "Right_Shoulder_Roll",
+            "Right_Elbow_Pitch"
+          ],
+          "torso_basis_link_name": "AR1",
+          "shoulder_anchor_link_name": "AR2",
+          "elbow_link_name": "right_hand_link",
+          "hand_link_name": "right_hand_sphere_link",
+          "elbow_joint_name": "Right_Elbow_Yaw",
+          "wrist_joint_names": []
+        }
+      ]
+    },
+    "position_scaling": {
+      "torso_link": "Trunk",
+      "torso_anchor_names": [
+        "LeftArm",
+        "RightArm"
+      ]
+    }
+  }
+}

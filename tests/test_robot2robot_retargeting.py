@@ -27,6 +27,22 @@ def kinematics(name: str) -> RobotKinematics:
     return RobotKinematics(RobotMotionProfile.from_profile(load_robot_profile(robot=name)))
 
 
+def test_known_robot_can_use_a_robot_only_orientation_profile(tmp_path: Path) -> None:
+    profile = json.loads(load_robot_profile(robot="e2").path.read_text())
+    profile["orientation"]["datasets"] = {}
+    path = tmp_path / "e2.json"
+    path.write_text(json.dumps(profile))
+    resolved = load_robot_profile(robot="e2", config_path=path)
+    assert resolved.orientation_weights_by_dataset == {}
+    assert RobotMotionProfile.from_profile(resolved).orientation_weights
+
+    # Without robot semantics an empty table must still fail human profile validation.
+    del profile["robot_motion"]
+    path.write_text(json.dumps(profile))
+    with pytest.raises(ValueError, match="orientation/datasets"):
+        load_robot_profile(robot="e2", config_path=path)
+
+
 def write_motion(tmp_path: Path, name: str, frames: int = 4) -> tuple[Path, np.ndarray]:
     profile = load_robot_profile(robot=name)
     robot = kinematics(name)
@@ -36,7 +52,7 @@ def write_motion(tmp_path: Path, name: str, frames: int = 4) -> tuple[Path, np.n
         qpos[:, robot.joint_addresses[joint]] = value
     robot.forward(qpos[0])
     qpos[:, 2] -= robot.data.xpos[np.concatenate(list(robot.sole_ids.values())), 2].min()
-    shoulder = next(j for j in robot.joint_addresses if "shoulder_pitch" in j)
+    shoulder = next(j for j in robot.joint_addresses if "shoulder_pitch" in j.lower())
     qpos[:, robot.joint_addresses[shoulder]] += np.linspace(0, -0.06, frames)
     # Deliberately permute saved order: the exporter and importer must honor names.
     names = list(robot.joint_addresses)[::-1]
@@ -46,7 +62,7 @@ def write_motion(tmp_path: Path, name: str, frames: int = 4) -> tuple[Path, np.n
     return convert_npz_to_csv(path, robot.urdf), qpos
 
 
-@pytest.mark.parametrize("name", ["g1", "e1_23dof", "e1_24dof", "e2"])
+@pytest.mark.parametrize("name", ["g1", "e1_23dof", "e1_24dof", "e2", "t1"])
 def test_export_csv_import_fk_roundtrip(tmp_path: Path, name: str) -> None:
     csv, expected = write_motion(tmp_path, name)
     robot = kinematics(name)
@@ -100,7 +116,9 @@ def command_for(csv: Path, source: str, target: str, tmp_path: Path) -> Robot2Ro
     )
 
 
-@pytest.mark.parametrize(("source", "target"), [("g1", "e2"), ("e2", "g1"), ("e1_23dof", "e2")])
+@pytest.mark.parametrize(
+    ("source", "target"), [("g1", "e2"), ("e2", "g1"), ("e1_23dof", "e2"), ("e2", "t1"), ("t1", "e2")]
+)
 def test_shared_solver_and_both_outputs(tmp_path: Path, source: str, target: str) -> None:
     csv, _ = write_motion(tmp_path, source)
     command = command_for(csv, source, target, tmp_path)

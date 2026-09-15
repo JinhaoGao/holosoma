@@ -4,6 +4,8 @@ Robot-to-robot 重定向使用 `examples/robot2robot_retarget.py`。它读取一
 
 CSV 与现有 `data_utils/npz_to_csv.py` 的输出一致：无表头，每行一帧，依次为根位置 xyz（米）、根四元数 xyzw、按源 URDF 文件中非固定关节顺序排列的关节值。旋转关节单位为弧度，移动关节单位为米，世界坐标采用右手 Z-up。必须提供正的有限 `--fps`，因为 CSV 不保存时间信息。程序不猜测外部列布局，也不根据自由度数量猜测关节名称。所有关节按名称映射到 MuJoCo 模型，根四元数转为内部 wxyz 并归一化；空文件、缺列、非有限数值和零四元数会在求解前报错。输入帧数和 FPS 保留。
 
+T1 23DoF 的机器人运动配置位于 `examples/robot_profiles/t1.json`，可直接使用 `--robot t1` 或 `--source-robot t1`，模型为 `models/t1/t1_23dof.urdf` 及同名 XML。该表仅声明 robot2robot 朝向映射，人体数据集朝向表为空，不代表新增了 T1 的全部 human2robot 数据集支持。带有 `robot_motion` 的表可以省略人体朝向数据，即使机器人名称已经存在于旧模型默认值中。T1 的机械零位为展臂参考姿态，参考根绕 Z 轴旋转 90 度，与其他机器人参考姿态朝向一致。其浮动根是 `Trunk`，语义根映射到此 body；腰部关节位于躯干下方，与以骨盆为浮动根的模型不同，因此带明显腰部扭转的动作仍需检查映射效果。T1 手臂链中的 `Elbow_Pitch` 实际位于上臂旋转链，`Elbow_Yaw` 驱动前臂弯曲；配置按模型关节轴和拓扑定义三关节肩部方向项，并关闭上臂和手部的完整朝向权重。T1 的 CSV/FK 往返和 E2↔T1 双向真实求解纳入机器人重定向测试。
+
 每个机器人在 `examples/robot_profiles/<robot>.json` 的可选 `robot_motion` 部分描述自身，不维护源目标成对的配置。`position_links` 将语义关键点映射到模型 body 原点，`parents` 定义这些关键点的有根树，`root_joint` 指向实际浮动根 body，`toe_names` 按左、右顺序标记脚底前端点。`orientation_links` 为同一语义集合中的点指定朝向 body，因此位置锚点和朝向 body 可以不同。逐骨段模式还要求双方对应语义点的父子关系一致。可选 `robot_motion.position_scaling` 包含 `torso_link` 和 `torso_anchor_names`，前者为躯干刚体，后者为直接挂在语义根下的肩部等锚点。目标声明躯干锚点时，源也必须声明躯干刚体；程序用源躯干转动重建目标躯干锚点。内置机器人均已配置，未声明时根的直接子节点按根部刚体几何处理。源配置必须提供目标映射所需的语义名称；无法对应时直接报错，不静默丢弃目标。可通过模型中的固定辅助 body 定义额外锚点。
 
 `reference_base_quaternion_wxyz` 与 `reference_joint_positions` 定义双方具有相同语义姿态、相同世界朝向的参考姿态；未列出的关节取零。公共求解器根据源、目标参考姿态 FK 计算固定 link 坐标系偏移，再将该偏移应用到逐帧源朝向。不能把任意两个机器人的机械零位直接当成匹配参考姿态。内置配置使用已有的机器人参考姿态；朝向保存采用现有紧凑诊断格式。`robot_motion.orientation_weights` 为目标语义朝向声明权重，通过原有 `--orientation-tracking True` 开启，`--orientation-weights` 可以统一覆盖。默认开关继续继承目标机器人表。

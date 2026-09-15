@@ -290,6 +290,7 @@ def _load_orientation(
     value: object,
     *,
     robot: str,
+    robot_motion_only: bool = False,
 ) -> tuple[bool, bool, dict[str, dict[str, float]]]:
     table = _object(value, label="orientation")
     _exact_fields(
@@ -298,7 +299,7 @@ def _load_orientation(
         label="orientation",
     )
     datasets = _object(table["datasets"], label="orientation/datasets")
-    if robot not in _default_robot_defaults() and not datasets:
+    if not datasets and (robot_motion_only or robot not in _default_robot_defaults()):
         return (
             _boolean(table["enable"], label="orientation/enable"),
             _boolean(table["preview"], label="orientation/preview"),
@@ -440,7 +441,7 @@ def load_robot_profile(
     if not isinstance(robot_urdf_file, str) or not robot_urdf_file or Path(robot_urdf_file).suffix.lower() != ".urdf":
         raise ValueError("robot_profile/robot_urdf_file must name one URDF file")
     orientation_enabled, orientation_preview, orientation_weights = _load_orientation(
-        profile["orientation"], robot=robot
+        profile["orientation"], robot=robot, robot_motion_only=robot_motion is not None
     )
     natural_pose_enabled, natural_pose = _load_natural_pose(
         profile["natural_pose"],
