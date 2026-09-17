@@ -41,20 +41,10 @@ def _build_retargeter(
     robot: str,
     *,
     data_format: str = "noetix_mocap",
+    orientation_weights: dict[str, float] | None = None,
 ) -> InteractionMeshRetargeter:
-    robot_file = {
-        "g1": "models/g1/g1_29dof.urdf",
-        "e1_23dof": "models/e1/e1_23dof.urdf",
-        "e1_24dof": "models/e1/e1_24dof.urdf",
-        "e2": "models/e2/e2_23dof.urdf",
-    }[robot]
     constants = create_task_constants(
-        RobotConfig(
-            robot_type=robot,
-            robot_urdf_file=str(
-                PACKAGE_ROOT / "holosoma_retargeting" / robot_file,
-            ),
-        ),
+        RobotConfig(robot_type=robot),
         MotionDataConfig(data_format=data_format, robot_type=robot),
         TaskConfig(object_name="ground"),
         "robot_only",
@@ -63,6 +53,7 @@ def _build_retargeter(
         q_a_init_idx=0,
         activate_foot_sticking=False,
         shoulder_direction=ShoulderDirectionConfig(enable=True),
+        orientation_weights=orientation_weights or {},
     )
     return InteractionMeshRetargeter(
         **build_retargeter_kwargs_from_config(
@@ -154,6 +145,30 @@ class ShoulderDirectionRetargeterTests(unittest.TestCase):
         np.testing.assert_array_equal(self.g1.shoulder_wrist_dof_counts, [3, 3])
         np.testing.assert_array_equal(self.e1.shoulder_wrist_dof_counts, [1, 1])
         np.testing.assert_array_equal(self.e2.shoulder_wrist_dof_counts, [0, 0])
+
+    def test_e2_arm_so3_rows_are_reserved_by_direction_mode(self):
+        arm_names = (
+            "LeftArm",
+            "RightArm",
+            "LeftForeArm",
+            "RightForeArm",
+            "LeftHand",
+            "RightHand",
+        )
+        retargeter = _build_retargeter(
+            "e2",
+            orientation_weights=dict.fromkeys(arm_names, 1.0),
+        )
+        reserved_names = {
+            retargeter.orientation_human_joint_names[index]
+            for index in retargeter._reserved_orientation_objective_indices(
+                root_stability_bootstrap=False,
+            )
+        }
+
+        self.assertEqual(reserved_names, set(arm_names))
+        np.testing.assert_array_equal(retargeter.shoulder_wrist_dof_counts, [0, 0])
+        np.testing.assert_array_equal(retargeter.shoulder_wrist_weights, [0.0, 0.0])
 
     def test_smplx_human_schema_is_supported_for_e1_23dof_and_e2(self):
         for data_format in ("amass", "gvhmr"):

@@ -19,6 +19,8 @@ class OrientationDiagnostics:
     target_quaternions_wxyz: np.ndarray
     robot_quaternions_wxyz: np.ndarray
     errors_rad: np.ndarray
+    effective_so3_weights: np.ndarray | None = None
+    objective_modes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -150,6 +152,16 @@ def load_orientation_diagnostics(
             dtype=float,
         )
         errors = np.asarray(data["orientation_errors_rad"], dtype=float)
+        effective_weights = (
+            np.asarray(data["orientation_effective_so3_weights"], dtype=float)
+            if "orientation_effective_so3_weights" in data
+            else weights.copy()
+        )
+        objective_modes = (
+            tuple(str(mode) for mode in np.asarray(data["orientation_objective_modes"]).tolist())
+            if "orientation_objective_modes" in data
+            else tuple("full_so3" if weight > 0.0 else "disabled" for weight in weights)
+        )
 
     joint_count = len(human_joint_names)
     if joint_count == 0:
@@ -173,6 +185,14 @@ def load_orientation_diagnostics(
     expected_error_shape = (expected_frames, joint_count)
     if weights.shape != (joint_count,):
         raise ValueError(f"{result_path} orientation_weights shape {weights.shape} != {(joint_count,)}")
+    if effective_weights.shape != (joint_count,):
+        raise ValueError(
+            f"{result_path} orientation_effective_so3_weights shape {effective_weights.shape} != {(joint_count,)}",
+        )
+    if len(objective_modes) != joint_count:
+        raise ValueError(
+            f"{result_path} orientation_objective_modes has {len(objective_modes)} entries, expected {joint_count}",
+        )
     if target_quaternions.shape != expected_quaternion_shape:
         raise ValueError(
             f"{result_path} target quaternion shape {target_quaternions.shape} != {expected_quaternion_shape}"
@@ -183,10 +203,10 @@ def load_orientation_diagnostics(
         )
     if errors.shape != expected_error_shape:
         raise ValueError(f"{result_path} orientation error shape {errors.shape} != {expected_error_shape}")
-    arrays = (weights, target_quaternions, robot_quaternions, errors)
+    arrays = (weights, effective_weights, target_quaternions, robot_quaternions, errors)
     if not all(np.isfinite(array).all() for array in arrays):
         raise ValueError(f"{result_path} orientation diagnostics contain non-finite values")
-    if np.any(weights < 0.0) or np.any(errors < 0.0):
+    if np.any(weights < 0.0) or np.any(effective_weights < 0.0) or np.any(errors < 0.0):
         raise ValueError(f"{result_path} orientation weights and errors must be non-negative")
     target_norms = np.linalg.norm(target_quaternions, axis=-1, keepdims=True)
     robot_norms = np.linalg.norm(robot_quaternions, axis=-1, keepdims=True)
@@ -199,6 +219,8 @@ def load_orientation_diagnostics(
         target_quaternions_wxyz=target_quaternions / target_norms,
         robot_quaternions_wxyz=robot_quaternions / robot_norms,
         errors_rad=errors,
+        effective_so3_weights=effective_weights,
+        objective_modes=objective_modes,
     )
 
 

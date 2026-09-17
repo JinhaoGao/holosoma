@@ -80,7 +80,8 @@ def load_shoulder_direction_diagnostics(
     expected_vector_shape = (frame_count, side_count, 3)
     if side_count == 0 or target.shape != expected_vector_shape:
         raise ValueError("Shoulder target vectors have inconsistent dimensions")
-    if actual.shape != expected_vector_shape or actual_q.shape != expected_vector_shape:
+    joint_count = len(joint_names[0]) if joint_names else 0
+    if actual.shape != expected_vector_shape or actual_q.shape != (frame_count, side_count, joint_count):
         raise ValueError("Shoulder actual arrays have inconsistent dimensions")
     if singular_values.shape != expected_vector_shape:
         raise ValueError("Shoulder singular values have inconsistent dimensions")
@@ -88,8 +89,12 @@ def load_shoulder_direction_diagnostics(
         raise ValueError("Shoulder direction errors have inconsistent dimensions")
     if not all(np.isfinite(array).all() for array in (target, actual, errors, actual_q, singular_values)):
         raise ValueError("Shoulder direction diagnostics contain non-finite values")
-    if len(joint_names) != side_count or any(len(names) != 3 for names in joint_names):
-        raise ValueError("Every shoulder side must contain three joint names")
+    if (
+        len(joint_names) != side_count
+        or joint_count not in (2, 3)
+        or any(len(names) != joint_count for names in joint_names)
+    ):
+        raise ValueError("Every shoulder side must contain two or three joint names")
 
     return ShoulderDirectionDiagnostics(
         side_names=side_names,
@@ -129,7 +134,7 @@ def make_shoulder_direction_figure(
         actual_degrees = np.rad2deg(
             diagnostics.actual_joint_positions[:, side],
         )
-        for joint, color in enumerate(colors):
+        for joint, color in enumerate(colors[: len(diagnostics.joint_names[side])]):
             short_name = diagnostics.joint_names[side][joint].replace(
                 "_joint",
                 "",

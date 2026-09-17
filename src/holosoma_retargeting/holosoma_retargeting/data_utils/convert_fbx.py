@@ -29,11 +29,12 @@ from pathlib import Path
 from typing import BinaryIO, Self, Sequence
 
 import numpy as np
+from scipy.spatial.transform import Rotation
+
 from holosoma_retargeting.config_types.data_type import (
     DEMO_JOINT_PARENT_INDICES,
     FBX_MOCAP_DEMO_JOINTS,
 )
-from scipy.spatial.transform import Rotation
 
 _GLB_MAGIC = b"glTF"
 _JSON_CHUNK = b"JSON"
@@ -569,13 +570,18 @@ def _descendants(nodes: list[dict[str, object]], root: int) -> set[int]:
 def _discover_actors(nodes: list[dict[str, object]]) -> dict[str, dict[str, int]]:
     actors: dict[str, dict[str, int]] = {}
     for hips_index, node in enumerate(nodes):
-        split = _split_actor_joint(str(node.get("name", "")))
+        raw_name = str(node.get("name", ""))
+        unprefixed = raw_name == "Hips"
+        split = ("Skeleton", "Hips") if unprefixed else _split_actor_joint(raw_name)
         if split is None or split[1] != "Hips":
             continue
         actor, _ = split
+        if actor in actors:
+            raise ValueError(f"FBX contains multiple skeleton roots for actor {actor!r}")
         joint_indices: dict[str, int] = {}
         for node_index in _descendants(nodes, hips_index):
-            candidate = _split_actor_joint(str(nodes[node_index].get("name", "")))
+            name = str(nodes[node_index].get("name", ""))
+            candidate = (actor, name) if unprefixed and name else _split_actor_joint(name)
             if candidate is None or candidate[0] != actor:
                 continue
             joint = candidate[1]
@@ -693,8 +699,7 @@ def _validate_actor_bind_axes(scene: _SampledScene, joint_indices: dict[str, int
     forward_norm = float(np.linalg.norm(anatomical_forward))
     if forward_norm <= 1e-8 or float(anatomical_forward[2] / forward_norm) < 0.95:
         raise ValueError(
-            f"Actor {actor!r} bind pose does not establish anatomical forward as raw FBX +Z: "
-            f"{anatomical_forward}",
+            f"Actor {actor!r} bind pose does not establish anatomical forward as raw FBX +Z: {anatomical_forward}",
         )
 
 
@@ -923,9 +928,7 @@ def convert_file(
                 f"{missing_rotation_channels}"
             )
         positions_y_up_cm = np.stack([sampled.positions[index] for index in canonical_indices], axis=1)
-        positions_z_up_m = (
-            positions_y_up_cm @ _FBX_Y_UP_TO_RIGHT_HANDED_Z_UP.T
-        ) * _FBX_CENTIMETRES_TO_METRES
+        positions_z_up_m = (positions_y_up_cm @ _FBX_Y_UP_TO_RIGHT_HANDED_Z_UP.T) * _FBX_CENTIMETRES_TO_METRES
         root_xy_origin = positions_z_up_m[0, 0, :2].copy()
         positions_z_up_m[..., :2] -= root_xy_origin
         orientations_y_up_xyzw = np.stack(
@@ -973,9 +976,7 @@ def convert_file(
             "source_skeleton_parent_indices": source_skeleton_parent_indices,
             "source_skeleton_positions": source_skeleton_positions_z_up_m.astype(np.float32),
             "source_skeleton_quaternions_wxyz": source_skeleton_orientations_z_up_wxyz.astype(np.float32),
-            "source_skeleton_bind_quaternions_wxyz": (
-                source_skeleton_bind_orientations_z_up_wxyz.astype(np.float32)
-            ),
+            "source_skeleton_bind_quaternions_wxyz": (source_skeleton_bind_orientations_z_up_wxyz.astype(np.float32)),
             "height": np.float32(height),
             "fps": np.float32(target_fps),
             "source_fps": np.float32(sampled.source_fps),

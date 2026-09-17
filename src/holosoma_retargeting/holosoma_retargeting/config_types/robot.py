@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Mapping, TypedDict
 
 import numpy as np
@@ -23,18 +24,28 @@ _ROBOT_DEFAULTS: dict[str, RobotDefaults] = {
     "e1_23dof": {"robot_dof": 23, "robot_height": 1.5, "object_name": "ground"},
     "e1_24dof": {"robot_dof": 24, "robot_height": 1.5, "object_name": "ground"},
     "e2": {"robot_dof": 23, "robot_height": 1.65, "object_name": "ground"},
+    "m5c": {"robot_dof": 17, "robot_height": 1.8, "object_name": "ground"},
+    "m5d": {"robot_dof": 17, "robot_height": 1.8, "object_name": "ground"},
+    "m5e": {"robot_dof": 17, "robot_height": 1.8, "object_name": "ground"},
 }
 
 _ROBOT_URDF_FILES = {
     "e1_23dof": "models/e1/e1_23dof.urdf",
     "e1_24dof": "models/e1/e1_24dof.urdf",
+    "m5c": "models/m5/m5c/m5c_17dof.urdf",
+    "m5d": "models/m5/m5d/m5d_17dof.urdf",
+    "m5e": "models/m5/m5e/m5e_17dof.urdf",
 }
+
+_EXPLICIT_ROBOT_NAMES = {"e1_23dof", "e1_24dof"}
 
 
 def robot_family(robot_type: str) -> str:
     """Return the shared mapping family for a concrete robot variant."""
     if robot_type in {"e1", "e1_23dof", "e1_24dof"}:
         return "e1"
+    if robot_type in {"m5c", "m5d", "m5e"}:
+        return "m5c"
     return robot_type
 
 
@@ -88,6 +99,7 @@ class RobotConfig:
     robot_height: float | None = None
     robot_name: str | None = None
     robot_urdf_file: str | None = None
+    robot_mujoco_xml_file: str | None = None
 
     # Joint definitions (optional overrides)
     foot_sticking_links: list[str] | None = None
@@ -128,7 +140,7 @@ class RobotConfig:
         """Get robot name - use override if provided, else compute from robot_type and DOF."""
         if self.robot_name is not None:
             return self.robot_name
-        if self.robot_type in _ROBOT_URDF_FILES:
+        if self.robot_type in _EXPLICIT_ROBOT_NAMES:
             return self.robot_type
         return f"{self.robot_type}_{self.ROBOT_DOF}dof"
 
@@ -146,6 +158,19 @@ class RobotConfig:
         return f"models/{self.robot_type}/{self.ROBOT_NAME}.urdf"
 
     ROBOT_URDF_FILE = property(_robot_urdf_file, doc="Get robot URDF file path.")
+
+    def _robot_mujoco_xml_file(self) -> str:
+        """Get the MuJoCo XML path without assuming it is beside the URDF."""
+        if self.robot_mujoco_xml_file is not None:
+            return self.robot_mujoco_xml_file
+        if self.robot_urdf_file is not None:
+            return str(Path(self.robot_urdf_file).with_suffix(".xml"))
+        return str(Path(self.ROBOT_URDF_FILE).with_suffix(".xml"))
+
+    ROBOT_MUJOCO_XML_FILE = property(
+        _robot_mujoco_xml_file,
+        doc="Get robot MuJoCo XML file path.",
+    )
 
     def _foot_sticking_links(self) -> list[str]:
         """Get foot sticking links - use override if provided, else use robot_type default."""
@@ -190,7 +215,7 @@ class RobotConfig:
                 "l_foot_sphere_5_link",
                 "r_foot_sphere_5_link",
             ]
-        if family == "e2":
+        if family in {"e2", "m5c"}:
             return [
                 "l_foot_sphere_1_link",
                 "r_foot_sphere_1_link",
@@ -229,7 +254,7 @@ class RobotConfig:
                 "left": "left_foot_sphere_",
                 "right": "right_foot_sphere_",
             }
-        elif family in {"e1", "e2"}:
+        elif family in {"e1", "e2", "m5c"}:
             prefixes = {
                 "left": "l_foot_sphere_",
                 "right": "r_foot_sphere_",
@@ -334,6 +359,9 @@ class RobotConfig:
             # The arms remain free to follow the interaction and orientation
             # objectives without a competing nominal-pose penalty.
             return np.arange(22)
+        if family == "m5c":
+            # Floating base, two five-DoF legs, and waist yaw.
+            return np.arange(18)
         # Default: return empty array if robot type not defined (nominal tracking not used)
         return np.array([], dtype=int)
 

@@ -11,12 +11,13 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
+from scipy.spatial.transform import Rotation
+
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.orientation_calibration import (
     ORIENTATION_ALIGNMENT_QUATERNIONS_WXYZ,
 )
-from scipy.spatial.transform import Rotation
 
 CALIBRATED_DATA_FORMATS = ("amass", "lafan", "gvhmr", "mocap")
 CALIBRATED_ROBOTS = ("g1", "e1", "e2")
@@ -24,8 +25,8 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _robot_model_path(robot_type: str) -> Path:
-    relative_path = Path(RobotConfig(robot_type=robot_type).ROBOT_URDF_FILE).with_suffix(".xml")
-    return PACKAGE_ROOT / relative_path
+    path = Path(RobotConfig(robot_type=robot_type).ROBOT_MUJOCO_XML_FILE)
+    return path if path.is_absolute() else PACKAGE_ROOT / path
 
 
 def _canonical_wxyz(matrix: np.ndarray) -> tuple[float, float, float, float]:

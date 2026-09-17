@@ -28,10 +28,10 @@ repos:
   rev: v5.0.0
   hooks:
   - id: end-of-file-fixer
-    # exclude .dae, .obj, .mtl, .stl files
-    exclude: \.(dae|obj|mtl|stl)$
+    # Preserve supplied mechanical packages and mesh files without text rewrites.
+    exclude: (?i)\.(dae|obj|mtl|stl)$|^src/holosoma_retargeting/holosoma_retargeting/models/m5/m5[cde]/__00-mia-v5-0[CDE]/
   - id: trailing-whitespace
-    exclude: \.(dae|obj|mtl|stl)$
+    exclude: (?i)\.(dae|obj|mtl|stl)$|^src/holosoma_retargeting/holosoma_retargeting/models/m5/m5[cde]/__00-mia-v5-0[CDE]/
   - id: mixed-line-ending
     args: [--fix=lf] # Ensures consistent line endings (LF) and removes CR
-    exclude: \.(dae|obj|mtl|stl)$
+    exclude: (?i)\.(dae|obj|mtl|stl)$|^src/holosoma_retargeting/holosoma_retargeting/models/m5/m5[cde]/__00-mia-v5-0[CDE]/

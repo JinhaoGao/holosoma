@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from typing import Any
+from unittest.mock import Mock
 
 import cvxpy as cp
 import numpy as np
@@ -32,6 +33,29 @@ _SEMANTIC_SOLE_REGIONS = {
     "forefoot_negative_lateral",
     "toe",
 }
+
+
+def test_disabled_contact_does_not_prepare_or_reuse_stance_targets():
+    solver = InteractionMeshRetargeter.__new__(InteractionMeshRetargeter)
+    solver.activate_foot_sticking = False
+    solver._active_planar_foot_targets = {"stale": object()}
+    solver._prepare_planar_foot_targets = Mock(side_effect=AssertionError("Disabled contact was prepared"))
+    q = np.zeros(24)
+    solver.q_a_indices = np.arange(24)
+    solver.solve_single_iteration = Mock(return_value=(q, 1.0))
+    solver.iterate(
+        q,
+        q,
+        q,
+        np.zeros((1, 3)),
+        [[]],
+        np.zeros((1, 3)),
+        {"left": True, "right": True},
+        n_iter=1,
+        foot_contact_state={side: FootContactState(mode="flat") for side in ("left", "right")},
+    )
+    assert solver._active_planar_foot_targets is None
+    solver._prepare_planar_foot_targets.assert_not_called()
 
 
 def _empty_motion(frame_count: int = 90) -> np.ndarray:
@@ -225,6 +249,32 @@ def test_target_scale_changes_slide_displacement_but_not_detection() -> None:
         source_plan.reference_displacements_xy * scale,
         atol=1e-7,
     )
+
+
+def test_rebuilt_sole_centers_change_slide_reference_without_changing_phases() -> None:
+    joints = _empty_motion()
+    travel = np.linspace(0.0, 0.3, len(joints))
+    _set_flat_foot(joints, ankle_index=1, toe_index=2, xy=(0.0, 0.1))
+    _set_flat_foot(joints, ankle_index=3, toe_index=4, xy=(0.0, -0.1))
+    joints[:, 1:3, 0] += travel[:, None]
+    original = build_planar_foot_contact_plan(joints, _JOINT_NAMES, _PARENT_INDICES, _TOE_NAMES, fps=30)
+    centers = np.zeros((len(joints), 2, 3))
+    centers[:, 0, 0] = 2 * travel + travel**2
+    centers[:, 0, 1] = 0.1 + travel**2
+    centers[:, 1, 1] = -0.1
+    rebuilt = build_planar_foot_contact_plan(
+        joints,
+        _JOINT_NAMES,
+        _PARENT_INDICES,
+        _TOE_NAMES,
+        fps=30,
+        reference_sole_centers=centers,
+    )
+    np.testing.assert_array_equal(rebuilt.modes, original.modes)
+    np.testing.assert_array_equal(rebuilt.phase_ids, original.phase_ids)
+    np.testing.assert_allclose(rebuilt.pivot_uv, original.pivot_uv)
+    assert set(rebuilt.modes[1:, 0]) == {"slide"}
+    np.testing.assert_allclose(rebuilt.reference_displacements_xy[1:, 0], centers[1:, 0, :2] - centers[1, 0, :2])
 
 
 def test_target_rigid_transform_rotates_and_translates_slide_reference() -> None:

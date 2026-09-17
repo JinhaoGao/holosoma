@@ -138,6 +138,31 @@ elbow-yaw 轴，E2 不设置腕部朝向任务。开启朝向表时，下肢和�
 python -m holosoma_retargeting.visualization.shoulder_direction result.npz
 ```
 
+这里的 `Arm`、`ForeArm`、`Hand` 完整 SO(3) 误差仍会保存用于诊断，但在
+shoulder-direction 模式下不会作为通用 SO(3) 损失再次进入求解器。新结果会
+额外保存每一项的 `orientation_objective_modes` 和
+`orientation_effective_so3_weights`；`orientation_frame_costs` 也只统计实际
+启用的通用 SO(3) 行，而不会再把仅供观察的手臂误差计入成本。
+
+单结果播放器可以把两种量放在同一场景中查看。橙色箭头是人体原始上下臂
+骨段，洋红色箭头是把人体方向转换到机器人躯干局部系后再放回机器人世界系
+得到的目标，青色箭头是机器人实际骨段。上臂洋红/青色箭头对应求解器的真实
+方向目标；前臂箭头只用于几何诊断，因为当前没有单独的前臂方向损失。GUI 的
+`Arm objective debug` 面板会逐帧显示上臂方向误差、前臂诊断误差、三个 link
+的完整 SO(3) 误差及其是否参与优化。E2 可以直接运行：
+
+```bash
+python viser_player.py \
+  --input-path demo_results/e2/robot_only/noetix_mocap/parkour/front_handspring_001_Skeleton.npz \
+  --show-human-skeleton True \
+  --show-robot-skeleton True \
+  --show-arm-direction-comparison \
+  --show-source-orientation-axes \
+  --show-target-orientation-axes \
+  --show-robot-orientation-axes \
+  --orientation-joints LeftArm RightArm LeftForeArm RightForeArm LeftHand RightHand
+```
+
 ## 朝向、根稳定性与自然姿态
 
 仓库内四张表保持原来的默认行为：朝向跟踪、肩部方向跟踪、自然姿态正则和

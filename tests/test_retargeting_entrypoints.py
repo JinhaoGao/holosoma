@@ -584,6 +584,7 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 "robot_dof",
                 "robot_height",
                 "robot_urdf_file",
+                "robot_mujoco_xml_file",
                 "foot_sticking",
                 "dynamic_ground_window",
                 "interaction_mesh_weight",

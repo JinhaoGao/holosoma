@@ -76,6 +76,7 @@ class RobotProfile:
     robot_dof: int
     robot_height: float
     robot_urdf_file: str
+    robot_mujoco_xml_file: str
     retargeting: RetargetingProfileDefaults
     planar_foot_contact: PlanarFootContactConfig
     shoulder_direction: ShoulderDirectionConfig
@@ -394,6 +395,7 @@ def load_robot_profile(
             "robot_dof",
             "robot_height",
             "robot_urdf_file",
+            "robot_mujoco_xml_file",
             "retargeting",
             "planar_foot_contact",
             "shoulder_direction",
@@ -428,6 +430,15 @@ def load_robot_profile(
     robot_urdf_file = profile["robot_urdf_file"]
     if not isinstance(robot_urdf_file, str) or not robot_urdf_file or Path(robot_urdf_file).suffix.lower() != ".urdf":
         raise ValueError("robot_profile/robot_urdf_file must name one URDF file")
+    robot_mujoco_xml_file = profile["robot_mujoco_xml_file"]
+    if (
+        not isinstance(robot_mujoco_xml_file, str)
+        or not robot_mujoco_xml_file
+        or Path(robot_mujoco_xml_file).suffix.lower() != ".xml"
+    ):
+        raise ValueError(
+            "robot_profile/robot_mujoco_xml_file must name one MuJoCo XML file",
+        )
     orientation_enabled, orientation_preview, orientation_weights = _load_orientation(
         profile["orientation"], robot=robot
     )
@@ -441,6 +452,7 @@ def load_robot_profile(
         robot_dof=robot_dof,
         robot_height=robot_height,
         robot_urdf_file=robot_urdf_file,
+        robot_mujoco_xml_file=robot_mujoco_xml_file,
         retargeting=_load_retargeting_defaults(profile["retargeting"]),
         planar_foot_contact=_load_planar_foot_contact(
             profile["planar_foot_contact"],

@@ -293,6 +293,36 @@ def _foot_proxy_trajectories(
     return heel, toe
 
 
+def source_floor_clearance(
+    joints: np.ndarray,
+    joint_names: tuple[str, ...] | list[str],
+    joint_parent_indices: tuple[int, ...] | np.ndarray,
+    toe_names: tuple[str, str] | list[str],
+    *,
+    ground_clearance: float,
+) -> np.ndarray:
+    """Estimate whole-foot clearance with the same heel proxies as detection.
+
+    A raised toe with a planted heel is not a flight phase. Return the lowest
+    heel/toe height above the source floor, clipped only after combining both
+    feet; the caller can then remove support-phase height drift.
+    """
+    indices = [joint_names.index(name) for name in toe_names]
+    floor = float(np.percentile(np.min(joints[:, indices, 2], axis=1), 2.0))
+    points = []
+    for index in indices:
+        points.extend(
+            _foot_proxy_trajectories(
+                joints,
+                toe_index=index,
+                heel_joint_index=int(joint_parent_indices[index]),
+                floor_height=floor,
+                ground_clearance=ground_clearance,
+            )
+        )
+    return np.maximum(np.min(np.stack(points, axis=1)[..., 2], axis=1) - floor, 0.0)
+
+
 def _points_on_elevated_support_surfaces(
     points: np.ndarray,
     support_triangles: np.ndarray | None,
@@ -522,6 +552,7 @@ def build_planar_foot_contact_plan(
     fps: float,
     config: PlanarFootContactConfig | None = None,
     reference_position_scale: float = 1.0,
+    reference_sole_centers: np.ndarray | None = None,
     reference_rotation_matrices: np.ndarray | None = None,
     reference_translations: np.ndarray | None = None,
     elevated_support_triangles: np.ndarray | None = None,
@@ -531,7 +562,9 @@ def build_planar_foot_contact_plan(
     Detection always runs in the source trajectory's meter scale so its modes
     do not depend on the target robot. ``reference_position_scale`` maps only
     intentional-slide displacements into the robot-preprocessed position
-    scale used by the solver. Optional per-frame rigid transforms then map the
+    scale used by the solver. ``reference_sole_centers`` can instead supply
+    rebuilt robot-sized centers with shape [frames, left/right, 3], without
+    changing source contact classification. Optional rigid transforms map the
     scaled source sole path into the target world frame. Elevated contacts are
     accepted only when an explicit upward-facing support triangle confirms
     the source sole height and XY location.
@@ -557,6 +590,10 @@ def build_planar_foot_contact_plan(
     frame_count = joints.shape[0]
     if frame_count == 0:
         raise ValueError("human_joints must contain at least one frame")
+    if reference_sole_centers is not None:
+        reference_sole_centers = np.asarray(reference_sole_centers, dtype=np.float64)
+        if reference_sole_centers.shape != (frame_count, 2, 3) or not np.isfinite(reference_sole_centers).all():
+            raise ValueError("reference_sole_centers must be finite with shape [frames, 2, 3]")
     if reference_rotation_matrices is None:
         reference_rotations = np.tile(np.eye(3, dtype=np.float64), (frame_count, 1, 1))
     else:
@@ -607,11 +644,15 @@ def build_planar_foot_contact_plan(
             np.einsum(
                 "tij,tj->ti",
                 reference_rotations,
-                per_side[side][4] * reference_position_scale,
+                (
+                    per_side[side][4] * reference_position_scale
+                    if reference_sole_centers is None
+                    else reference_sole_centers[:, side_index]
+                ),
             )
             + target_translations
         )
-        for side in FOOT_CONTACT_SIDE_NAMES
+        for side_index, side in enumerate(FOOT_CONTACT_SIDE_NAMES)
     }
     phase_counter = dict.fromkeys(FOOT_CONTACT_SIDE_NAMES, -1)
     previous_key: dict[str, tuple[str, str] | None] = dict.fromkeys(FOOT_CONTACT_SIDE_NAMES)

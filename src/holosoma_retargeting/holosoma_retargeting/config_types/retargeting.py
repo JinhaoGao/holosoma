@@ -25,7 +25,7 @@ from holosoma_retargeting.config_types.robot_profiles import (
 from holosoma_retargeting.config_types.task import TaskConfig
 
 TaskType = Literal["robot_only", "object_interaction", "climbing"]
-RobotName = Literal["g1", "e1", "e1_23dof", "e1_24dof", "e2"]
+RobotName = Literal["g1", "e1", "e1_23dof", "e1_24dof", "e2", "m5c", "m5d", "m5e"]
 DatasetName = Literal[
     "amass",
     "climbing",
@@ -138,6 +138,9 @@ class RetargetingCommand:
 
     robot_urdf_file: Path | None = None
     """Override the robot-profile URDF path."""
+
+    robot_mujoco_xml_file: Path | None = None
+    """Override the robot-profile MuJoCo XML path."""
 
     foot_sticking: Literal[True, False] | None = None
     """Override contact-aware planar foot constraints."""
@@ -265,6 +268,15 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
     robot_urdf_file = (
         profile.robot_urdf_file if command.robot_urdf_file is None else str(command.robot_urdf_file.expanduser())
     )
+    robot_mujoco_xml_file = (
+        str(command.robot_mujoco_xml_file.expanduser())
+        if command.robot_mujoco_xml_file is not None
+        else (
+            profile.robot_mujoco_xml_file
+            if command.robot_urdf_file is None
+            else str(command.robot_urdf_file.expanduser().with_suffix(".xml"))
+        )
+    )
     shoulder_enabled = (
         profile.shoulder_direction.enable
         if command.shoulder_direction_tracking is None
@@ -285,6 +297,7 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
             robot_dof=robot_dof,
             robot_height=robot_height,
             robot_urdf_file=robot_urdf_file,
+            robot_mujoco_xml_file=robot_mujoco_xml_file,
         ),
         retargeter=RetargeterConfig(
             visualize=command.retargeter.visualize,

@@ -83,7 +83,7 @@ def create_task_constants(
                 default_generated_assets_root() / "downstream" / robot_config.robot_type / namespace.OBJECT_NAME
             )
         object_asset = get_omomo_object_asset(namespace.OBJECT_NAME)
-        robot_xml_path = Path(namespace.ROBOT_URDF_FILE).with_suffix(".xml")
+        robot_xml_path = Path(namespace.ROBOT_MUJOCO_XML_FILE)
         if not robot_xml_path.is_absolute():
             robot_xml_path = Path(__file__).resolve().parents[1] / robot_xml_path
         namespace.OBJECT_URDF_FILE = saved_object_urdf or str(object_asset.urdf_path)
@@ -108,7 +108,7 @@ def create_task_constants(
             f"{robot_config.robot_type}_{namespace.ROBOT_DOF}dof_w_{namespace.OBJECT_NAME}.xml"
         )
     else:
-        namespace.SCENE_XML_FILE = namespace.ROBOT_URDF_FILE.replace(".urdf", ".xml")
+        namespace.SCENE_XML_FILE = namespace.ROBOT_MUJOCO_XML_FILE
 
     if object_dir is not None:
         namespace.OBJECT_DIR = object_dir
@@ -153,7 +153,7 @@ class RetargetingEvaluator:
 
         # Load Mujoco model
         if self.object_name == "ground":
-            robot_xml_path = robot_model_path.replace(".urdf", ".xml")
+            robot_xml_path = constants.ROBOT_MUJOCO_XML_FILE
         elif getattr(constants, "SCENE_XML_FILE", ""):
             robot_xml_path = constants.SCENE_XML_FILE  # type: ignore[attr-defined]
         else:

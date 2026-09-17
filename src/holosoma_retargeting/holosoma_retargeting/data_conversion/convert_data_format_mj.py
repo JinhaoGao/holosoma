@@ -78,7 +78,7 @@ def create_task_constants(
                 default_generated_assets_root() / "downstream" / robot_config.robot_type / namespace.OBJECT_NAME
             )
         object_asset = get_omomo_object_asset(namespace.OBJECT_NAME)
-        robot_xml_path = Path(namespace.ROBOT_URDF_FILE).with_suffix(".xml")
+        robot_xml_path = Path(namespace.ROBOT_MUJOCO_XML_FILE)
         if not robot_xml_path.is_absolute():
             robot_xml_path = Path(__file__).resolve().parents[1] / robot_xml_path
         namespace.OBJECT_URDF_FILE = str(object_asset.urdf_path)
@@ -104,7 +104,7 @@ def create_task_constants(
     else:
         namespace.OBJECT_URDF_FILE = namespace.ROBOT_URDF_FILE
         namespace.OBJECT_MESH_FILE = ""
-        namespace.SCENE_XML_FILE = namespace.ROBOT_URDF_FILE.replace(".urdf", ".xml")
+        namespace.SCENE_XML_FILE = namespace.ROBOT_MUJOCO_XML_FILE
 
     return namespace
 
@@ -470,7 +470,7 @@ def run_simulator(args_cli: DataConversionConfig):
     object_name = constants.OBJECT_NAME
     robot_model_path = constants.ROBOT_URDF_FILE
     if object_name == "ground":
-        robot_xml_path = robot_model_path.replace(".urdf", ".xml")
+        robot_xml_path = constants.ROBOT_MUJOCO_XML_FILE
     elif constants.SCENE_XML_FILE:
         robot_xml_path = constants.SCENE_XML_FILE
     else:

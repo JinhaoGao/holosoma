@@ -44,6 +44,11 @@ from holosoma_retargeting.src.viser_utils import (
     format_foot_sticking_status,
     infer_mujoco_xml_path,
 )
+from holosoma_retargeting.visualization.arm_direction import (
+    ArmDirectionSceneData,
+    build_arm_direction_scene_data,
+    load_optional_arm_direction_diagnostics,
+)
 from holosoma_retargeting.visualization.joint_angles import (
     add_joint_angle_gui,
     build_joint_angle_diagnostics,
@@ -116,6 +121,10 @@ def _resolve_runtime_config(config: ViserConfig, metadata: dict[str, object]) ->
     robot_urdf = str(_resolve_asset_path(robot_urdf))
 
     robot_mujoco_xml = config.robot_mujoco_xml
+    if robot_mujoco_xml is None and robot_type is not None:
+        robot_mujoco_xml = RobotConfig(
+            robot_type=robot_type,
+        ).ROBOT_MUJOCO_XML_FILE
     if robot_mujoco_xml is not None:
         robot_mujoco_xml = str(_resolve_asset_path(robot_mujoco_xml))
 
@@ -1180,6 +1189,128 @@ class ResultOrientationOverlays:
                 overlay.draw(frame_float)
 
 
+class ArmDirectionOverlay:
+    """Source, robot-space target, and actual arm-segment arrows."""
+
+    _SOURCE_COLOR = np.asarray((255, 149, 0), dtype=np.uint8)
+    _TARGET_COLOR = np.asarray((255, 0, 170), dtype=np.uint8)
+    _ACTUAL_COLOR = np.asarray((0, 210, 255), dtype=np.uint8)
+
+    def __init__(
+        self,
+        *,
+        server,
+        data: ArmDirectionSceneData,
+        shaft_radius: float,
+        head_radius: float,
+        head_length: float,
+        visible: bool,
+        loop: bool,
+        namespace: str = "/overlays/arm_direction",
+    ) -> None:
+        self.data = data
+        self.visible = bool(visible)
+        self.loop = bool(loop)
+        initial_source = data.source_segments[0].reshape(-1, 2, 3)
+        initial_target = data.robot_target_segments[0].reshape(-1, 2, 3)
+        initial_actual = data.robot_actual_segments[0].reshape(-1, 2, 3)
+        arrow_count = int(initial_source.shape[0])
+        common = {
+            "shaft_radius": float(shaft_radius),
+            "head_radius": float(head_radius),
+            "head_length": float(head_length),
+            "visible": self.visible,
+        }
+        self.source_arrows = server.scene.add_arrows(
+            f"{namespace}/human_source",
+            points=initial_source,
+            colors=np.tile(self._SOURCE_COLOR, (arrow_count, 1)),
+            **common,
+        )
+        self.target_arrows = server.scene.add_arrows(
+            f"{namespace}/robot_space_target",
+            points=initial_target,
+            colors=np.tile(self._TARGET_COLOR, (arrow_count, 1)),
+            **common,
+        )
+        self.actual_arrows = server.scene.add_arrows(
+            f"{namespace}/robot_actual",
+            points=initial_actual,
+            colors=np.tile(self._ACTUAL_COLOR, (arrow_count, 1)),
+            **common,
+        )
+
+    def set_visible(self, visible: bool) -> None:
+        self.visible = bool(visible)
+        for handle in (self.source_arrows, self.target_arrows, self.actual_arrows):
+            handle.visible = self.visible
+
+    def draw(self, frame_float: float) -> None:
+        if not self.visible:
+            return
+        self.source_arrows.points = _interpolate_sequence(
+            self.data.source_segments,
+            frame_float,
+            loop=self.loop,
+        ).reshape(-1, 2, 3)
+        self.target_arrows.points = _interpolate_sequence(
+            self.data.robot_target_segments,
+            frame_float,
+            loop=self.loop,
+        ).reshape(-1, 2, 3)
+        self.actual_arrows.points = _interpolate_sequence(
+            self.data.robot_actual_segments,
+            frame_float,
+            loop=self.loop,
+        ).reshape(-1, 2, 3)
+
+    @staticmethod
+    def _error_text(value: float) -> str:
+        return "n/a" if not np.isfinite(value) else f"{np.rad2deg(value):.1f}°"
+
+    def status_markdown(self, frame_float: float) -> str:
+        upper = _interpolate_sequence(self.data.upper_errors_rad, frame_float, loop=self.loop)
+        lower = _interpolate_sequence(self.data.lower_errors_rad, frame_float, loop=self.loop)
+        so3 = _interpolate_sequence(self.data.orientation_errors_rad, frame_float, loop=self.loop)
+        frame_index = round(float(frame_float))
+        rows = []
+        upper_status = "active" if self.data.direction_weight > 0.0 else "inactive"
+        for side_index, side_name in enumerate(self.data.side_names):
+            cells = []
+            for link_index in range(3):
+                error = self._error_text(float(so3[side_index, link_index]))
+                mode = self.data.orientation_modes[side_index][link_index]
+                cells.append(f"{error} · {mode}")
+            rows.append(
+                f"| {side_name} | {self._error_text(float(upper[side_index]))} · {upper_status} "
+                f"| {self._error_text(float(lower[side_index]))} · diagnostic only "
+                f"| {cells[0]} | {cells[1]} | {cells[2]} |"
+            )
+        wrist_parts = []
+        for side_index, side_name in enumerate(self.data.side_names):
+            wrist_parts.append(
+                f"{side_name}: {int(self.data.wrist_dof_counts[side_index])} DoF, "
+                f"weight {float(self.data.wrist_orientation_weights[side_index]):g}"
+            )
+        return "\n".join(
+            (
+                f"**Frame {frame_index} · arm objective status**",
+                (
+                    "Orange = source human bone; magenta = source direction expressed in the robot torso frame; "
+                    "cyan = actual robot bone."
+                ),
+                (
+                    f"Upper-arm direction objective weight: **{self.data.direction_weight:g}**. "
+                    "Lower-arm direction has no solver objective and is shown only for diagnosis."
+                ),
+                "| side | upper direction | lower direction | Arm SO(3) | ForeArm SO(3) | Hand SO(3) |",
+                "|---|---:|---:|---|---|---|",
+                *rows,
+                "Wrist task: " + "; ".join(wrist_parts) + ".",
+            )
+        )
+
+
 def _requested_saved_orientation_indices(
     available_names: tuple[str, ...],
     requested_names: tuple[str, ...],
@@ -1198,6 +1329,78 @@ def _requested_saved_orientation_indices(
             if index not in selected:
                 selected.append(index)
     return np.asarray(selected, dtype=np.int32)
+
+
+def _build_arm_direction_overlay(
+    config: ViserConfig,
+    server,
+    human_joints: np.ndarray | None,
+    npz_metadata: dict[str, object],
+    num_frames: int,
+) -> ArmDirectionOverlay | None:
+    """Build the interactive arm-direction diagnostic from a saved result."""
+
+    if config.qpos_npz is None:
+        return None
+    diagnostics = load_optional_arm_direction_diagnostics(
+        config.qpos_npz,
+        expected_frames=num_frames,
+    )
+    if diagnostics is None:
+        print("[viser_player] Arm direction comparison unavailable: the saved objective was not enabled.")
+        return None
+    robot_positions = npz_metadata.get("robot_link_positions")
+    robot_names_value = npz_metadata.get("robot_link_names")
+    robot_parents = npz_metadata.get("robot_link_parent_indices")
+    human_names_value = npz_metadata.get("human_joint_names")
+    mapped_names_value = npz_metadata.get("mapped_human_joint_names")
+    mapped_robot_names_value = npz_metadata.get("mapped_robot_link_names")
+    if (
+        human_joints is None
+        or not isinstance(human_names_value, list)
+        or not isinstance(robot_positions, np.ndarray)
+        or not isinstance(robot_names_value, list)
+        or not isinstance(robot_parents, np.ndarray)
+        or not isinstance(mapped_names_value, list)
+        or not isinstance(mapped_robot_names_value, list)
+    ):
+        print(
+            "[viser_player] Arm direction comparison unavailable: complete named human and robot trajectories "
+            "are required.",
+        )
+        return None
+    orientation_diagnostics = npz_metadata.get("orientation_diagnostics")
+    try:
+        data = build_arm_direction_scene_data(
+            diagnostics=diagnostics,
+            human_joints=human_joints,
+            human_joint_names=tuple(human_names_value),
+            robot_link_positions=robot_positions,
+            robot_link_names=tuple(robot_names_value),
+            robot_parent_indices=robot_parents,
+            mapped_human_joint_names=tuple(mapped_names_value),
+            mapped_robot_link_names=tuple(mapped_robot_names_value),
+            orientation_diagnostics=(
+                orientation_diagnostics if isinstance(orientation_diagnostics, OrientationDiagnostics) else None
+            ),
+        )
+    except ValueError as exc:
+        print(f"[viser_player] Arm direction comparison unavailable: {exc}")
+        return None
+    overlay = ArmDirectionOverlay(
+        server=server,
+        data=data,
+        shaft_radius=config.arm_direction_shaft_radius,
+        head_radius=config.arm_direction_head_radius,
+        head_length=config.arm_direction_head_length,
+        visible=config.show_arm_direction_comparison,
+        loop=config.loop,
+    )
+    print(
+        "[viser_player] Arm direction comparison enabled | orange=human, magenta=target, cyan=robot; "
+        "upper=objective, lower=diagnostic",
+    )
+    return overlay
 
 
 def _build_orientation_overlay(
@@ -1721,6 +1924,13 @@ def make_player(
         npz_metadata or {},
         int(qpos.shape[0]),
     )
+    arm_direction_overlay = _build_arm_direction_overlay(
+        config,
+        server,
+        human_joints,
+        npz_metadata or {},
+        int(qpos.shape[0]),
+    )
 
     # Figure robot DOF from actuated limits in ViserUrdf
     joint_limits = vr.get_actuated_joint_limits()
@@ -1760,6 +1970,7 @@ def make_player(
 
     foot_sticking = (npz_metadata or {}).get("foot_sticking")
     foot_sticking_status_handle = None
+    arm_direction_status_handle = None
     if foot_sticking is not None:
         foot_sticking_states = np.asarray(foot_sticking["states"], dtype=bool)
     last_rendered_frame: dict[str, np.ndarray | float | None] = {"q": None, "frame": None}
@@ -1820,6 +2031,12 @@ def make_player(
     def _set_foot_sticking_visibility(visible: bool) -> None:
         if foot_sticking_status_handle is not None:
             foot_sticking_status_handle.visible = bool(visible)
+
+    def _set_arm_direction_visibility(visible: bool) -> None:
+        if arm_direction_overlay is not None:
+            arm_direction_overlay.set_visible(visible)
+        if arm_direction_status_handle is not None:
+            arm_direction_status_handle.visible = bool(visible)
 
     layer_controller = LayerController()
     layer_controller.register(
@@ -1911,6 +2128,13 @@ def make_player(
         unavailable_reason=("The result does not contain a directly observed source-human orientation subset."),
     )
     layer_controller.register(
+        LayerId.ARM_DIRECTION,
+        available=arm_direction_overlay is not None,
+        visible=config.show_arm_direction_comparison,
+        callback=_set_arm_direction_visibility,
+        unavailable_reason="The result has no enabled arm-direction objective or complete arm trajectories.",
+    )
+    layer_controller.register(
         LayerId.JOINT_LABELS,
         available=mapped_skeleton_overlay is not None,
         visible=config.show_joint_labels,
@@ -1948,6 +2172,13 @@ def make_player(
                     orientation_overlay.set_scope(str(orientation_scope.value))
                     if last_rendered_frame["frame"] is not None:
                         orientation_overlay.draw(float(last_rendered_frame["frame"]))
+
+        if arm_direction_overlay is not None:
+            with server.gui.add_folder("Arm objective debug", expand_by_default=True):
+                arm_direction_status_handle = server.gui.add_markdown(
+                    arm_direction_overlay.status_markdown(0.0),
+                    visible=config.show_arm_direction_comparison,
+                )
 
         if interaction_mesh_overlay is not None:
             with server.gui.add_folder("Interaction mesh settings", expand_by_default=False):
@@ -2058,6 +2289,10 @@ def make_player(
         if interaction_mesh_overlay is not None:
             interaction_mesh_overlay.draw(frame_float)
         orientation_overlay.draw(frame_float)
+        if arm_direction_overlay is not None:
+            arm_direction_overlay.draw(frame_float)
+            if arm_direction_status_handle is not None:
+                arm_direction_status_handle.content = arm_direction_overlay.status_markdown(frame_float)
         if joint_angle_gui is not None:
             joint_angle_gui.update_frame(frame_float)
 

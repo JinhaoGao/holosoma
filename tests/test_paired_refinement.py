@@ -59,7 +59,9 @@ def _trajectory(
     source_offset: tuple[float, float, float] = (0.0, 0.0, 0.0),
 ) -> PairedActorTrajectory:
     robot_config = RobotConfig(robot_type=robot_type)
-    model_path = (PACKAGE_ROOT / robot_config.ROBOT_URDF_FILE).with_suffix(".xml")
+    model_path = Path(robot_config.ROBOT_MUJOCO_XML_FILE)
+    if not model_path.is_absolute():
+        model_path = PACKAGE_ROOT / model_path
     model = mujoco.MjModel.from_xml_path(str(model_path))
     data = mujoco.MjData(model)
     qpos = np.repeat(model.qpos0[None, :], frame_count, axis=0)

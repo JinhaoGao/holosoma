@@ -52,7 +52,7 @@ class ShoulderSideSpec:
     human_arm_name: str
     human_forearm_name: str
     human_hand_name: str
-    shoulder_joint_names: tuple[str, str, str]
+    shoulder_joint_names: tuple[str, ...]
     torso_basis_link_name: str
     shoulder_anchor_link_name: str
     elbow_link_name: str

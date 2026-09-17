@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -1096,6 +1097,37 @@ ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS: dict[
     ("omomo", "e2"): _ROBOT_T_POSE_JOINT_POSITIONS["e2"].copy(),
 }
 
+# M5C shares E2's semantic source mappings, with its own mechanical links and
+# T-pose FK. It has five-axis legs, two-axis shoulders, and waist yaw only.
+_M5C_LINK_REPLACEMENTS = {
+    "waist_roll_link": "waist_yaw_link",
+    "l_leg_ankle_roll_link": "l_leg_ankle_pitch_link",
+    "r_leg_ankle_roll_link": "r_leg_ankle_pitch_link",
+    "l_arm_shoulder_yaw_link": "l_arm_shoulder_roll_link",
+    "r_arm_shoulder_yaw_link": "r_arm_shoulder_roll_link",
+}
+for _format in ("fbx_mocap", "noetix_mocap", "lafan", "mocap", "amass", "gvhmr", "omomo"):
+    JOINTS_MAPPINGS[(_format, "m5c")] = {
+        name: _M5C_LINK_REPLACEMENTS.get(link, link)
+        for name, link in JOINTS_MAPPINGS[(_format, "e2")].items()
+        if name not in {"Spine", "Hips", "LeftUpLeg", "RightUpLeg", "Pelvis", "L_Hip", "R_Hip"}
+    }
+    ORIENTATION_JOINTS_MAPPINGS[(_format, "m5c")] = {
+        name: _M5C_LINK_REPLACEMENTS.get(link, link)
+        for name, link in ORIENTATION_JOINTS_MAPPINGS[(_format, "e2")].items()
+    }
+    if (_format, "e2") in ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ:
+        ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ[(_format, "m5c")] = ORIENTATION_T_POSE_HUMAN_QUATERNIONS_WXYZ[
+            (_format, "e2")
+        ].copy()
+    ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ[(_format, "m5c")] = ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ[
+        (_format, "e2")
+    ]
+    ORIENTATION_T_POSE_ROBOT_JOINT_POSITIONS[(_format, "m5c")] = {
+        "l_arm_shoulder_roll_joint": math.atan2(0.22644, 0.09612),
+        "r_arm_shoulder_roll_joint": -math.atan2(0.22644, 0.09612),
+    }
+
 # Data format specific constants
 TOE_NAMES_BY_FORMAT = {
     "fbx_mocap": ["LeftToeBase", "RightToeBase"],
@@ -1397,9 +1429,7 @@ class MotionDataConfig:
 
         if self.orientation_t_pose_robot_base_quaternion_wxyz is not None:
             return self.orientation_t_pose_robot_base_quaternion_wxyz
-        return ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ.get(
-            (self.data_format, robot_family(self.robot_type))
-        )
+        return ORIENTATION_T_POSE_ROBOT_BASE_QUATERNIONS_WXYZ.get((self.data_format, robot_family(self.robot_type)))
 
     @property
     def resolved_orientation_t_pose_robot_joint_positions(

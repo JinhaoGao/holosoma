@@ -130,6 +130,9 @@ class ViserConfig:
     show_robot_orientation_axes: bool = False
     """Whether to show saved robot orientation frames when available."""
 
+    show_arm_direction_comparison: bool = False
+    """Whether to compare source, target, and robot upper/lower-arm directions."""
+
     orientation_joints: tuple[str, ...] = ()
     """Human joint names whose target and robot orientation frames are shown."""
 
@@ -147,6 +150,15 @@ class ViserConfig:
 
     orientation_axis_head_length: float = 0.015
     """Length of each solid orientation arrow head."""
+
+    arm_direction_shaft_radius: float = 0.009
+    """Radius of source/target/actual arm-direction arrow shafts."""
+
+    arm_direction_head_radius: float = 0.018
+    """Radius of source/target/actual arm-direction arrow heads."""
+
+    arm_direction_head_length: float = 0.035
+    """Length of source/target/actual arm-direction arrow heads."""
 
     show_joint_labels: bool = False
     """Whether to show source joint names when a complete source skeleton is available."""

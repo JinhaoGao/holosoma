@@ -4,6 +4,7 @@
   "robot_dof": 23,
   "robot_height": 1.5,
   "robot_urdf_file": "models/e1/e1_23dof.urdf",
+  "robot_mujoco_xml_file": "models/e1/e1_23dof.xml",
   "retargeting": {
     "dynamic_ground_window": true,
     "interaction_mesh_weight": 10.0,

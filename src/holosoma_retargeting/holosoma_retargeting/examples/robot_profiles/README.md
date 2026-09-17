@@ -30,7 +30,7 @@ python -m holosoma_retargeting.examples.robot_retarget \
   --retargeter.no-visualize
 ```
 
-`robot_dof`、`robot_height`、`robot_urdf_file`、`retargeting` 中的全部字段、`shoulder_direction` 中的全部字段、`orientation.enable`、`orientation.preview` 和 `natural_pose.enable` 都有对应的命令行覆盖项。`--orientation-weights` 会把当前数据集所有已映射朝向统一覆盖为一个权重；`--nature-weights` 会把所有机器人关节统一覆盖为一个自然姿态权重。`planar_foot_contact` 的检测细节以及逐关节、逐数据集权重目前没有逐项命令行覆盖，应通过默认 JSON 或传给 `--robot-profile` 的实验 JSON 调整。
+`robot_dof`、`robot_height`、`robot_urdf_file`、`robot_mujoco_xml_file`、`retargeting` 中的全部字段、`shoulder_direction` 中的全部字段、`orientation.enable`、`orientation.preview` 和 `natural_pose.enable` 都有对应的命令行覆盖项。`--orientation-weights` 会把当前数据集所有已映射朝向统一覆盖为一个权重；`--nature-weights` 会把所有机器人关节统一覆盖为一个自然姿态权重。`planar_foot_contact` 的检测细节以及逐关节、逐数据集权重目前没有逐项命令行覆盖，应通过默认 JSON 或传给 `--robot-profile` 的实验 JSON 调整。
 
 ## 顶层字段
 
@@ -42,7 +42,9 @@ python -m holosoma_retargeting.examples.robot_retarget \
 
 **`robot_height`** 是目标机器人的参考身高，单位为米。人体位置会按照 `robot_height / source_human_height` 进行统一缩放，所以改变它会实际改变人体目标点、步幅、手脚位置和 Interaction Mesh 的空间尺度。命令行覆盖项是 `--robot-height`。
 
-**`robot_urdf_file`** 指定机器人 URDF。相对路径以 `holosoma_retargeting` 包目录为基准解析，绝对路径也可以使用。管线会加载该 URDF，并使用对应的 MuJoCo XML 构造运动学、碰撞几何、关节限位和雅可比；因此修改它会实际更换求解模型。新模型必须与机器人映射、DoF 和关节名称一致。命令行覆盖项是 `--robot-urdf-file`。
+**`robot_urdf_file`** 指定机器人 URDF。相对路径以 `holosoma_retargeting` 包目录为基准解析，绝对路径也可以使用。管线会用该 URDF 构造 Viser 机器人；新模型必须与机器人映射、DoF 和关节名称一致。命令行覆盖项是 `--robot-urdf-file`。
+
+**`robot_mujoco_xml_file`** 指定用于求解的 MuJoCo XML。它可以和 URDF 分处不同目录，不再要求与 URDF 同目录且同名；相对路径同样以 `holosoma_retargeting` 包目录为基准解析。该模型负责运动学、碰撞几何、关节限位和雅可比。命令行覆盖项是 `--robot-mujoco-xml-file`。
 
 ## `retargeting` 求解默认值
 

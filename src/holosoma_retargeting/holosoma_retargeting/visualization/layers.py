@@ -26,6 +26,7 @@ class LayerId(StrEnum):
     SOURCE_ORIENTATION = "source_orientation"
     TARGET_ORIENTATION = "target_orientation"
     ROBOT_ORIENTATION = "robot_orientation"
+    ARM_DIRECTION = "arm_direction"
     JOINT_LABELS = "joint_labels"
     BODY_COM = "body_com"
     BODY_VELOCITY = "body_velocity"
@@ -132,6 +133,13 @@ LAYER_SPECS: tuple[LayerSpec, ...] = (
         "Robot orientation axes",
         "Actual robot link frames; scope can be switched between retargeting links and the complete MuJoCo tree.",
         "a",
+    ),
+    LayerSpec(
+        LayerId.ARM_DIRECTION,
+        "Diagnostics",
+        "Arm direction comparison",
+        "Source arm segments plus source-derived targets and actual robot upper/lower-arm directions.",
+        "d",
     ),
     LayerSpec(
         LayerId.JOINT_LABELS,

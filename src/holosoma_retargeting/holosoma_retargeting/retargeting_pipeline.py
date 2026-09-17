@@ -22,6 +22,7 @@ from urllib.parse import quote
 import numpy as np
 import trimesh
 
+from holosoma_retargeting.body_proportions import M5_BODY_PROPORTIONS_VERSIONS, rebuild_m5_body
 from holosoma_retargeting.config_types.data_type import MotionDataConfig, normalize_data_format
 from holosoma_retargeting.config_types.retargeter import RetargeterConfig
 from holosoma_retargeting.config_types.retargeting import (
@@ -252,6 +253,12 @@ def _normalized_job_payload(
     solver_config["save_dir"] = None
     solver_config["output_name"] = None
     motion_config = normalized.motion_data_config
+    if (
+        normalized.robot in M5_BODY_PROPORTIONS_VERSIONS
+        and normalized.data_format == "fbx_mocap"
+        and normalized.task_type == "robot_only"
+    ):
+        solver_config["body_proportion_preprocessing"] = M5_BODY_PROPORTIONS_VERSIONS[normalized.robot]
     solver_config["resolved_motion_data_contract"] = {
         "demo_joints": motion_config.resolved_demo_joints,
         "joint_parent_indices": motion_config.resolved_joint_parent_indices,
@@ -600,6 +607,12 @@ def create_task_constants(
     if not robot_urdf_path.is_absolute():
         robot_urdf_path = Path(__file__).resolve().parent / robot_urdf_path
     task_constants.ROBOT_URDF_FILE = str(robot_urdf_path.resolve())
+    robot_mujoco_xml_path = Path(task_constants.ROBOT_MUJOCO_XML_FILE).expanduser()
+    if not robot_mujoco_xml_path.is_absolute():
+        robot_mujoco_xml_path = Path(__file__).resolve().parent / robot_mujoco_xml_path
+    task_constants.ROBOT_MUJOCO_XML_FILE = str(
+        robot_mujoco_xml_path.resolve(),
+    )
 
     # Copy legacy motion data constants (upper-case for compatibility)
     for attr, value in motion_data_config.legacy_constants().items():
@@ -778,12 +791,9 @@ def setup_object_data(
             models_root=models_root,
             output_dir=assets_dir,
         )
-        robot_xml_file = Path(constants.ROBOT_URDF_FILE).with_suffix(".xml")
-        if not robot_xml_file.is_absolute():
-            robot_xml_file = Path(__file__).resolve().parent / robot_xml_file
         constants.SCENE_XML_FILE = str(
             create_omomo_object_scene(
-                robot_xml_file,
+                constants.ROBOT_MUJOCO_XML_FILE,
                 constants.OBJECT_NAME,
                 scale=scale_factors,
                 models_root=models_root,
@@ -1484,7 +1494,29 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
     )
 
     toe_names = cfg.motion_data_config.toe_names
-    if task_type == "robot_only":
+    rebuilt_body = None
+    if cfg.robot in M5_BODY_PROPORTIONS_VERSIONS and data_format == "fbx_mocap" and task_type == "robot_only":
+        source_contact_plan = None
+        if cfg.retargeter.activate_foot_sticking:
+            source_contact_plan = build_planar_foot_contact_plan(
+                foot_contact_source_joints,
+                retargeter.demo_joints,
+                constants.DEMO_JOINT_PARENT_INDICES,
+                toe_names,
+                fps=constants.SOURCE_FPS,
+                config=cfg.retargeter.planar_foot_contact,
+            )
+        rebuilt_body = rebuild_m5_body(
+            motion,
+            retargeter.robot_model,
+            robot_type=cfg.robot,
+            orientation_reference_qpos=retargeter._orientation_t_pose_robot_qpos(),
+            source_contact_plan=source_contact_plan,
+            ground_clearance=cfg.retargeter.planar_foot_contact.ground_clearance,
+        )
+        human_joints = rebuilt_body.joints
+        visualization_human_joints = rebuilt_body.visualization_joints
+    elif task_type == "robot_only":
         human_joints = preprocess_motion_data(
             human_joints,
             retargeter,
@@ -1547,6 +1579,7 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         fps=constants.SOURCE_FPS,
         config=cfg.retargeter.planar_foot_contact,
         reference_position_scale=smpl_scale,
+        reference_sole_centers=None if rebuilt_body is None else rebuilt_body.sole_centers,
         reference_rotation_matrices=foot_reference_rotation_matrices,
         reference_translations=foot_reference_translations,
         elevated_support_triangles=_climbing_elevated_support_triangles(
@@ -1573,6 +1606,10 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
             else "ground_align_and_uniform_scale"
         ),
     }
+    if rebuilt_body is not None:
+        result_metadata.update(rebuilt_body.metadata)
+        # There is no single scale for reconstructed body positions.
+        result_metadata.pop("human_position_scale")
     if data_format == "fbx_mocap":
         with np.load(job.source_path, allow_pickle=False) as source_data:
             source_scene_fields = (

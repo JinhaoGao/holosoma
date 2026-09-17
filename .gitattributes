@@ -1,3 +1,6 @@
 src/holosoma_retargeting/holosoma_retargeting/models/smplx/*.npz filter=lfs diff=lfs merge=lfs -text
 src/holosoma_retargeting/holosoma_retargeting/models/*/*.obj -diff
 src/holosoma_retargeting/holosoma_retargeting/models/*/collision/*.obj -diff
+
+# Preserve the supplied M5 mechanical packages byte-for-byte.
+src/holosoma_retargeting/holosoma_retargeting/models/m5/m5[cde]/__00-mia-v5-0[CDE]/** -text -whitespace

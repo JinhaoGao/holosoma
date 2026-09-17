@@ -76,7 +76,9 @@ class PairedRobotScene:
         trajectory: PairedActorTrajectory,
     ) -> None:
         robot_config = RobotConfig(robot_type=trajectory.robot_type)
-        model_path = (self.package_root / robot_config.ROBOT_URDF_FILE).with_suffix(".xml")
+        model_path = Path(robot_config.ROBOT_MUJOCO_XML_FILE).expanduser()
+        if not model_path.is_absolute():
+            model_path = self.package_root / model_path
         if not model_path.is_file():
             raise FileNotFoundError(f"MuJoCo model does not exist: {model_path}")
         child = mujoco.MjSpec.from_file(str(model_path))
