@@ -14,7 +14,7 @@ from holosoma_retargeting.data_utils.motion_data import HumanMotion
 from holosoma_retargeting.foot_contact import FootContactPlan, source_floor_clearance
 
 M5C_BODY_PROPORTIONS_VERSION = "m5c_bone_lengths_v2"
-M5_BODY_PROPORTIONS_VERSIONS = {robot: f"{robot}_bone_lengths_v2" for robot in ("m5c", "m5d", "m5e")}
+M5_BODY_PROPORTIONS_VERSIONS = {robot: f"{robot}_bone_lengths_v2" for robot in ("m4g", "m5c", "m5d", "m5e")}
 
 
 @dataclass(frozen=True)

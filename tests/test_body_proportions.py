@@ -19,14 +19,15 @@ from holosoma_retargeting.foot_contact import FootContactPlan, FootContactState
 PACKAGE = Path(__file__).resolve().parents[1] / "src/holosoma_retargeting/holosoma_retargeting"
 
 
-@pytest.fixture(params=["m5c", "m5d", "m5e"])
+@pytest.fixture(params=["m4g", "m5c", "m5d", "m5e"])
 def robot(request):
     return request.param
 
 
 @pytest.fixture
 def model(robot):
-    return mujoco.MjModel.from_xml_path(str(PACKAGE / f"models/m5/{robot}/{robot}_17dof.xml"))
+    directory = f"models/{robot}" if robot == "m4g" else f"models/m5/{robot}"
+    return mujoco.MjModel.from_xml_path(str(PACKAGE / f"{directory}/{robot}_17dof.xml"))
 
 
 @pytest.fixture
@@ -68,8 +69,9 @@ def motion(robot):
 
 def test_bone_lengths_match_original_urdf_and_preserve_source_directions(model, motion, robot):
     body = rebuild_m5_body(motion, model, robot_type=robot, orientation_reference_qpos=model.qpos0)
-    package = f"__00-mia-v5-0{robot[-1].upper()}"
-    urdf = ET.parse(PACKAGE / f"models/m5/{robot}/{package}/urdf/update_{package}.urdf")
+    package = "__00-mia-v4_2-G" if robot == "m4g" else f"__00-mia-v5-0{robot[-1].upper()}"
+    directory = f"models/{robot}" if robot == "m4g" else f"models/m5/{robot}"
+    urdf = ET.parse(PACKAGE / f"{directory}/{package}/urdf/update_{package}.urdf")
     origins = {
         joint.get("name"): np.fromstring(joint.find("origin").get("xyz"), sep=" ") for joint in urdf.findall("joint")
     }
@@ -80,7 +82,7 @@ def test_bone_lengths_match_original_urdf_and_preserve_source_directions(model, 
             ("UpLeg", "Leg", np.linalg.norm(origins[prefix + "_leg_knee_joint"])),
             ("Leg", "Foot", np.linalg.norm(origins[prefix + "_leg_ankle_pitch_joint"])),
             ("Arm", "ForeArm", np.linalg.norm(origins[prefix + "_arm_elbow_joint"])),
-            ("ForeArm", "Hand", np.hypot(0.0035, 0.2230001986)),
+            ("ForeArm", "Hand", np.linalg.norm(model.body(prefix + "_hand_sphere_link").pos)),
         ):
             a, b = names.index(side + start), names.index(side + end)
             before, after = motion.joints[:, b] - motion.joints[:, a], body.joints[:, b] - body.joints[:, a]
@@ -88,7 +90,14 @@ def test_bone_lengths_match_original_urdf_and_preserve_source_directions(model, 
             np.testing.assert_allclose(
                 after / expected, before / np.linalg.norm(before, axis=-1, keepdims=True), atol=1e-12
             )
-    for suffix, expected in (("UpLeg", 0.27), ("Arm", 0.5388 if robot == "m5d" else 0.4788)):
+    pelvis_width = np.linalg.norm(origins["l_leg_hip_yaw_joint"] - origins["r_leg_hip_yaw_joint"])
+    shoulder_width = np.linalg.norm(
+        origins["l_arm_shoulder_pitch_joint"]
+        + origins["l_arm_shoulder_roll_joint"]
+        - origins["r_arm_shoulder_pitch_joint"]
+        - origins["r_arm_shoulder_roll_joint"]
+    )
+    for suffix, expected in (("UpLeg", pelvis_width), ("Arm", shoulder_width)):
         difference = body.joints[:, names.index("Left" + suffix)] - body.joints[:, names.index("Right" + suffix)]
         np.testing.assert_allclose(np.linalg.norm(difference, axis=-1), expected, atol=1e-12)
     scale = body.metadata["root_translation_scale"]

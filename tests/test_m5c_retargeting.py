@@ -21,12 +21,13 @@ from holosoma_retargeting.src.interaction_mesh_retargeter import InteractionMesh
 PACKAGE = Path(__file__).resolve().parents[1] / "src/holosoma_retargeting/holosoma_retargeting"
 
 
-@pytest.mark.parametrize("robot", ["m5c", "m5d", "m5e"])
+@pytest.mark.parametrize("robot", ["m4g", "m5c", "m5d", "m5e"])
 def test_m5c_source_urdf_fk_and_limits_are_preserved(robot):
-    package = f"__00-mia-v5-0{robot[-1].upper()}"
-    source = ET.parse(PACKAGE / f"models/m5/{robot}/{package}/urdf/update_{package}.urdf").getroot()
-    generated = ET.parse(PACKAGE / f"models/m5/{robot}/{robot}_17dof.xml").getroot()
-    model = mujoco.MjModel.from_xml_path(str(PACKAGE / f"models/m5/{robot}/{robot}_17dof.xml"))
+    package = "__00-mia-v4_2-G" if robot == "m4g" else f"__00-mia-v5-0{robot[-1].upper()}"
+    model_dir = f"models/{robot}" if robot == "m4g" else f"models/m5/{robot}"
+    source = ET.parse(PACKAGE / f"{model_dir}/{package}/urdf/update_{package}.urdf").getroot()
+    generated = ET.parse(PACKAGE / f"{model_dir}/{robot}_17dof.xml").getroot()
+    model = mujoco.MjModel.from_xml_path(str(PACKAGE / f"{model_dir}/{robot}_17dof.xml"))
     data = mujoco.MjData(model)
     assert model.nq == 24 and model.nv == 23 and model.nu == 17
     for link in source.findall("link"):
@@ -84,7 +85,7 @@ def test_m5c_source_urdf_fk_and_limits_are_preserved(robot):
             np.testing.assert_allclose(data.body(name).xmat.reshape(3, 3), transform[:3, :3], atol=1e-10)
 
 
-@pytest.mark.parametrize("robot", ["m5c", "m5d", "m5e"])
+@pytest.mark.parametrize("robot", ["m4g", "m5c", "m5d", "m5e"])
 def test_m5c_two_axis_shoulder_jacobian_and_t_pose(robot):
     config = internal_config_from_command(RetargetingCommand(robot=robot, task="robot_only", dataset="noetix_mocap"))
     config.retargeter = replace(config.retargeter, visualize=False)
@@ -111,7 +112,13 @@ def test_m5c_two_axis_shoulder_jacobian_and_t_pose(robot):
             np.testing.assert_allclose(jac[side, :, reduced], fd[side], atol=1e-6)
     q = solver._orientation_t_pose_robot_qpos()
     directions, _ = solver._get_shoulder_direction_data(q, with_jacobians=False)
-    np.testing.assert_allclose(directions, [[0, 1, 0], [0, -1, 0]], atol=1e-6)
+    if robot == "m4g":
+        # Right T reference respects the 1.17 rad limit (about 0.66 degrees
+        # below horizontal due to asymmetric mechanical elbow offsets).
+        np.testing.assert_allclose(directions[0], [0, 1, 0], atol=1e-6)
+        assert np.dot(directions[1], [0, -1, 0]) > 0.9999
+    else:
+        np.testing.assert_allclose(directions, [[0, 1, 0], [0, -1, 0]], atol=1e-6)
     # At the source reference pose every calibrated target equals M5C FK;
     # a known global rotation must left-multiply each robot target frame.
     names = tuple(solver.orientation_human_joint_names)

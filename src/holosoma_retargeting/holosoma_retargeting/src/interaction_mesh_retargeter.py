@@ -465,7 +465,7 @@ class InteractionMeshRetargeter:
 
         is_e1 = _joint_exists("l_arm_elbow_pitch_joint")
         is_e2 = _joint_exists("l_arm_elbow_joint")
-        is_m5 = getattr(self.task_constants, "ROBOT_TYPE", "") in {"m5c", "m5d", "m5e"}
+        is_m5 = getattr(self.task_constants, "ROBOT_TYPE", "") in {"m4g", "m5c", "m5d", "m5e"}
         is_g1 = _joint_exists("left_elbow_joint") and _joint_exists(
             "left_wrist_roll_joint",
         )

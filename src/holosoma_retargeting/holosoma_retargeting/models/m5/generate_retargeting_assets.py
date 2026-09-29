@@ -33,9 +33,9 @@ def write(path, root):
     ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
 
 
-def generate(robot_type):
-    root = ROOT / robot_type
-    package = f"__00-mia-v5-0{robot_type[-1].upper()}"
+def generate(robot_type, *, root=None, package=None, hand_points=None):
+    root = Path(root) if root is not None else ROOT / robot_type
+    package = package or f"__00-mia-v5-0{robot_type[-1].upper()}"
     source = root / package / "urdf" / f"update_{package}.urdf"
     robot = ET.parse(source).getroot()
     robot.set("name", f"{robot_type}_17dof")
@@ -62,7 +62,7 @@ def generate(robot_type):
             robot,
             f"{side}_hand_sphere_link",
             f"{side}_arm_elbow_link",
-            (0, -0.0035 if side == "l" else 0.0035, -0.2230001986),
+            (hand_points[side] if hand_points is not None else (0, -0.0035 if side == "l" else 0.0035, -0.2230001986)),
         )
     write(root / f"{robot_type}_17dof.urdf", robot)
 

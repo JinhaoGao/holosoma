@@ -25,7 +25,7 @@ from holosoma_retargeting.config_types.robot_profiles import (
 from holosoma_retargeting.config_types.task import TaskConfig
 
 TaskType = Literal["robot_only", "object_interaction", "climbing"]
-RobotName = Literal["g1", "e1", "e1_23dof", "e1_24dof", "e2", "m5c", "m5d", "m5e"]
+RobotName = Literal["g1", "e1", "e1_23dof", "e1_24dof", "e2", "m4g", "m5c", "m5d", "m5e"]
 DatasetName = Literal[
     "amass",
     "climbing",
