@@ -34,12 +34,11 @@ jobs:
             ln -sfF "$GITHUB_WORKSPACE" /workspace/holosoma
           fi
           source scripts/source_isaacgym_setup.sh
-          pip install pre-commit mypy slack-sdk
+          pip install pre-commit 'mypy==1.14.1' slack-sdk
           git fetch origin "${GITHUB_BASE_REF:-main}"
           git fetch origin "${GITHUB_SHA}"
           pre-commit install-hooks
           git diff --name-only "origin/${GITHUB_BASE_REF:-main}" "${GITHUB_SHA}" --
-          git diff --name-only "origin/${GITHUB_BASE_REF:-main}" "${GITHUB_SHA}" -- | xargs pre-commit run --files \
-            || ( git diff --exit-code && echo "pre-commit checks failed" )
-          mypy .
+          pre-commit run --from-ref "origin/${GITHUB_BASE_REF:-main}" --to-ref "${GITHUB_SHA}"
+          mypy --config-file mypy.ini
           mypy --config-file src/holosoma_retargeting/mypy.ini
