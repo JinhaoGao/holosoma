@@ -17,13 +17,11 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 src_root = Path(__file__).resolve().parents[2]
-data_utils_root = Path(__file__).resolve().parent
-for path in (src_root, data_utils_root):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+if str(src_root) not in sys.path:
+    sys.path.insert(0, str(src_root))
 
 from holosoma_retargeting.config_types.data_type import NOETIX_MOCAP_DEMO_JOINTS  # noqa: E402
-from lafan1 import extract, utils  # type: ignore[import-not-found] # noqa: E402
+from holosoma_retargeting.data_utils.bvh_dependencies import load_lafan_modules  # noqa: E402
 
 NOETIX_FULLBODY_CHEST_MAPPING = {
     "Hips": "Hips",
@@ -144,7 +142,7 @@ def canonical_parent_indices() -> np.ndarray:
     canonical_index = {name: index for index, name in enumerate(NOETIX_MOCAP_DEMO_JOINTS)}
     return np.asarray(
         [
-            -1 if NOETIX_CANONICAL_PARENT_NAMES[name] is None else canonical_index[NOETIX_CANONICAL_PARENT_NAMES[name]]
+            -1 if (parent := NOETIX_CANONICAL_PARENT_NAMES[name]) is None else canonical_index[parent]
             for name in NOETIX_MOCAP_DEMO_JOINTS
         ],
         dtype=np.int32,
@@ -381,6 +379,7 @@ def read_bvh_with_normalized_motion_rows(bvh_path: Path):
     which otherwise produces empty numeric tokens.  Normalize only rows after
     ``Frame Time`` so the hierarchy and channel ordering remain untouched.
     """
+    extract, _ = load_lafan_modules()
     temp_path: Path | None = None
     try:
         with NamedTemporaryFile(mode="w", suffix=".bvh", encoding="utf-8", delete=False) as temp_file:
@@ -486,6 +485,7 @@ def convert_file(
     drop_jump_threshold_m: float,
     overwrite: bool = False,
 ) -> None:
+    _, utils = load_lafan_modules()
     anim = read_bvh_with_normalized_motion_rows(bvh_path)
     global_quaternions_wxyz, global_positions_cm = utils.quat_fk(
         anim.quats,

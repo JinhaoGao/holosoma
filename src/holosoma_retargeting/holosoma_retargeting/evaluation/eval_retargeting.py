@@ -152,10 +152,11 @@ class RetargetingEvaluator:
         self.sliding_threshold = 0.01
 
         # Load Mujoco model
+        scene_xml_path = getattr(constants, "SCENE_XML_FILE", None)
         if self.object_name == "ground":
             robot_xml_path = constants.ROBOT_MUJOCO_XML_FILE
-        elif getattr(constants, "SCENE_XML_FILE", ""):
-            robot_xml_path = constants.SCENE_XML_FILE  # type: ignore[attr-defined]
+        elif scene_xml_path:
+            robot_xml_path = scene_xml_path
         else:
             robot_xml_path = robot_model_path.replace(".urdf", "_w_" + self.object_name + ".xml")
 
@@ -176,7 +177,7 @@ class RetargetingEvaluator:
         self._have_terrain_mesh = False
         self._ground_z = 0.0  # ground z is always 0.0
 
-        if self.object_name != "ground" and not self.has_dynamic_object and getattr(constants, "SCENE_XML_FILE", ""):
+        if self.object_name != "ground" and not self.has_dynamic_object and scene_xml_path:
             self._have_terrain_mesh = True
 
         if self._have_terrain_mesh:
@@ -762,6 +763,8 @@ def _evaluate_single_task(
     if not isinstance(task_config, dict):
         raise ValueError(f"{result.path} saved config has no task_config")
     saved_object_scale = tuple(float(value) for value in task_config.get("object_scale", (1.0, 1.0, 1.0)))
+    if len(saved_object_scale) != 3:
+        raise ValueError(f"{result.path} saved object_scale must contain exactly three values")
     constants = create_task_constants(
         robot_config,
         motion_data_config,

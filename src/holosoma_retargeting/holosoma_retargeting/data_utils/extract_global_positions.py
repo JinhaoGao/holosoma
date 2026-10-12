@@ -18,7 +18,7 @@ if str(src_root) not in sys.path:
     sys.path.insert(0, str(src_root))
 
 from holosoma_retargeting.config_types.data_type import LAFAN_DEMO_JOINTS  # noqa: E402
-from holosoma_retargeting.data_utils.lafan1 import extract, utils  # noqa: E402
+from holosoma_retargeting.data_utils.bvh_dependencies import load_lafan_modules  # noqa: E402
 
 LAFAN_CANONICAL_TO_SOURCE = {
     name: ("LeftToe" if name == "LeftToeBase" else "RightToe" if name == "RightToeBase" else name)
@@ -103,6 +103,7 @@ def _canonical_parent_indices(
 
 def extract_global_positions(bvh_file_path: str | Path) -> dict[str, object]:
     """Extract canonical positions and direct global rotations through BVH FK."""
+    extract, utils = load_lafan_modules()
     source_path = Path(bvh_file_path)
     anim = extract.read_bvh(str(source_path))
     source_index = {name: index for index, name in enumerate(anim.bones)}

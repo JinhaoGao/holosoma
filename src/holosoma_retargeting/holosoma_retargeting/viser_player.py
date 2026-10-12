@@ -137,7 +137,7 @@ def _resolve_runtime_config(config: ViserConfig, metadata: dict[str, object]) ->
         if object_name in OMOMO_OBJECT_NAMES:
             object_urdf = str(get_omomo_object_asset(str(object_name)).urdf_path)
         else:
-            result_stem = Path(config.qpos_npz).stem
+            result_stem = Path(config.qpos_npz or "").stem
             dynamic_name_hint = re.search(
                 r"_(?:original|augmented|trans_[0-9]+|rot_[0-9]+)$",
                 result_stem,
@@ -228,7 +228,7 @@ def _resolve_data_format(
         if len(demo_joints) == n_joints and (data_format, robot_type) in JOINTS_MAPPINGS
     ]
 
-    path_hint = _data_format_from_path_hint(config.qpos_npz)
+    path_hint = _data_format_from_path_hint(config.qpos_npz or "")
     if path_hint in candidates:
         print(f"[viser_player] Inferred data_format={path_hint} from qpos_npz path: {config.qpos_npz}")
         return path_hint
@@ -417,7 +417,7 @@ class MappedSkeletonOverlay:
         self.hands_visible = True
         self.labels_visible = False
         self._lock = threading.Lock()
-        self._handles: list[object] = []
+        self._handles: list[viser.SceneNodeHandle] = []
 
         self._sphere = trimesh.primitives.Sphere(radius=float(point_radius))
         self._sphere_vertices = self._sphere.vertices.astype(np.float32)
@@ -680,7 +680,7 @@ class ObjectKeypointOverlay:
         if self.offset.shape != (3,):
             raise ValueError(f"Object-keypoint offset must have shape (3,), got {self.offset.shape}")
         self._lock = threading.Lock()
-        self._handles: list[object] = []
+        self._handles: list[viser.SceneNodeHandle] = []
         sphere = trimesh.primitives.Sphere(radius=float(point_radius))
         self._sphere_vertices = sphere.vertices.astype(np.float32)
         self._sphere_faces = sphere.faces.astype(np.int32)
@@ -765,7 +765,7 @@ class RetargetingPointCloudOverlay:
         }
         self.loop = bool(loop)
         self.visible = True
-        self.handles: dict[str, object] = {}
+        self.handles: dict[str, viser.PointCloudHandle] = {}
         namespace = namespace.rstrip("/")
         for name, points in self.trajectories.items():
             colors = np.tile(self._COLORS[name], (points.shape[1], 1))
@@ -823,7 +823,7 @@ class InteractionMeshOverlay:
             raise ValueError(f"Interaction-mesh offset must have shape (3,), got {self.offset.shape}")
         self.visible = True
         self._lock = threading.Lock()
-        self._handles: list[object] = []
+        self._handles: list[viser.SceneNodeHandle] = []
 
         if self.source_vertices.ndim != 3 or self.target_vertices.ndim != 3:
             raise ValueError("Saved interaction mesh vertices must have shape (frames, vertices, 3).")
@@ -881,7 +881,9 @@ class InteractionMeshOverlay:
                 handle.remove()
         self._handles.clear()
 
-    def _draw_mesh(self, name: str, vertices: np.ndarray, tetrahedra: np.ndarray, color: np.ndarray) -> list[object]:
+    def _draw_mesh(
+        self, name: str, vertices: np.ndarray, tetrahedra: np.ndarray, color: np.ndarray
+    ) -> list[viser.SceneNodeHandle]:
         edges = interaction_mesh_edges_from_tetrahedra(
             tetrahedra,
             num_anchor_vertices=self.num_human_vertices,
@@ -1419,6 +1421,10 @@ def _build_orientation_overlay(
     human_joint_names = npz_metadata.get("human_joint_names")
     mapped_joint_names = npz_metadata.get("mapped_human_joint_names")
     mapped_robot_link_names = npz_metadata.get("mapped_robot_link_names")
+    if not isinstance(mapped_joint_names, (list, tuple)):
+        mapped_joint_names = ()
+    if not isinstance(mapped_robot_link_names, (list, tuple)):
+        mapped_robot_link_names = ()
     mapped_robot_joints = npz_metadata.get("mapped_robot_joints")
     diagnostics = npz_metadata.get("orientation_diagnostics")
     human_index = (
@@ -1702,6 +1708,7 @@ def _build_mapped_skeleton_overlay(
     saved_robot_skeleton_joints = npz_metadata.get("robot_link_positions")
     saved_robot_parent_indices = npz_metadata.get("robot_link_parent_indices")
 
+    data_format: str | None
     if isinstance(saved_demo_joints, list) and len(saved_demo_joints) == human_joints.shape[1]:
         demo_joints = saved_demo_joints
         data_format = normalize_data_format(config.data_format) if config.data_format else "saved"
@@ -1968,7 +1975,10 @@ def make_player(
     )
     show_human_hands = bool(show_human_skeleton) if config.show_human_hands is None else config.show_human_hands
 
-    foot_sticking = (npz_metadata or {}).get("foot_sticking")
+    saved_foot_sticking = (npz_metadata or {}).get("foot_sticking")
+    if saved_foot_sticking is not None and not isinstance(saved_foot_sticking, dict):
+        raise ValueError("Saved foot_sticking metadata must be a mapping")
+    foot_sticking = saved_foot_sticking
     foot_sticking_status_handle = None
     arm_direction_status_handle = None
     if foot_sticking is not None:
@@ -2257,7 +2267,7 @@ def make_player(
     def _draw_frame_overlay(q: np.ndarray, frame_float: float) -> None:
         last_rendered_frame["q"] = np.asarray(q).copy()
         last_rendered_frame["frame"] = float(frame_float)
-        if foot_sticking_status_handle is not None:
+        if foot_sticking_status_handle is not None and foot_sticking is not None:
             foot_frame_count = np.asarray(foot_sticking["states"]).shape[0]
             if config.loop:
                 foot_frame_idx = round(float(frame_float)) % foot_frame_count
@@ -2420,7 +2430,7 @@ def main(cfg: ViserConfig) -> None:
         return
 
     cfg = replace(cfg, qpos_npz=str(input_path))
-    qpos, fps, human_joints, npz_metadata, interaction_mesh = load_npz(cfg.qpos_npz)
+    qpos, fps, human_joints, npz_metadata, interaction_mesh = load_npz(str(input_path))
     cfg = _resolve_runtime_config(cfg, npz_metadata)
     make_player(
         config=cfg,

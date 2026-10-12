@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import mujoco
+import trimesh
 import yourdfpy
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -95,14 +96,47 @@ class JobAssetPathTests(unittest.TestCase):
 
 
 class ClimbingGeneratedAssetTests(unittest.TestCase):
-    SOURCE_ROOT = (PACKAGE_ROOT / "holosoma_retargeting" / "demo_data" / "climb").resolve()
+    def setUp(self):
+        self.workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(self.workspace.cleanup)
+        self.source_root = Path(self.workspace.name) / "climb"
+        for sequence_index in range(5):
+            source_dir = self.source_root / f"mocap_climb_seq_{sequence_index}"
+            source_dir.mkdir(parents=True)
+            trimesh.creation.box(extents=(1.0, 0.5, 0.1 * (sequence_index + 1))).export(source_dir / "multi_boxes.obj")
+            (source_dir / "multi_boxes.urdf").write_text(
+                '<robot name="terrain"><link name="terrain"><visual><geometry>'
+                '<mesh filename="multi_boxes.obj"/></geometry></visual></link></robot>',
+                encoding="utf-8",
+            )
+            (source_dir / "box_assets.xml").write_text(
+                '<mujoco><asset><mesh name="terrain_mesh" file="multi_boxes.obj"/></asset></mujoco>',
+                encoding="utf-8",
+            )
+            for robot, dof in (("g1", 29), ("e1", 23)):
+                # Exercise scene relocation with self-contained models, independent
+                # of private motion captures and hand-authored climbing scenes.
+                root = ET.Element("mujoco", model=robot)
+                ET.SubElement(root, "compiler", meshdir=".")
+                ET.SubElement(root, "include", file="box_assets.xml")
+                world = ET.SubElement(root, "worldbody")
+                ET.SubElement(world, "geom", type="mesh", mesh="terrain_mesh")
+                body = ET.SubElement(world, "body", name="robot", pos="0 0 2")
+                ET.SubElement(body, "freejoint")
+                ET.SubElement(body, "geom", type="sphere", size="0.1")
+                for joint_index in range(dof):
+                    child = ET.SubElement(body, "body", name=f"link_{joint_index}", pos="0 0 0.1")
+                    ET.SubElement(child, "joint", type="hinge", axis="0 1 0")
+                    ET.SubElement(child, "geom", type="sphere", size="0.01")
+                scene_name = Path(RobotConfig(robot_type=robot).ROBOT_URDF_FILE).stem + "_w_multi_boxes.xml"
+                ET.ElementTree(root).write(source_dir / scene_name)
 
     def test_g1_and_e1_assets_are_relocatable_and_do_not_modify_source(self):
-        before = _tree_snapshot(self.SOURCE_ROOT)
+        before = _tree_snapshot(self.source_root)
         with tempfile.TemporaryDirectory() as tmpdir:
             cache_root = Path(tmpdir)
             for sequence_index in range(5):
-                source_dir = self.SOURCE_ROOT / f"mocap_climb_seq_{sequence_index}"
+                source_dir = self.source_root / f"mocap_climb_seq_{sequence_index}"
                 for robot, expected_nq in (("g1", 36), ("e1", 30)):
                     with self.subTest(sequence=sequence_index, robot=robot):
                         task_config = TaskConfig(
@@ -148,10 +182,10 @@ class ClimbingGeneratedAssetTests(unittest.TestCase):
                         self.assertTrue(mesh_paths)
                         self.assertTrue(all(path.is_absolute() and path.is_file() for path in mesh_paths))
 
-        self.assertEqual(before, _tree_snapshot(self.SOURCE_ROOT))
+        self.assertEqual(before, _tree_snapshot(self.source_root))
 
     def test_source_directory_is_rejected_as_generated_output(self):
-        source_dir = self.SOURCE_ROOT / "mocap_climb_seq_0"
+        source_dir = self.source_root / "mocap_climb_seq_0"
         forbidden = source_dir / ".generated-assets-test"
         self.assertFalse(forbidden.exists())
         task_config = TaskConfig(

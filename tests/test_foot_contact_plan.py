@@ -399,7 +399,7 @@ def test_pivot_adds_two_planar_bounds_while_flat_adds_center_and_heading() -> No
     assert flat_constraints[-1].shape == ()
 
 
-def test_phase_anchor_is_reused_instead_of_following_the_previous_frame() -> None:
+def test_phase_anchor_is_reused_instead_of_following_the_previous_frame(monkeypatch) -> None:
     retargeter = _constraint_test_retargeter()
     retargeter._foot_contact_phase_anchors = {}
     retargeter.foot_links = {
@@ -411,7 +411,7 @@ def test_phase_anchor_is_reused_instead_of_following_the_previous_frame() -> Non
         shifted = {name: point + np.asarray((q[0], q[1], 0.0)) for name, point in positions.items()}
         return jacobians, shifted, None
 
-    retargeter._calc_manipulator_jacobians = kinematics
+    monkeypatch.setattr(retargeter, "_calc_manipulator_jacobians", kinematics)
     state = {
         "left": FootContactState(
             mode="pivot",
@@ -422,8 +422,10 @@ def test_phase_anchor_is_reused_instead_of_following_the_previous_frame() -> Non
         "right": FootContactState(mode="swing"),
     }
     retargeter._prepare_planar_foot_targets(np.zeros(3), state)
+    assert retargeter._active_planar_foot_targets is not None
     first_anchor = retargeter._active_planar_foot_targets["left"].anchor_xy.copy()
     retargeter._prepare_planar_foot_targets(np.asarray((0.02, 0.01, 0.0)), state)
+    assert retargeter._active_planar_foot_targets is not None
 
     np.testing.assert_allclose(
         retargeter._active_planar_foot_targets["left"].anchor_xy,

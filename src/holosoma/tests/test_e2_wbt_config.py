@@ -46,6 +46,7 @@ def test_e2_wbt_tracked_bodies_are_consistent() -> None:
     assert bad_tracking.params["body_names_to_track"] == E2_TRACKED_BODY_NAMES
     assert set(bad_tracking.params["bad_motion_body_pos_body_names"]).issubset(E2_TRACKED_BODY_NAMES)
     assert e2_23dof_wbt.robot == e2_23dof
+    assert e2_23dof_wbt.command is not None
     assert e2_23dof_wbt.command.setup_terms["motion_command"].params["motion_config"].motion_file == (
         E2_CRAWL_MOTION_FILE
     )

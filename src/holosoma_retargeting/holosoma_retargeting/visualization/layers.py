@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Callable, Iterable
 
+from viser import GuiCheckboxHandle, GuiTabHandle
+
 from holosoma_retargeting.src.viser_utils import register_keyboard_shortcut
 
 
@@ -172,7 +174,7 @@ class _LayerState:
     visible: bool
     callback: Callable[[bool], None]
     unavailable_reason: str | None
-    checkbox: object | None = None
+    checkbox: GuiCheckboxHandle | None = None
     updating: bool = False
 
 
@@ -295,10 +297,10 @@ class LayerController:
 class VisualizationTabs:
     """Reusable tab handles shared by all public motion viewers."""
 
-    playback: object
-    layers: object
-    motions: object | None
-    style: object
+    playback: GuiTabHandle
+    layers: GuiTabHandle
+    motions: GuiTabHandle | None
+    style: GuiTabHandle
 
 
 def add_visualization_tabs(gui, *, include_motions: bool) -> VisualizationTabs:

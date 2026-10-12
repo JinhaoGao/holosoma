@@ -358,6 +358,13 @@ def _quat_rotate_xyzw(quaternion: np.ndarray, vectors: np.ndarray) -> np.ndarray
     return vectors + 2.0 * (quaternion[..., 3:4] * uv + uuv)
 
 
+def _node_children(node: dict[str, object]) -> list[int]:
+    children = node.get("children", [])
+    if not isinstance(children, list) or not all(isinstance(child, int) for child in children):
+        raise ValueError("GLB node children must be a list of integer indices")
+    return children
+
+
 def _topological_nodes(
     nodes: list[dict[str, object]],
     scenes: object,
@@ -365,7 +372,7 @@ def _topological_nodes(
 ) -> tuple[list[int], np.ndarray]:
     parents = np.full(len(nodes), -1, dtype=np.int32)
     for parent_index, node in enumerate(nodes):
-        for child in node.get("children", []):
+        for child in _node_children(node):
             child_index = int(child)
             if parents[child_index] != -1:
                 raise ValueError(f"GLB node {child_index} has multiple parents")
@@ -386,7 +393,7 @@ def _topological_nodes(
             return
         state[index] = 1
         order.append(index)
-        for child in nodes[index].get("children", []):
+        for child in _node_children(nodes[index]):
             visit(int(child))
         state[index] = 2
 
@@ -457,10 +464,13 @@ def _sample_scene(
     if not isinstance(raw_nodes, list) or not raw_nodes or not all(isinstance(node, dict) for node in raw_nodes):
         raise ValueError("GLB contains no valid nodes")
     nodes = list(raw_nodes)
+    selected_scene = document.document.get("scene", 0)
+    if not isinstance(selected_scene, int):
+        raise ValueError("GLB scene must be an integer index")
     order, parents = _topological_nodes(
         nodes,
         document.document.get("scenes"),
-        int(document.document.get("scene", 0)),
+        selected_scene,
     )
     channels, duration, source_fps = _animation_channels(document)
     frame_count = math.floor(duration * target_fps + 1e-5) + 1
@@ -563,7 +573,7 @@ def _descendants(nodes: list[dict[str, object]], root: int) -> set[int]:
         if index in found:
             continue
         found.add(index)
-        stack.extend(int(child) for child in nodes[index].get("children", []))
+        stack.extend(_node_children(nodes[index]))
     return found
 
 
@@ -618,7 +628,7 @@ def _actor_joint_topology(
     def visit(node_index: int) -> None:
         if node_index in index_to_name:
             ordered_indices.append(node_index)
-        for child in nodes[node_index].get("children", []):
+        for child in _node_children(nodes[node_index]):
             visit(int(child))
 
     visit(root_index)
@@ -801,7 +811,7 @@ def _read_fbx_global_settings(path: Path) -> tuple[int, _FbxGlobalSettings]:
         if len(mapping) < 27 or not mapping[:23].startswith(b"Kaydara FBX Binary"):
             raise ValueError(f"Only binary FBX files are supported: {path}")
         version = int(struct.unpack_from("<I", mapping, 23)[0])
-        values: dict[str, object] = {}
+        values: dict[str, int | float] = {}
         selected = {
             "UpAxis",
             "UpAxisSign",
@@ -821,7 +831,10 @@ def _read_fbx_global_settings(path: Path) -> tuple[int, _FbxGlobalSettings]:
                 continue
             key = str(properties[0])
             if key in selected:
-                values[key] = properties[-1]
+                value = properties[-1]
+                if not isinstance(value, (int, float)):
+                    raise ValueError(f"FBX GlobalSettings property {key!r} must be numeric")
+                values[key] = value
     missing = sorted(selected.difference(values))
     if missing:
         raise ValueError(f"FBX GlobalSettings is missing required properties: {missing}")
