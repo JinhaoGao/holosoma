@@ -124,6 +124,10 @@ class RetargetingCommand:
     overwrite: bool = False
     """Replace an existing result for the exact same motion and configuration."""
 
+    preserve_human_knees: bool = False
+    """M5 reverse-knee experiment: uniform source scale, no knee objectives,
+    and a virtual chest target with orientation tracking on the remaining links."""
+
     robot_profile: Annotated[
         Path | None,
         tyro.conf.arg(aliases=("--robot_profile",)),
@@ -282,6 +286,31 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         if command.shoulder_direction_tracking is None
         else command.shoulder_direction_tracking
     )
+    motion_config = MotionDataConfig(data_format=data_format, robot_type=command.robot)
+    if command.preserve_human_knees:
+        if (command.task, command.robot, dataset) != ("robot_only", "m5fanqu", "fbx_mocap"):
+            raise ValueError("preserve_human_knees requires robot_only/m5fanqu/fbx_mocap")
+        knee_names = {"LeftLeg", "RightLeg"}
+        position_mapping = {
+            name: link for name, link in motion_config.resolved_joints_mapping.items() if name not in knee_names
+        }
+        orientation_mapping = {
+            name: link
+            for name, link in motion_config.resolved_orientation_joints_mapping.items()
+            if name not in knee_names
+        }
+        position_mapping["Spine1"] = "torso_tracking_link"
+        orientation_mapping["Spine1"] = "torso_tracking_link"
+        motion_config = MotionDataConfig(
+            data_format=data_format,
+            robot_type=command.robot,
+            joints_mapping=position_mapping,
+            orientation_joints_mapping=orientation_mapping,
+        )
+        orientation_weights = {name: (20.0 if name in {"Hips", "Spine1"} else 1.0) for name in orientation_mapping}
+        # The direction-only shoulder objective masks full shoulder SO(3)
+        # tracking. This experiment explicitly retains those orientations.
+        shoulder_enabled = False
     return RetargetingConfig(
         task_type=command.task,
         robot=command.robot,
@@ -292,6 +321,8 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         save_dir=command.save_dir,
         output_name=command.output_name,
         overwrite_existing=command.overwrite,
+        preserve_human_knees=command.preserve_human_knees,
+        motion_data_config=motion_config,
         robot_config=RobotConfig(
             robot_type=command.robot,
             robot_dof=robot_dof,
@@ -425,6 +456,9 @@ class RetargetingConfig:
     overwrite_existing: bool = False
     """Regenerate an existing canonical path. Without this explicit opt-in,
     exact artifacts resume and mismatched or invalid artifacts are rejected."""
+
+    preserve_human_knees: bool = False
+    """Bypass body reconstruction for the source-preserving M5 experiment."""
 
     # --- Nested configs ---
     robot_config: RobotConfig = field(default_factory=lambda: RobotConfig(robot_type="g1"))

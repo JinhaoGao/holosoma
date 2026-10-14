@@ -659,4 +659,16 @@
     <child link="r_hand_sphere_link" />
     <origin xyz="0 0 -0.164999997616" rpy="0 0 0" />
   </joint>
+  <link name="torso_tracking_link">
+    <visual>
+      <geometry>
+        <sphere radius="0.003" />
+      </geometry>
+    </visual>
+  </link>
+  <joint name="torso_tracking_joint" type="fixed">
+    <parent link="waist_yaw_link" />
+    <child link="torso_tracking_link" />
+    <origin xyz="0 0 0.302" rpy="0 0 0" />
+  </joint>
 </robot>

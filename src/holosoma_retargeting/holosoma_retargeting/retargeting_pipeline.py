@@ -1495,7 +1495,12 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
 
     toe_names = cfg.motion_data_config.toe_names
     rebuilt_body = None
-    if cfg.robot in M5_BODY_PROPORTIONS_VERSIONS and data_format == "fbx_mocap" and task_type == "robot_only":
+    if (
+        cfg.robot in M5_BODY_PROPORTIONS_VERSIONS
+        and data_format == "fbx_mocap"
+        and task_type == "robot_only"
+        and not cfg.preserve_human_knees
+    ):
         source_contact_plan = None
         if cfg.retargeter.activate_foot_sticking:
             source_contact_plan = build_planar_foot_contact_plan(
@@ -1610,6 +1615,14 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         result_metadata.update(rebuilt_body.metadata)
         # There is no single scale for reconstructed body positions.
         result_metadata.pop("human_position_scale")
+    if cfg.preserve_human_knees:
+        result_metadata.update(
+            experiment_name="uniform_scale_no_knee_torso",
+            knee_position_tracking_enabled=False,
+            knee_orientation_tracking_enabled=False,
+            torso_position_human_joint="Spine1",
+            torso_position_robot_link="torso_tracking_link",
+        )
     if data_format == "fbx_mocap":
         with np.load(job.source_path, allow_pickle=False) as source_data:
             source_scene_fields = (

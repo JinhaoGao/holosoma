@@ -580,6 +580,7 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 "save_dir",
                 "output_name",
                 "overwrite",
+                "preserve_human_knees",
                 "robot_profile",
                 "robot_dof",
                 "robot_height",

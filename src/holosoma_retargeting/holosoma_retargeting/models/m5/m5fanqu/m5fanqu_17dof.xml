@@ -152,6 +152,9 @@
             </body>
           </body>
         </body>
+        <body name="torso_tracking_link" pos="0 0 0.302">
+          <geom name="torso_tracking_link_geom" type="sphere" size=".003" mass="0" contype="0" conaffinity="0" rgba="1 .6 0 1" />
+        </body>
       </body>
     </body>
   </worldbody>
