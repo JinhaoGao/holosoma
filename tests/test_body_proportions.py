@@ -200,3 +200,42 @@ def test_sole_geometry_uses_the_same_robot_reference_frame_as_orientation_target
                 ankle + offset,
                 atol=1e-12,
             )
+
+
+@pytest.mark.parametrize("robot", ["m5fanqu"])
+def test_reverse_knee_preserves_endpoints_lengths_and_world_equivariance(model, motion, robot):
+    reference = rebuild_m5_body(motion, model, robot_type="m5c", orientation_reference_qpos=model.qpos0)
+    reverse = rebuild_m5_body(motion, model, robot_type=robot, orientation_reference_qpos=model.qpos0)
+    assert reverse.metadata["human_position_preprocessing"] == "m5fanqu_reverse_knee_v1"
+    names = motion.canonical_joint_names
+    for side in ("Left", "Right"):
+        hip, knee, ankle = [names.index(side + suffix) for suffix in ("UpLeg", "Leg", "Foot")]
+        np.testing.assert_allclose(reverse.joints[:, [hip, ankle]], reference.joints[:, [hip, ankle]], atol=1e-12)
+        for a, b in ((hip, knee), (knee, ankle)):
+            np.testing.assert_allclose(
+                np.linalg.norm(reverse.joints[:, b] - reverse.joints[:, a], axis=-1),
+                np.linalg.norm(reference.joints[:, b] - reference.joints[:, a], axis=-1),
+                atol=1e-12,
+            )
+        chord = reference.joints[:, ankle] - reference.joints[:, hip]
+        forward = np.cross(np.array([0.0, 1.0, 0.0]), chord)
+        before = np.sum((reference.joints[:, knee] - reference.joints[:, hip]) * forward, axis=-1)
+        after = np.sum((reverse.joints[:, knee] - reverse.joints[:, hip]) * forward, axis=-1)
+        assert np.all(np.abs(before) > 0.01)
+        np.testing.assert_allclose(after, -before, atol=1e-12)
+    np.testing.assert_allclose(reverse.sole_centers, reference.sole_centers, atol=1e-12)
+    rotation = Rotation.from_euler("z", 1.2)
+    translation = np.array([2.0, -3.0, 0.0])
+    quaternions = (
+        (rotation * Rotation.from_quat(motion.orientation_quaternions_wxyz.reshape(-1, 4)[:, [1, 2, 3, 0]]))
+        .as_quat()[:, [3, 0, 1, 2]]
+        .reshape(motion.orientation_quaternions_wxyz.shape)
+    )
+    rotated = replace(
+        motion,
+        joints=motion.joints @ rotation.as_matrix().T + translation,
+        orientation_quaternions_wxyz=quaternions,
+    )
+    result = rebuild_m5_body(rotated, model, robot_type=robot, orientation_reference_qpos=model.qpos0)
+    scale = reverse.metadata["root_translation_scale"]
+    np.testing.assert_allclose(result.joints, reverse.joints @ rotation.as_matrix().T + translation * scale, atol=1e-12)

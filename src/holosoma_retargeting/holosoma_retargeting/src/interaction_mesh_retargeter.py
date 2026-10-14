@@ -31,6 +31,10 @@ from holosoma_retargeting.config_types.retargeter import (
 )
 from holosoma_retargeting.data_utils.hand_skeleton import build_hand_visualization_spec
 from holosoma_retargeting.foot_contact import FootContactPlan, FootContactState
+from holosoma_retargeting.models.m5.m5fanqu.kinematic_seed import (
+    HUMAN_JOINT_NAMES as REVERSE_KNEE_HUMAN_JOINT_NAMES,
+)
+from holosoma_retargeting.models.m5.m5fanqu.kinematic_seed import seed_reverse_knee_pose
 from holosoma_retargeting.shoulder_direction import (
     ShoulderSideSpec,
     direction_error_angle,
@@ -465,7 +469,7 @@ class InteractionMeshRetargeter:
 
         is_e1 = _joint_exists("l_arm_elbow_pitch_joint")
         is_e2 = _joint_exists("l_arm_elbow_joint")
-        is_m5 = getattr(self.task_constants, "ROBOT_TYPE", "") in {"m4g", "m5c", "m5d", "m5e"}
+        is_m5 = getattr(self.task_constants, "ROBOT_TYPE", "") in {"m4g", "m5c", "m5d", "m5e", "m5fanqu"}
         is_g1 = _joint_exists("left_elbow_joint") and _joint_exists(
             "left_wrist_roll_joint",
         )
@@ -2890,6 +2894,10 @@ class InteractionMeshRetargeter:
 
         print(f"\nStarting motion retargeting for {num_frames} frames...")
 
+        reverse_knee_indices = None
+        if result_metadata and result_metadata.get("human_position_preprocessing") == "m5fanqu_reverse_knee_v1":
+            reverse_knee_indices = [self.demo_joints.index(name) for name in REVERSE_KNEE_HUMAN_JOINT_NAMES]
+
         with tqdm(range(num_frames)) as pbar:
             for i in pbar:
                 # Get object poses and transform points
@@ -2972,6 +2980,24 @@ class InteractionMeshRetargeter:
                     w_nominal_tracking = self.w_nominal_tracking_init * np.exp(-i / self.nominal_tracking_tau)
 
                 root_stability_bootstrap = self.root_stability_enabled and i == 0
+                if reverse_knee_indices is not None:
+                    q = seed_reverse_knee_pose(
+                        self.robot_model,
+                        q,
+                        human_joint_motions[i, reverse_knee_indices],
+                        root_position=(
+                            root_stability_target_positions[i]
+                            if self.root_stability_enabled and not root_stability_bootstrap
+                            else None
+                        ),
+                        root_matrix=(
+                            root_stability_target_matrices[i]
+                            if self.root_stability_enabled
+                            and not root_stability_bootstrap
+                            and root_stability_target_matrices.shape[1:] == (3, 3)
+                            else None
+                        ),
+                    )
                 q, cost = self.iterate(
                     q_locked=q_locked_list[i],
                     q_n=q,
@@ -3606,6 +3632,8 @@ class InteractionMeshRetargeter:
                 }
             )
         if result_metadata:
+            if reverse_knee_indices is not None:
+                save_payload["leg_initialization"] = np.asarray("bounded_reverse_knee_ik_v1")
             conflicts = sorted(set(result_metadata).intersection(save_payload))
             if conflicts:
                 raise ValueError(f"Result metadata cannot replace solver fields: {conflicts}")

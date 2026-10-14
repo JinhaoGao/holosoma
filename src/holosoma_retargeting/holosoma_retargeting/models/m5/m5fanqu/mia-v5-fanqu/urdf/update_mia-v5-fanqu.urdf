@@ -1,0 +1,1033 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="mia-v5-fanqu">
+  <link
+    name="base_link">
+    <inertial>
+              <origin 
+                xyz="0.0 0.0 0.02721" 
+                rpy="0 0 0" />
+              <mass 
+                value="8.076" />
+              <inertia
+                ixx="0.09857576635"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.0158295577"
+                iyz="0.0"
+                izz="0.09808891843999999" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="l_leg_hip_yaw_link">
+    <inertial>
+              <origin 
+                xyz="0.09487999999999999 0.0 -0.006" 
+                rpy="0 0 0" />
+              <mass 
+                value="2.76" />
+              <inertia
+                ixx="0.003020625"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.00248001304"
+                iyz="0.0"
+                izz="0.00248001304" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_leg_hip_yaw_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_leg_hip_yaw_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="l_leg_hip_yaw_joint"
+    type="revolute">
+    <origin
+      xyz="0 0.131 0.006"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="l_leg_hip_yaw_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.45356"
+      upper="0.52333"
+      effort="330"
+      velocity="19.154" />
+  </joint>
+  <link
+    name="l_leg_hip_roll_link">
+    <inertial>
+              <origin 
+                xyz="-0.075 -0.006 -0.1085" 
+                rpy="0 0 0" />
+              <mass 
+                value="2.75" />
+              <inertia
+                ixx="0.003581416"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.0052855"
+                iyz="0.0"
+                izz="0.003581416" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_leg_hip_roll_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_leg_hip_roll_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="l_leg_hip_roll_joint"
+    type="revolute">
+    <origin
+      xyz="0.075 0 -0.006"
+      rpy="0 0 0" />
+    <parent
+      link="l_leg_hip_yaw_link" />
+    <child
+      link="l_leg_hip_roll_link" />
+    <axis
+      xyz="1 0 0" />
+    <limit
+      lower="-0.26167"
+      upper="0.34889"
+      effort="330"
+      velocity="19.154" />
+  </joint>
+  <link
+    name="l_leg_hip_pitch_link">
+    <inertial>
+              <origin 
+                xyz="-0.06179 0.05205 -0.1584" 
+                rpy="0 0 0" />
+              <mass 
+                value="7.732" />
+              <inertia
+                ixx="0.23302097018"
+                ixy="-0.01053448731"
+                ixz="-0.08513872883"
+                iyy="0.26027890823"
+                iyz="-0.02700791964"
+                izz="0.04574700682" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_leg_hip_pitch_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_leg_hip_pitch_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="l_leg_hip_pitch_joint"
+    type="revolute">
+    <origin
+      xyz="-0.075 0.026 -0.1085"
+      rpy="0 0 0" />
+    <parent
+      link="l_leg_hip_roll_link" />
+    <child
+      link="l_leg_hip_pitch_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-2.09"
+      upper="1.91"
+      effort="396"
+      velocity="24.073" />
+  </joint>
+  <link
+    name="l_leg_knee_link">
+    <inertial>
+              <origin 
+                xyz="0.06337 0.0 -0.18336000000000002" 
+                rpy="0 0 0" />
+              <mass 
+                value="4.612" />
+              <inertia
+                ixx="0.12110094389"
+                ixy="0.0"
+                ixz="0.039634958320000004"
+                iyy="0.13502121028"
+                iyz="0.0"
+                izz="0.01644670384" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_leg_knee_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_leg_knee_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="l_leg_knee_joint"
+    type="revolute">
+    <origin
+      xyz="-0.18469 0.03 -0.50743"
+      rpy="0 0 0" />
+    <parent
+      link="l_leg_hip_pitch_link" />
+    <child
+      link="l_leg_knee_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-1.81"
+      upper="0.17"
+      effort="396"
+      velocity="24.073" />
+  </joint>
+  <link
+    name="l_leg_ankle_pitch_link">
+    <inertial>
+              <origin 
+                xyz="0.02067 0.0 -0.042" 
+                rpy="0 0 0" />
+              <mass 
+                value="0.73" />
+              <inertia
+                ixx="0.000113632"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.004270196"
+                iyz="0.0"
+                izz=" 0.004356453" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_leg_ankle_pitch_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_leg_ankle_pitch_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="l_leg_ankle_pitch_joint"
+    type="revolute">
+    <origin
+      xyz="0.18521 0 -0.56333"
+      rpy="0 0 0" />
+    <parent
+      link="l_leg_knee_link" />
+    <child
+      link="l_leg_ankle_pitch_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-0.95944"
+      upper="0.61056"
+      effort="330"
+      velocity="19.154" />
+  </joint>
+  <link
+    name="r_leg_hip_yaw_link">
+    <inertial>
+              <origin 
+                xyz="0.09487999999999999 0.0 -0.006" 
+                rpy="0 0 0" />
+              <mass 
+                value="2.76" />
+              <inertia
+                ixx="0.003020625"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.00248001304"
+                iyz="0.0"
+                izz="0.00248001304" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_leg_hip_yaw_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_leg_hip_yaw_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="r_leg_hip_yaw_joint"
+    type="revolute">
+    <origin
+      xyz="0 -0.131 0.006"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="r_leg_hip_yaw_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-0.52333"
+      upper="0.45356"
+      effort="330"
+      velocity="19.154" />
+  </joint>
+  <link
+    name="r_leg_hip_roll_link">
+    <inertial>
+              <origin 
+                xyz="-0.075 0.006 -0.1085" 
+                rpy="0 0 0" />
+              <mass 
+                value="2.75" />
+              <inertia
+                ixx="0.003581416"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.0052855"
+                iyz="0.0"
+                izz="0.003581416" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_leg_hip_roll_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_leg_hip_roll_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="r_leg_hip_roll_joint"
+    type="revolute">
+    <origin
+      xyz="0.075 0 -0.006"
+      rpy="0 0 0" />
+    <parent
+      link="r_leg_hip_yaw_link" />
+    <child
+      link="r_leg_hip_roll_link" />
+    <axis
+      xyz="1 0 0" />
+    <limit
+      lower="-0.34889"
+      upper="0.26167"
+      effort="330"
+      velocity="19.154" />
+  </joint>
+  <link
+    name="r_leg_hip_pitch_link">
+    <inertial>
+              <origin 
+                xyz="-0.06179 -0.05205 -0.1584" 
+                rpy="0 0 0" />
+              <mass 
+                value="7.732" />
+              <inertia
+                ixx="0.23302097018"
+                ixy="0.01053448731"
+                ixz="-0.08513872883"
+                iyy="0.26027890823"
+                iyz="0.02700791964"
+                izz="0.04574700682" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_leg_hip_pitch_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_leg_hip_pitch_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="r_leg_hip_pitch_joint"
+    type="revolute">
+    <origin
+      xyz="-0.075 -0.026 -0.1085"
+      rpy="0 0 0" />
+    <parent
+      link="r_leg_hip_roll_link" />
+    <child
+      link="r_leg_hip_pitch_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-2.09"
+      upper="1.91"
+      effort="396"
+      velocity="24.073" />
+  </joint>
+  <link
+    name="r_leg_knee_link">
+    <inertial>
+              <origin 
+                xyz="0.06337 0.0 -0.18336000000000002" 
+                rpy="0 0 0" />
+              <mass 
+                value="4.612" />
+              <inertia
+                ixx="0.12110094389"
+                ixy="0.0"
+                ixz="0.039634958320000004"
+                iyy="0.13502121028"
+                iyz="0.0"
+                izz="0.01644670384" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_leg_knee_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_leg_knee_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="r_leg_knee_joint"
+    type="revolute">
+    <origin
+      xyz="-0.18469 -0.03 -0.50743"
+      rpy="0 0 0" />
+    <parent
+      link="r_leg_hip_pitch_link" />
+    <child
+      link="r_leg_knee_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-1.81"
+      upper="0.17"
+      effort="396"
+      velocity="24.073" />
+  </joint>
+  <link
+    name="r_leg_ankle_pitch_link">
+    <inertial>
+              <origin 
+                xyz="0.02067 0.0 -0.042" 
+                rpy="0 0 0" />
+              <mass 
+                value="0.73" />
+              <inertia
+                ixx="0.000113632"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.004270196"
+                iyz="0.0"
+                izz=" 0.004356453" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_leg_ankle_pitch_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_leg_ankle_pitch_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="r_leg_ankle_pitch_joint"
+    type="revolute">
+    <origin
+      xyz="0.18521 0 -0.56333"
+      rpy="0 0 0" />
+    <parent
+      link="r_leg_knee_link" />
+    <child
+      link="r_leg_ankle_pitch_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-0.95944"
+      upper="0.61056"
+      effort="330"
+      velocity="19.154" />
+  </joint>
+  <link
+    name="waist_yaw_link">
+    <inertial>
+              <origin 
+                xyz="-8.999999999999999e-05 0.0 0.20255" 
+                rpy="0 0 0" />
+              <mass 
+                value="18.06" />
+              <inertia
+                ixx="0.4731857148"
+                ixy="1.1e-10"
+                ixz="-0.00023539904999999998"
+                iyy="0.32319518935"
+                iyz="9e-11"
+                izz="0.27340177679" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/waist_yaw_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/waist_yaw_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="waist_yaw_joint"
+    type="revolute">
+    <origin
+      xyz="0 0 0.073"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="waist_yaw_link" />
+    <axis
+      xyz="0 0 1" />
+    <limit
+      lower="-1.57"
+      upper="1.57"
+      effort="330"
+      velocity="19.154" />
+  </joint>
+  <link
+    name="l_arm_shoulder_pitch_link">
+    <inertial>
+              <origin 
+                xyz="0.0 0.055 0.0" 
+                rpy="0 0 0" />
+              <mass 
+                value="0.63" />
+              <inertia
+                ixx="0.00024696"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.00037706813"
+                iyz="0.0"
+                izz="0.00037706813" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_arm_shoulder_pitch_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_arm_shoulder_pitch_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="l_arm_shoulder_pitch_joint"
+    type="revolute">
+    <origin
+      xyz="0 0.165 0.302"
+      rpy="0 0 0" />
+    <parent
+      link="waist_yaw_link" />
+    <child
+      link="l_arm_shoulder_pitch_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-1.7444"
+      upper="1.7444"
+      effort="70"
+      velocity="12.246" />
+  </joint>
+  <link
+    name="l_arm_shoulder_roll_link">
+    <inertial>
+              <origin 
+                xyz="0.0 0.0 -0.18019" 
+                rpy="0 0 0" />
+              <mass 
+                value="0.93" />
+              <inertia
+                ixx="0.00331101329"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.00318090516"
+                iyz="0.0"
+                izz="0.00039206813" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_arm_shoulder_roll_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_arm_shoulder_roll_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="l_arm_shoulder_roll_joint"
+    type="revolute">
+    <origin
+      xyz="0 0.055 0"
+      rpy="0 0 0" />
+    <parent
+      link="l_arm_shoulder_pitch_link" />
+    <child
+      link="l_arm_shoulder_roll_link" />
+    <axis
+      xyz="1 0 0" />
+    <limit
+      lower="0"
+      upper="1.57"
+      effort="70"
+      velocity="12.246" />
+  </joint>
+  <link
+    name="l_arm_elbow_link">
+    <inertial>
+              <origin 
+                xyz="0.0 0.0 -0.125" 
+                rpy="0 0 0" />
+              <mass 
+                value="0.3" />
+              <inertia
+                ixx="0.00043"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.00043"
+                iyz="0.0"
+                izz="0.000015" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_arm_elbow_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/l_arm_elbow_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="l_arm_elbow_joint"
+    type="revolute">
+    <origin
+      xyz="0 0 -0.216"
+      rpy="0 0 0" />
+    <parent
+      link="l_arm_shoulder_roll_link" />
+    <child
+      link="l_arm_elbow_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-2.1806"
+      upper="0.087222"
+      effort="70"
+      velocity="12.246" />
+  </joint>
+  <link
+    name="r_arm_shoulder_pitch_link">
+    <inertial>
+              <origin 
+                xyz="0.0 -0.05425 0.0" 
+                rpy="0 0 0" />
+              <mass 
+                value="0.63" />
+              <inertia
+                ixx="0.00024696"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.00037706813"
+                iyz="0.0"
+                izz="0.00037706813" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_arm_shoulder_pitch_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_arm_shoulder_pitch_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="r_arm_shoulder_pitch_joint"
+    type="revolute">
+    <origin
+      xyz="0 -0.165 0.302"
+      rpy="0 0 0" />
+    <parent
+      link="waist_yaw_link" />
+    <child
+      link="r_arm_shoulder_pitch_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-1.7444"
+      upper="1.7444"
+      effort="70"
+      velocity="12.246" />
+  </joint>
+  <link
+    name="r_arm_shoulder_roll_link">
+    <inertial>
+              <origin 
+                xyz="0.0 0.0 -0.18019" 
+                rpy="0 0 0" />
+              <mass 
+                value="0.93" />
+              <inertia
+                ixx="0.00331101329"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.00318090516"
+                iyz="0.0"
+                izz="0.00039206813" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_arm_shoulder_roll_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_arm_shoulder_roll_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="r_arm_shoulder_roll_joint"
+    type="revolute">
+    <origin
+      xyz="0 -0.05425 0"
+      rpy="0 0 0" />
+    <parent
+      link="r_arm_shoulder_pitch_link" />
+    <child
+      link="r_arm_shoulder_roll_link" />
+    <axis
+      xyz="1 0 0" />
+    <limit
+      lower="-1.57"
+      upper="0"
+      effort="70"
+      velocity="12.246" />
+  </joint>
+  <link
+    name="r_arm_elbow_link">
+    <inertial>
+              <origin 
+                xyz="0.0 0.0 -0.125" 
+                rpy="0 0 0" />
+              <mass 
+                value="0.3" />
+              <inertia
+                ixx="0.00043"
+                ixy="0.0"
+                ixz="0.0"
+                iyy="0.00043"
+                iyz="0.0"
+                izz="0.000015" />
+            </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_arm_elbow_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.792156862745098 0.819607843137255 0.933333333333333 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://mia-v5-fanqu/meshes/r_arm_elbow_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="r_arm_elbow_joint"
+    type="revolute">
+    <origin
+      xyz="0 0 -0.216"
+      rpy="0 0 0" />
+    <parent
+      link="r_arm_shoulder_roll_link" />
+    <child
+      link="r_arm_elbow_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-2.1806"
+      upper="0.087222"
+      effort="70"
+      velocity="12.246" />
+  </joint>
+</robot>

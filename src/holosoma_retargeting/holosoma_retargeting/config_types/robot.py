@@ -28,6 +28,7 @@ _ROBOT_DEFAULTS: dict[str, RobotDefaults] = {
     "m5c": {"robot_dof": 17, "robot_height": 1.8, "object_name": "ground"},
     "m5d": {"robot_dof": 17, "robot_height": 1.8, "object_name": "ground"},
     "m5e": {"robot_dof": 17, "robot_height": 1.8, "object_name": "ground"},
+    "m5fanqu": {"robot_dof": 17, "robot_height": 1.8, "object_name": "ground"},
 }
 
 _ROBOT_URDF_FILES = {
@@ -37,6 +38,7 @@ _ROBOT_URDF_FILES = {
     "m5c": "models/m5/m5c/m5c_17dof.urdf",
     "m5d": "models/m5/m5d/m5d_17dof.urdf",
     "m5e": "models/m5/m5e/m5e_17dof.urdf",
+    "m5fanqu": "models/m5/m5fanqu/m5fanqu_17dof.urdf",
 }
 
 _EXPLICIT_ROBOT_NAMES = {"e1_23dof", "e1_24dof"}
@@ -46,7 +48,7 @@ def robot_family(robot_type: str) -> str:
     """Return the shared mapping family for a concrete robot variant."""
     if robot_type in {"e1", "e1_23dof", "e1_24dof"}:
         return "e1"
-    if robot_type in {"m4g", "m5c", "m5d", "m5e"}:
+    if robot_type in {"m4g", "m5c", "m5d", "m5e", "m5fanqu"}:
         return "m5c"
     return robot_type
 

@@ -29,9 +29,9 @@ repos:
   hooks:
   - id: end-of-file-fixer
     # Preserve supplied mechanical packages and mesh files without text rewrites.
-    exclude: (?i)\.(dae|obj|mtl|stl)$|^src/holosoma_retargeting/holosoma_retargeting/models/m5/m5[cde]/__00-mia-v5-0[CDE]/|^src/holosoma_retargeting/holosoma_retargeting/models/m4g/__00-mia-v4_2-G/
+    exclude: (?i)\.(dae|obj|mtl|stl)$|^src/holosoma_retargeting/holosoma_retargeting/models/m5/m5[cde]/__00-mia-v5-0[CDE]/|^src/holosoma_retargeting/holosoma_retargeting/models/m4g/__00-mia-v4_2-G/|^src/holosoma_retargeting/holosoma_retargeting/models/m5/m5fanqu/mia-v5-fanqu/
   - id: trailing-whitespace
-    exclude: (?i)\.(dae|obj|mtl|stl)$|^src/holosoma_retargeting/holosoma_retargeting/models/m5/m5[cde]/__00-mia-v5-0[CDE]/|^src/holosoma_retargeting/holosoma_retargeting/models/m4g/__00-mia-v4_2-G/
+    exclude: (?i)\.(dae|obj|mtl|stl)$|^src/holosoma_retargeting/holosoma_retargeting/models/m5/m5[cde]/__00-mia-v5-0[CDE]/|^src/holosoma_retargeting/holosoma_retargeting/models/m4g/__00-mia-v4_2-G/|^src/holosoma_retargeting/holosoma_retargeting/models/m5/m5fanqu/mia-v5-fanqu/
   - id: mixed-line-ending
     args: [--fix=lf] # Ensures consistent line endings (LF) and removes CR
-    exclude: (?i)\.(dae|obj|mtl|stl)$|^src/holosoma_retargeting/holosoma_retargeting/models/m5/m5[cde]/__00-mia-v5-0[CDE]/|^src/holosoma_retargeting/holosoma_retargeting/models/m4g/__00-mia-v4_2-G/
+    exclude: (?i)\.(dae|obj|mtl|stl)$|^src/holosoma_retargeting/holosoma_retargeting/models/m5/m5[cde]/__00-mia-v5-0[CDE]/|^src/holosoma_retargeting/holosoma_retargeting/models/m4g/__00-mia-v4_2-G/|^src/holosoma_retargeting/holosoma_retargeting/models/m5/m5fanqu/mia-v5-fanqu/

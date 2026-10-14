@@ -1439,6 +1439,11 @@ class MotionDataConfig:
 
         if self.orientation_t_pose_robot_joint_positions is not None:
             return self.orientation_t_pose_robot_joint_positions
+        if self.robot_type == "m5fanqu":
+            return {
+                "l_arm_shoulder_roll_joint": 1.57,
+                "r_arm_shoulder_roll_joint": -1.57,
+            }
         if self.robot_type == "m4g":
             # Mechanical elbow offsets differ from M5. The right shoulder's
             # horizontal reference is just outside its supplied limit.

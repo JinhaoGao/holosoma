@@ -7,3 +7,5 @@ src/holosoma_retargeting/holosoma_retargeting/models/m5/m5[cde]/__00-mia-v5-0[CD
 
 # Preserve the supplied MIA v4.2-G mechanical package byte-for-byte.
 src/holosoma_retargeting/holosoma_retargeting/models/m4g/__00-mia-v4_2-G/** -text -whitespace
+
+src/holosoma_retargeting/holosoma_retargeting/models/m5/m5fanqu/mia-v5-fanqu/** -text -whitespace
