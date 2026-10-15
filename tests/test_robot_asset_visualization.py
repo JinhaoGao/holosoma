@@ -1,9 +1,10 @@
-# ruff: noqa: CPY001, E402
+# ruff: noqa: CPY001, E402, S314
 
 from __future__ import annotations
 
 import json
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import replace
 from pathlib import Path
 
@@ -28,10 +29,36 @@ from holosoma_retargeting.visualization.result_loader import (
     variant_result_metadata,
 )
 
-NOETIX_URDF = "models/noetix_e2/urdf/E2_V1.0_0805_02.urdf"
-NOETIX_XML = "models/noetix_e2/mjcf/e2.xml"
 DEFAULT_URDF = "models/e2/e2_23dof.urdf"
 DEFAULT_XML = "models/e2/e2_23dof.xml"
+
+
+@pytest.fixture(scope="module")
+def alternate_e2_assets(tmp_path_factory: pytest.TempPathFactory) -> tuple[str, str]:
+    """Reproduce same-name model variants using only versioned robot assets."""
+    directory = tmp_path_factory.mktemp("alternate_e2")
+    urdf_path = directory / "robot.urdf"
+    xml_path = directory / "solver.xml"
+    source_urdf = _resolve_asset_path(DEFAULT_URDF)
+    source_xml = _resolve_asset_path(DEFAULT_XML)
+    urdf = ET.parse(source_urdf)
+    xml = ET.parse(source_xml)
+    for mesh in urdf.findall(".//mesh"):
+        mesh.set("filename", str(source_urdf.parent / mesh.attrib["filename"]))
+    compiler = xml.find("compiler")
+    assert compiler is not None
+    compiler.set("meshdir", str(source_xml.parent))
+    for side in ("l", "r"):
+        origin = urdf.find(f"joint[@name='{side}_arm_elbow_joint']/origin")
+        body = xml.find(f".//body[@name='{side}_arm_elbow_link']")
+        assert origin is not None and body is not None
+        origin.set("rpy", "0 0.35 0")
+        body.set("euler", "0 0.35 0")
+        origin.set("xyz", "0.04 0 -0.2")
+        body.set("pos", "0.04 0 -0.2")
+    urdf.write(urdf_path)
+    xml.write(xml_path)
+    return str(urdf_path), str(xml_path)
 
 
 def _write_result(path: Path, config_json: str | None) -> Path:
@@ -46,12 +73,17 @@ def _write_result(path: Path, config_json: str | None) -> Path:
     return path
 
 
-def _snapshot(urdf: str | None = NOETIX_URDF, xml: str | None = NOETIX_XML) -> str:
+def _snapshot(urdf: str | None, xml: str | None) -> str:
     return json.dumps({"config": {"robot_config": {"robot_urdf_file": urdf, "robot_mujoco_xml_file": xml}}})
 
 
-@pytest.mark.parametrize(("urdf", "xml"), [(NOETIX_URDF, NOETIX_XML), (DEFAULT_URDF, DEFAULT_XML)])
-def test_saved_e2_model_aligns_mesh_links_with_solver_skeleton(tmp_path: Path, urdf: str, xml: str) -> None:
+@pytest.mark.parametrize("use_variant", [True, False])
+def test_saved_e2_model_aligns_mesh_links_with_solver_skeleton(
+    tmp_path: Path,
+    alternate_e2_assets: tuple[str, str],
+    use_variant: bool,
+) -> None:
+    urdf, xml = alternate_e2_assets if use_variant else (DEFAULT_URDF, DEFAULT_XML)
     model = mujoco.MjModel.from_xml_path(str(_resolve_asset_path(xml)))
     data = mujoco.MjData(model)
     joint_names = tuple(model.joint(i).name for i in range(1, model.njnt))
@@ -120,8 +152,11 @@ def test_results_without_saved_assets_keep_robot_type_defaults(tmp_path: Path, s
     assert Path(config.robot_mujoco_xml) == _resolve_asset_path(DEFAULT_XML)
 
 
-def test_explicit_urdf_override_does_not_reuse_saved_xml(tmp_path: Path) -> None:
-    path = _write_result(tmp_path / "e2.npz", _snapshot())
+def test_explicit_urdf_override_does_not_reuse_saved_xml(
+    tmp_path: Path,
+    alternate_e2_assets: tuple[str, str],
+) -> None:
+    path = _write_result(tmp_path / "e2.npz", _snapshot(*alternate_e2_assets))
     result = load_variant_result("identity", path)
     config = _resolve_runtime_config(
         ViserConfig(qpos_npz=str(path), robot_urdf=DEFAULT_URDF),
@@ -133,24 +168,31 @@ def test_explicit_urdf_override_does_not_reuse_saved_xml(tmp_path: Path) -> None
     assert _resolve_robot_assets(comparison_config, result) == expected
 
 
-def test_explicit_xml_override_wins_and_same_urdf_keeps_saved_xml(tmp_path: Path) -> None:
-    path = _write_result(tmp_path / "e2.npz", _snapshot())
+def test_explicit_xml_override_wins_and_same_urdf_keeps_saved_xml(
+    tmp_path: Path,
+    alternate_e2_assets: tuple[str, str],
+) -> None:
+    urdf, xml = alternate_e2_assets
+    path = _write_result(tmp_path / "e2.npz", _snapshot(urdf, xml))
     _, _, _, metadata, _ = load_npz(str(path))
-    config = _resolve_runtime_config(ViserConfig(robot_urdf=NOETIX_URDF), metadata)
-    assert Path(config.robot_mujoco_xml) == _resolve_asset_path(NOETIX_XML)
+    config = _resolve_runtime_config(ViserConfig(robot_urdf=urdf), metadata)
+    assert Path(config.robot_mujoco_xml) == _resolve_asset_path(xml)
     config = _resolve_runtime_config(ViserConfig(robot_mujoco_xml=DEFAULT_XML), metadata)
     assert Path(config.robot_mujoco_xml) == _resolve_asset_path(DEFAULT_XML)
 
 
 def test_missing_saved_asset_is_reported_instead_of_loading_another_model(tmp_path: Path) -> None:
-    path = _write_result(tmp_path / "e2.npz", _snapshot(str(tmp_path / "missing.urdf")))
+    path = _write_result(tmp_path / "e2.npz", _snapshot(str(tmp_path / "missing.urdf"), None))
     _, _, _, metadata, _ = load_npz(str(path))
     with pytest.raises(FileNotFoundError, match=r"missing\.urdf"):
         _resolve_runtime_config(ViserConfig(), metadata)
 
 
-def test_comparison_rejects_different_e2_models_before_starting_viewer(tmp_path: Path) -> None:
-    path = _write_result(tmp_path / "e2.npz", _snapshot())
+def test_comparison_rejects_different_e2_models_before_starting_viewer(
+    tmp_path: Path,
+    alternate_e2_assets: tuple[str, str],
+) -> None:
+    path = _write_result(tmp_path / "e2.npz", _snapshot(*alternate_e2_assets))
     result = load_variant_result("identity", path)
     other = replace(result, robot_urdf=DEFAULT_URDF, robot_mujoco_xml=DEFAULT_XML)
     with pytest.raises(ValueError, match="different robot assets"):
