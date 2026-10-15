@@ -899,13 +899,16 @@ def create_new_scene_xml_file(
 
 def extract_foot_sticking_sequence_velocity(smpl_joints, demo_joints, foot_names, velocity_threshold=0.01):
     """
-    Extract contact sequence from SMPL joint data based on x,y velocity of toe joints.
+    Extract contact from consecutive-frame XY toe displacement, as in main.
+
+    The historical velocity_threshold name denotes meters per frame, not m/s.
+    No FPS conversion, height gate, phase filtering, or hysteresis is applied.
 
     Args:
         smpl_joints (np.ndarray): SMPL joint positions of shape (T, N, 3).
         demo_joints (list): List of joint names.
         foot_names (list): List of foot joint names [left_foot, right_foot].
-        velocity_threshold (float): Threshold for xy velocity to determine contact.
+        velocity_threshold (float): Maximum XY displacement per frame for contact.
 
     Returns:
         list: List of contact dictionaries for each frame.

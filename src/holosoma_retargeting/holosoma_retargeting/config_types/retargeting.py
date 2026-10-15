@@ -147,7 +147,7 @@ class RetargetingCommand:
     """Override the robot-profile MuJoCo XML path."""
 
     foot_sticking: Literal[True, False] | None = None
-    """Override contact-aware planar foot constraints."""
+    """Override previous-frame XY foot constraints."""
 
     dynamic_ground_window: bool | None = None
     """Override whether the ground window follows the robot root."""
@@ -388,7 +388,6 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
                 if command.foot_sticking_tolerance is None
                 else command.foot_sticking_tolerance
             ),
-            planar_foot_contact=profile.planar_foot_contact,
             step_size=(defaults.step_size if command.step_size is None else command.step_size),
             w_nominal_tracking_init=(
                 defaults.w_nominal_tracking_init

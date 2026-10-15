@@ -11,7 +11,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from holosoma_retargeting.data_utils.motion_data import HumanMotion
-from holosoma_retargeting.foot_contact import FootContactPlan, source_floor_clearance
+from holosoma_retargeting.source_foot_geometry import source_floor_clearance
 
 M5C_BODY_PROPORTIONS_VERSION = "m5c_bone_lengths_v2"
 M5_BODY_PROPORTIONS_VERSIONS = {robot: f"{robot}_bone_lengths_v2" for robot in ("m4g", "m5c", "m5d", "m5e")}
@@ -40,7 +40,7 @@ def rebuild_m5_body(
     model: mujoco.MjModel,
     *,
     orientation_reference_qpos: np.ndarray,
-    source_contact_plan: FootContactPlan | None = None,
+    source_sticking_states: np.ndarray | None = None,
     ground_clearance: float = 0.04,
     robot_type: str = "m5c",
 ) -> RebuiltBody:
@@ -186,8 +186,8 @@ def rebuild_m5_body(
         ground_clearance=ground_clearance,
     )
     support_frames = (
-        np.flatnonzero(np.any(source_contact_plan.modes != "swing", axis=1))
-        if source_contact_plan is not None
+        np.flatnonzero(np.any(source_sticking_states, axis=1))
+        if source_sticking_states is not None
         else np.array([], dtype=int)
     )
     # Remove floor-estimation drift at source support frames. Interpolate the
@@ -235,10 +235,10 @@ def rebuild_m5_body(
             "body_proportion_target_sole_points": soles,
             "body_proportion_source_clearance_m": raw_clearance,
             "body_proportion_target_clearance_m": flight_clearance,
-            "body_proportion_contact_phase_height_enabled": source_contact_plan is not None,
+            "body_proportion_contact_phase_height_enabled": source_sticking_states is not None,
             "body_proportion_height_policy": (
                 "heel_toe_clearance_relative_to_source_support"
-                if source_contact_plan is not None
+                if source_sticking_states is not None
                 else "heel_toe_clearance_without_contact_phases"
             ),
         },

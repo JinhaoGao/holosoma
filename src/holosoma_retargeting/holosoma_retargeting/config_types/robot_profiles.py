@@ -11,7 +11,6 @@ from pathlib import Path
 
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.config_types.retargeter import (
-    PlanarFootContactConfig,
     ShoulderDirectionConfig,
 )
 
@@ -78,7 +77,6 @@ class RobotProfile:
     robot_urdf_file: str
     robot_mujoco_xml_file: str
     retargeting: RetargetingProfileDefaults
-    planar_foot_contact: PlanarFootContactConfig
     shoulder_direction: ShoulderDirectionConfig
     orientation_enabled: bool
     orientation_preview: bool
@@ -197,21 +195,6 @@ def _load_retargeting_defaults(
                 positive=name in positive_fields,
             )
     return RetargetingProfileDefaults(**values)  # type: ignore[arg-type]
-
-
-def _load_planar_foot_contact(value: object) -> PlanarFootContactConfig:
-    table = _object(value, label="planar_foot_contact")
-    expected = {field.name for field in fields(PlanarFootContactConfig)}
-    _exact_fields(table, expected, label="planar_foot_contact")
-    values = {
-        name: _finite_number(
-            table[name],
-            label=f"planar_foot_contact/{name}",
-            non_negative=True,
-        )
-        for name in expected
-    }
-    return PlanarFootContactConfig(**values)
 
 
 def _load_shoulder_direction(value: object) -> ShoulderDirectionConfig:
@@ -416,7 +399,6 @@ def load_robot_profile(
             "robot_urdf_file",
             "robot_mujoco_xml_file",
             "retargeting",
-            "planar_foot_contact",
             "shoulder_direction",
             "orientation",
             "natural_pose",
@@ -473,9 +455,6 @@ def load_robot_profile(
         robot_urdf_file=robot_urdf_file,
         robot_mujoco_xml_file=robot_mujoco_xml_file,
         retargeting=_load_retargeting_defaults(profile["retargeting"]),
-        planar_foot_contact=_load_planar_foot_contact(
-            profile["planar_foot_contact"],
-        ),
         shoulder_direction=_load_shoulder_direction(
             profile["shoulder_direction"],
         ),

@@ -9,12 +9,10 @@ from pathlib import Path
 import mujoco
 import numpy as np
 import pytest
-from scipy.spatial.transform import Rotation
-
 from holosoma_retargeting.body_proportions import rebuild_m5_body
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.data_utils.motion_data import HumanMotion
-from holosoma_retargeting.foot_contact import FootContactPlan, FootContactState
+from scipy.spatial.transform import Rotation
 
 PACKAGE = Path(__file__).resolve().parents[1] / "src/holosoma_retargeting/holosoma_retargeting"
 
@@ -135,13 +133,13 @@ def test_raised_toes_do_not_raise_a_planted_heel(model, motion, robot):
     joints = np.tile(motion.joints[:1], (5, 1, 1))
     for side in ("Left", "Right"):
         joints[:, motion.canonical_joint_names.index(side + "ToeBase"), 2] += [0, 0.02, 0.10, 0.02, 0]
-    plan = FootContactPlan(tuple({side: FootContactState(mode="heel") for side in ("left", "right")} for _ in range(5)))
+    plan = np.ones((5, 2), dtype=bool)
     body = rebuild_m5_body(
         replace(motion, joints=joints),
         model,
         robot_type=robot,
         orientation_reference_qpos=model.qpos0,
-        source_contact_plan=plan,
+        source_sticking_states=plan,
     )
     np.testing.assert_allclose(body.metadata["body_proportion_target_clearance_m"], 0, atol=1e-12)
 
@@ -149,18 +147,14 @@ def test_raised_toes_do_not_raise_a_planted_heel(model, motion, robot):
 def test_support_drift_is_removed_without_erasing_an_airborne_arch(model, motion, robot):
     joints = motion.joints.copy()
     joints[..., 2] += np.linspace(0, 0.08, len(joints))[:, None]
-    plan = FootContactPlan(
-        tuple(
-            {side: FootContactState(mode="flat" if i in (0, 4) else "swing") for side in ("left", "right")}
-            for i in range(5)
-        )
-    )
+    plan = np.zeros((5, 2), dtype=bool)
+    plan[[0, 4]] = True
     body = rebuild_m5_body(
         replace(motion, joints=joints),
         model,
         robot_type=robot,
         orientation_reference_qpos=model.qpos0,
-        source_contact_plan=plan,
+        source_sticking_states=plan,
     )
     clearance = body.metadata["body_proportion_target_clearance_m"]
     np.testing.assert_allclose(clearance[[0, 4]], 0, atol=1e-12)
