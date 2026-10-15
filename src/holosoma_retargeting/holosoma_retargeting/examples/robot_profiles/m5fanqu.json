@@ -35,7 +35,7 @@
     "slide_tracking_tolerance": 0.005
   },
   "shoulder_direction": {
-    "enable": true,
+    "enable": false,
     "direction_weight": 100.0,
     "wrist_axis_weight_scale": 1.0
   },
@@ -51,16 +51,7 @@
         "default_weight": 1.0,
         "overrides": {
           "Hips": 20.0,
-          "LeftArm": 0.0,
-          "RightArm": 0.0,
-          "LeftForeArm": 0.3,
-          "RightForeArm": 0.3,
-          "LeftHand": 0.0,
-          "RightHand": 0.0,
-          "LeftUpLeg": 0.0,
-          "RightUpLeg": 0.0,
-          "LeftLeg": 0.0,
-          "RightLeg": 0.0
+          "Spine1": 20.0
         }
       },
       "gvhmr": {
@@ -117,6 +108,12 @@
     "weight_overrides": {
       "l_arm_shoulder_pitch_joint": 10,
       "r_arm_shoulder_pitch_joint": 10
+    }
+  },
+  "preserve_human_knees": true,
+  "position_weights": {
+    "fbx_mocap": {
+      "Spine1": 1000.0
     }
   }
 }

@@ -85,6 +85,8 @@ class RobotProfile:
     orientation_weights_by_dataset: dict[str, dict[str, float]]
     natural_pose_enabled: bool
     natural_pose: NaturalPoseProfile
+    preserve_human_knees: bool
+    position_weights_by_dataset: dict[str, dict[str, float]]
 
 
 def concrete_robot_name(robot: str) -> str:
@@ -387,6 +389,23 @@ def load_robot_profile(
     concrete_robot = concrete_robot_name(robot)
     path = _profile_path(config_path, robot=concrete_robot)
     profile = _read_profile(path)
+    preserve_human_knees = _boolean(profile.pop("preserve_human_knees", False), label="preserve_human_knees")
+    if preserve_human_knees and concrete_robot != "m5fanqu":
+        raise ValueError("preserve_human_knees is supported only for m5fanqu")
+    position_weights: dict[str, dict[str, float]] = {}
+    for dataset, raw_weights in _object(profile.pop("position_weights", {}), label="position_weights").items():
+        if dataset not in _ORIENTATION_DATA_FORMATS:
+            raise ValueError(f"Unknown position_weights dataset: {dataset}")
+        mapping = MotionDataConfig(
+            data_format=_ORIENTATION_DATA_FORMATS[dataset], robot_type=robot
+        ).resolved_joints_mapping
+        weights = _object(raw_weights, label=f"position_weights/{dataset}")
+        if set(weights).difference(mapping):
+            raise ValueError(f"position_weights/{dataset} contains unmapped joints")
+        position_weights[dataset] = {
+            name: _finite_number(value, label=f"position_weights/{dataset}/{name}", non_negative=True)
+            for name, value in weights.items()
+        }
     _exact_fields(
         profile,
         {
@@ -465,6 +484,8 @@ def load_robot_profile(
         orientation_weights_by_dataset=orientation_weights,
         natural_pose_enabled=natural_pose_enabled,
         natural_pose=natural_pose,
+        preserve_human_knees=preserve_human_knees,
+        position_weights_by_dataset=position_weights,
     )
 
 

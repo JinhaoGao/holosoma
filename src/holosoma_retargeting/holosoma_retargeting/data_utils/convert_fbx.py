@@ -557,7 +557,7 @@ def _split_actor_joint(name: str) -> tuple[str, str] | None:
     if ":" in name:
         actor, joint = name.rsplit(":", 1)
     elif "_" in name:
-        actor, joint = name.split("_", 1)
+        actor, joint = name.rsplit("_", 1)
     else:
         return None
     if not actor or not joint:

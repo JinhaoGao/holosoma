@@ -142,7 +142,12 @@ def rebuild_m5_body(
             bend = np.sum((knee - hip) * bend_normal, axis=-1, keepdims=True)
             anchors[side + "Leg"] = knee - 2.0 * bend * bend_normal
 
-    if motion.orientation_quaternions_wxyz is None or motion.t_pose_orientation_quaternions_wxyz is None:
+    if (
+        motion.orientation_quaternions_wxyz is None
+        or motion.t_pose_orientation_quaternions_wxyz is None
+        or motion.orientation_joint_names is None
+        or motion.t_pose_orientation_joint_names is None
+    ):
         raise ValueError("Body reconstruction requires direct foot rotations and bind rotations")
     orientation_names = list(motion.orientation_joint_names)
     bind_names = list(motion.t_pose_orientation_joint_names)
@@ -200,6 +205,8 @@ def rebuild_m5_body(
 
     visualization = None
     if motion.source_skeleton_positions is not None:
+        if motion.source_skeleton_joint_names is None or motion.source_skeleton_parent_indices is None:
+            raise ValueError("Body reconstruction requires complete source-skeleton names and parents")
         original = motion.source_skeleton_positions
         visualization = np.empty_like(original)
         for i, name in enumerate(motion.source_skeleton_joint_names):

@@ -1153,7 +1153,7 @@ DEMO_JOINTS_REGISTRY: dict[str, list[str]] = {
 
 APPROVED_DIRECT_ORIENTATION_SOURCES: dict[str, frozenset[str]] = {
     "amass": frozenset({"direct_local_rotation_fk"}),
-    "fbx_mocap": frozenset({"fbx_local_rotation_curves_fk"}),
+    "fbx_mocap": frozenset({"fbx_local_rotation_curves_fk", "bvh_rotation_channels_fk"}),
     "gvhmr": frozenset({"direct_local_rotation_fk"}),
     "lafan": frozenset({"bvh_rotation_channels_fk"}),
     "mocap": frozenset({"bone_rotation_channels_fk"}),
@@ -1394,6 +1394,8 @@ class MotionDataConfig:
 
         key = (self.data_format, robot_family(self.robot_type))
         if key in JOINTS_MAPPINGS:
+            if self.robot_type == "m5fanqu" and self.data_format == "fbx_mocap":
+                return {**JOINTS_MAPPINGS[key], "Spine1": "torso_tracking_link"}
             return JOINTS_MAPPINGS[key]
 
         raise ValueError(f"No joint mapping found for data_format={self.data_format}, robot_type={self.robot_type}")
@@ -1403,6 +1405,8 @@ class MotionDataConfig:
         """Get the human-joint to robot-body mapping used by orientation tracking."""
         if self.orientation_joints_mapping is not None:
             return self.orientation_joints_mapping
+        if self.robot_type == "m5fanqu" and self.data_format == "fbx_mocap":
+            return {**ORIENTATION_JOINTS_MAPPINGS[("fbx_mocap", "m5c")], "Spine1": "torso_tracking_link"}
         return ORIENTATION_JOINTS_MAPPINGS.get(
             (self.data_format, robot_family(self.robot_type)),
             {},

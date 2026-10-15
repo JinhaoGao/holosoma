@@ -131,6 +131,9 @@ class RetargeterConfig:
     arm_interaction_mesh_weight_scale: float = 1.0
     """Multiplier applied to upper-limb anchor rows in the mesh objective."""
 
+    position_weights: dict[str, float] = field(default_factory=dict)
+    """Additional absolute position weights keyed by mapped human joint name."""
+
     root_stability: RootStabilityConfig = field(
         default_factory=RootStabilityConfig,
     )

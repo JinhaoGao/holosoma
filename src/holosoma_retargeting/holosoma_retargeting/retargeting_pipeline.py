@@ -1174,6 +1174,7 @@ def build_retargeter_kwargs_from_config(
         "interaction_mesh_weight": retargeter_config.interaction_mesh_weight,
         "arm_interaction_mesh_weight_scale": (retargeter_config.arm_interaction_mesh_weight_scale),
         "root_stability": retargeter_config.root_stability,
+        "position_weights": retargeter_config.position_weights,
         "show_interaction_mesh": False,
         "save_interaction_mesh": True,
         "interaction_mesh_mode": "both",
@@ -1625,8 +1626,9 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         )
     if data_format == "fbx_mocap":
         with np.load(job.source_path, allow_pickle=False) as source_data:
+            is_bvh = "source_container_format" in source_data and str(source_data["source_container_format"]) == "bvh"
             source_scene_fields = (
-                "source_fbx",
+                "source_bvh" if is_bvh else "source_fbx",
                 "source_actor",
                 "source_xy_origin_m",
                 "position_coordinate_transform",
@@ -1638,6 +1640,8 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
                     f"{missing_source_scene_fields}"
                 )
             result_metadata.update({name: np.asarray(source_data[name]).copy() for name in source_scene_fields})
+            if is_bvh:
+                result_metadata["source_container_format"] = "bvh"
     logger.info(
         "Retargeting %s/%s for %s -> %s",
         job.run_kind,

@@ -11,6 +11,7 @@ from typing import Callable, Literal, Sequence
 
 import numpy as np
 import torch
+
 from holosoma_retargeting.config_types.data_type import (
     APPROVED_DIRECT_ORIENTATION_SOURCES,
     DEMO_JOINT_PARENT_INDICES,
@@ -141,8 +142,10 @@ def validate_motion_skeleton_contract(
             ),
             min(len(config_names), len(adapter_names)),
         )
-        configured_value = config_names[mismatch_index] if mismatch_index < len(config_names) else "<missing>"
-        adapter_value = adapter_names[mismatch_index] if mismatch_index < len(adapter_names) else "<missing>"
+        configured_value: int | str = (
+            config_names[mismatch_index] if mismatch_index < len(config_names) else "<missing>"
+        )
+        adapter_value: int | str = adapter_names[mismatch_index] if mismatch_index < len(adapter_names) else "<missing>"
         raise ValueError(
             "MotionDataConfig human skeleton contract is incompatible with "
             f"the loaded {data_format!r} adapter: joint names/order must "
@@ -569,8 +572,7 @@ def _validate_motion(
         unknown_t_pose_names = set(validated_t_pose_names).difference(canonical_joint_names)
         if unknown_t_pose_names:
             raise ValueError(
-                f"{spec.name} bind-pose orientation joints are not canonical: "
-                f"{sorted(unknown_t_pose_names)}",
+                f"{spec.name} bind-pose orientation joints are not canonical: {sorted(unknown_t_pose_names)}",
             )
         validated_t_pose_quaternions = np.asarray(
             t_pose_orientation_quaternions,
@@ -620,9 +622,7 @@ def _validate_motion(
             )
         indices = np.arange(source_joint_count, dtype=np.int32)
         if np.any((parents < -1) | (parents >= indices) | (parents == indices)) or np.count_nonzero(parents == -1) != 1:
-            raise ValueError(
-                f"{spec.name} complete source-skeleton parents must describe one parent-first rooted tree"
-            )
+            raise ValueError(f"{spec.name} complete source-skeleton parents must describe one parent-first rooted tree")
         validated_source_skeleton_parents = tuple(int(parent) for parent in parents)
         validated_source_skeleton_positions = np.asarray(source_skeleton_positions, dtype=np.float32).copy()
         expected_source_positions_shape = (joints.shape[0], source_joint_count, 3)
@@ -936,7 +936,11 @@ def _load_mocap(path: Path, spec: MotionFormatSpec, human_height: float | None) 
                 source_coordinates = _read_required_string(data, "source_coordinate_system", spec)
                 position_transform = _read_required_string(data, "position_coordinate_transform", spec)
                 orientation_transform = _read_required_string(data, "orientation_coordinate_transform", spec)
-                if source_coordinates != "fbx_global_settings_y_up_centimetres":
+                is_bvh = _read_optional_string(data, "source_container_format") == "bvh"
+                if (orientation_source == "bvh_rotation_channels_fk") != is_bvh:
+                    raise ValueError("BVH orientation provenance requires source_container_format='bvh'")
+                expected_coordinates = "bvh_y_up_centimetres" if is_bvh else "fbx_global_settings_y_up_centimetres"
+                if source_coordinates != expected_coordinates:
                     raise ValueError(f"Unsupported FBX source coordinate system: {source_coordinates!r}")
                 expected_global_settings = {
                     "source_fbx_up_axis": 1,
@@ -947,6 +951,8 @@ def _load_mocap(path: Path, spec: MotionFormatSpec, human_height: float | None) 
                     "source_fbx_coord_axis_sign": 1,
                     "source_fbx_unit_scale_factor": 1.0,
                 }
+                if is_bvh:
+                    expected_global_settings = {}
                 for key, expected in expected_global_settings.items():
                     if key not in data:
                         raise KeyError(f"fbx_mocap is missing raw FBX GlobalSettings field {key!r}")

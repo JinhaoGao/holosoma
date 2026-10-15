@@ -89,7 +89,9 @@ def test_m5c_source_urdf_fk_and_limits_are_preserved(robot):
 
 @pytest.mark.parametrize("robot", ["m4g", "m5c", "m5d", "m5e", "m5fanqu"])
 def test_m5c_two_axis_shoulder_jacobian_and_t_pose(robot):
-    config = internal_config_from_command(RetargetingCommand(robot=robot, task="robot_only", dataset="noetix_mocap"))
+    config = internal_config_from_command(
+        RetargetingCommand(robot=robot, task="robot_only", dataset="noetix_mocap", shoulder_direction_tracking=True)
+    )
     config.retargeter = replace(config.retargeter, visualize=False)
     motion = MotionDataConfig(robot_type=robot, data_format="noetix_mocap")
     constants = create_task_constants(config.robot_config, motion, TaskConfig(object_name="ground"), "robot_only")

@@ -14,11 +14,11 @@ from holosoma_retargeting.retargeting_pipeline import normalize_retargeting_conf
 
 def test_experiment_keeps_other_targets_and_removes_both_knee_objectives():
     baseline = internal_config_from_command(
-        RetargetingCommand(task="robot_only", robot="m5fanqu", dataset="fbx_mocap"),
+        RetargetingCommand(task="robot_only", robot="m5fanqu", dataset="fbx_mocap", preserve_human_knees=False),
     )
     experiment = normalize_retargeting_config(
         internal_config_from_command(
-            RetargetingCommand(task="robot_only", robot="m5fanqu", dataset="fbx_mocap", preserve_human_knees=True),
+            RetargetingCommand(task="robot_only", robot="m5fanqu", dataset="fbx_mocap"),
         ),
     )
     knees = {"LeftLeg", "RightLeg"}
@@ -34,6 +34,9 @@ def test_experiment_keeps_other_targets_and_removes_both_knee_objectives():
     assert all(experiment.retargeter.orientation_weights[name] > 0 for name in positions)
     assert experiment.retargeter.orientation_weights["Spine1"] > experiment.retargeter.orientation_weights["LeftFoot"]
     assert not experiment.retargeter.shoulder_direction.enable
+    assert experiment.retargeter.position_weights == {"Spine1": 1000.0}
+    assert not experiment.retargeter.activate_foot_sticking
+    assert not experiment.retargeter.foot_lock.enable
     assert experiment.preserve_human_knees
     assert not baseline.preserve_human_knees
     assert knees.issubset(original)

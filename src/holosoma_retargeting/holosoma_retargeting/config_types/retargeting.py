@@ -124,7 +124,7 @@ class RetargetingCommand:
     overwrite: bool = False
     """Replace an existing result for the exact same motion and configuration."""
 
-    preserve_human_knees: bool = False
+    preserve_human_knees: bool | None = None
     """M5 reverse-knee experiment: uniform source scale, no knee objectives,
     and a virtual chest target with orientation tracking on the remaining links."""
 
@@ -287,7 +287,10 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         else command.shoulder_direction_tracking
     )
     motion_config = MotionDataConfig(data_format=data_format, robot_type=command.robot)
-    if command.preserve_human_knees:
+    preserve_human_knees = command.preserve_human_knees
+    if preserve_human_knees is None:
+        preserve_human_knees = profile.preserve_human_knees and dataset == "fbx_mocap"
+    if preserve_human_knees:
         if (command.task, command.robot, dataset) != ("robot_only", "m5fanqu", "fbx_mocap"):
             raise ValueError("preserve_human_knees requires robot_only/m5fanqu/fbx_mocap")
         knee_names = {"LeftLeg", "RightLeg"}
@@ -307,7 +310,9 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
             joints_mapping=position_mapping,
             orientation_joints_mapping=orientation_mapping,
         )
-        orientation_weights = {name: (20.0 if name in {"Hips", "Spine1"} else 1.0) for name in orientation_mapping}
+        orientation_weights = {
+            name: weight for name, weight in orientation_weights.items() if name in orientation_mapping
+        }
         # The direction-only shoulder objective masks full shoulder SO(3)
         # tracking. This experiment explicitly retains those orientations.
         shoulder_enabled = False
@@ -321,7 +326,7 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         save_dir=command.save_dir,
         output_name=command.output_name,
         overwrite_existing=command.overwrite,
-        preserve_human_knees=command.preserve_human_knees,
+        preserve_human_knees=preserve_human_knees,
         motion_data_config=motion_config,
         robot_config=RobotConfig(
             robot_type=command.robot,
@@ -331,6 +336,7 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
             robot_mujoco_xml_file=robot_mujoco_xml_file,
         ),
         retargeter=RetargeterConfig(
+            position_weights=dict(profile.position_weights_by_dataset.get(dataset, {})),
             visualize=command.retargeter.visualize,
             debug=command.retargeter.debug,
             dynamic_ground_window=(

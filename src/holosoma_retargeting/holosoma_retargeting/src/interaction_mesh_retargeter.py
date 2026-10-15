@@ -108,6 +108,7 @@ class InteractionMeshRetargeter:
         interaction_mesh_weight: float = 10.0,
         arm_interaction_mesh_weight_scale: float = 1.0,
         root_stability: RootStabilityConfig | None = None,
+        position_weights: dict[str, float] | None = None,
         show_interaction_mesh: bool = False,
         save_interaction_mesh: bool = True,
         interaction_mesh_mode: str = "both",
@@ -220,6 +221,11 @@ class InteractionMeshRetargeter:
         if self.human_joint_parent_indices.shape != (len(self.demo_joints),):
             raise ValueError("DEMO_JOINT_PARENT_INDICES must contain one parent for every DEMO_JOINTS entry")
         self.laplacian_match_links = task_constants.JOINTS_MAPPING
+        self.position_weights = dict(position_weights or {})
+        if set(self.position_weights).difference(self.laplacian_match_links):
+            raise ValueError("Position weights must name mapped human joints")
+        if any(not np.isfinite(weight) or weight < 0 for weight in self.position_weights.values()):
+            raise ValueError("Position weights must be finite and non-negative")
         self.qpos_to_viser_joint_indices: np.ndarray | None = None
 
         self.mapped_joint_indices = [self.demo_joints.index(name) for name in self.laplacian_match_links]
@@ -2999,6 +3005,7 @@ class InteractionMeshRetargeter:
                         ),
                     )
                 q, cost = self.iterate(
+                    mapped_position_targets=human_mapped_joints_in_object,
                     q_locked=q_locked_list[i],
                     q_n=q,
                     q_t_last=retargeted_motions[-1],
@@ -3866,6 +3873,7 @@ class InteractionMeshRetargeter:
         root_stability_target_position: np.ndarray | None = None,
         root_stability_target_matrix: np.ndarray | None = None,
         root_stability_bootstrap: bool = False,
+        mapped_position_targets: np.ndarray | None = None,
     ) -> tuple[np.ndarray, float]:
         """The main function to solve a single iteration of the DiffIK problem.
         Args:
@@ -4018,6 +4026,16 @@ class InteractionMeshRetargeter:
         obj_terms = []
 
         obj_terms.append(cp.sum_squares(cp.multiply(sqrt_w3, lap_var - target_lap_vec)))
+
+        if any(self.position_weights.values()):
+            targets = np.asarray(mapped_position_targets, dtype=np.float64)
+            if targets.shape != (V_r, 3) or not np.isfinite(targets).all():
+                raise ValueError("Mapped position targets must be a finite (mapped joints, 3) array")
+            for index, name in enumerate(robot_link_keys):
+                weight = self.position_weights.get(name, 0.0)
+                if weight > 0.0:
+                    error = targets[index] - p_OC_dict[name]
+                    obj_terms.append(weight * cp.sum_squares(J_OC_dict[name] @ dqa - error))
 
         if self.root_stability_enabled and not root_stability_bootstrap:
             (
@@ -4334,6 +4352,7 @@ class InteractionMeshRetargeter:
         root_stability_target_position: np.ndarray | None = None,
         root_stability_target_matrix: np.ndarray | None = None,
         root_stability_bootstrap: bool = False,
+        mapped_position_targets: np.ndarray | None = None,
     ):
         """Apply each successful linearized QP step directly, matching main."""
         max_iterations = int(n_iter)
@@ -4348,6 +4367,7 @@ class InteractionMeshRetargeter:
         stop_reason = "max_iterations"
         for iteration_idx in range(max_iterations):
             q_n, cost = self.solve_single_iteration(
+                mapped_position_targets=mapped_position_targets,
                 q_locked=q_locked,
                 q_a_n_last=q_n[self.q_a_indices],
                 q_t_last=q_t_last,
