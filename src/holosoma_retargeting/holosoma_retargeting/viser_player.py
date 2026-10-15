@@ -70,6 +70,7 @@ from holosoma_retargeting.visualization.result_loader import (
     _resolve_asset_path,
     load_variant_result,
     resolve_qpos_to_viser_joint_indices,
+    resolve_robot_asset_paths,
     variant_result_metadata,
 )
 
@@ -113,20 +114,18 @@ def _resolve_runtime_config(config: ViserConfig, metadata: dict[str, object]) ->
     if robot_type is not None:
         robot_type = str(robot_type)
 
-    robot_urdf = config.robot_urdf
-    if robot_urdf is None:
-        if robot_type is None:
-            raise ValueError("Result has no robot_type metadata; pass --robot-urdf explicitly.")
-        robot_urdf = RobotConfig(robot_type=robot_type).ROBOT_URDF_FILE
-    robot_urdf = str(_resolve_asset_path(robot_urdf))
-
-    robot_mujoco_xml = config.robot_mujoco_xml
-    if robot_mujoco_xml is None and robot_type is not None:
-        robot_mujoco_xml = RobotConfig(
-            robot_type=robot_type,
-        ).ROBOT_MUJOCO_XML_FILE
-    if robot_mujoco_xml is not None:
-        robot_mujoco_xml = str(_resolve_asset_path(robot_mujoco_xml))
+    use_saved_model = config.robot_type is None or config.robot_type == metadata.get("robot_type")
+    saved_urdf = metadata.get("robot_urdf") if use_saved_model else None
+    saved_xml = metadata.get("robot_mujoco_xml") if use_saved_model else None
+    robot_urdf_path, robot_xml_path = resolve_robot_asset_paths(
+        robot_type=robot_type,
+        robot_urdf=config.robot_urdf,
+        robot_mujoco_xml=config.robot_mujoco_xml,
+        saved_robot_urdf=str(saved_urdf) if saved_urdf else None,
+        saved_robot_mujoco_xml=str(saved_xml) if saved_xml else None,
+    )
+    robot_urdf = str(robot_urdf_path)
+    robot_mujoco_xml = str(robot_xml_path) if robot_xml_path is not None else None
 
     object_urdf = config.object_urdf
     saved_object_urdf = metadata.get("object_urdf")

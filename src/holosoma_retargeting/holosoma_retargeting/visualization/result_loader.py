@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -23,6 +25,9 @@ from holosoma_retargeting.visualization.orientation import (
     load_orientation_diagnostics,
     load_orientation_preview,
 )
+
+if TYPE_CHECKING:
+    from holosoma_retargeting.visualization.multi_scene import MultiResultViserConfig
 
 DEFAULT_VARIANTS: tuple[str, ...] = (
     "identity",
@@ -134,6 +139,8 @@ class VariantResult:
     interaction_mesh: dict[str, np.ndarray | int] | None
     interaction_mesh_edges_default: str | None
     foot_sticking: dict[str, object] | None
+    robot_urdf: str | None = None
+    robot_mujoco_xml: str | None = None
 
 
 def split_result_family(path: str | Path) -> tuple[str, str | None]:
@@ -532,6 +539,30 @@ def _load_human_orientations(
     return (), None
 
 
+def _saved_robot_assets(config_json: str | None) -> tuple[str | None, str | None]:
+    """Recover model overrides recorded by the retargeting run."""
+    if not config_json:
+        return None, None
+    try:
+        snapshot = json.loads(config_json)
+    except json.JSONDecodeError:
+        return None, None
+    if not isinstance(snapshot, dict):
+        return None, None
+    config = snapshot.get("config")
+    if not isinstance(config, dict):
+        return None, None
+    robot_config = config.get("robot_config")
+    if not isinstance(robot_config, dict):
+        return None, None
+    urdf = robot_config.get("robot_urdf_file")
+    xml = robot_config.get("robot_mujoco_xml_file")
+    return (
+        urdf if isinstance(urdf, str) and urdf else None,
+        xml if isinstance(xml, str) and xml else None,
+    )
+
+
 def load_variant_result(
     variant: str,
     path: str | Path,
@@ -607,6 +638,7 @@ def load_variant_result(
         fps = float(_npz_scalar(data, "fps", 30.0))
         robot_type = str(_npz_scalar(data, "robot_type", ""))
         config_json = _optional_npz_text(data, "config_json")
+        robot_urdf, robot_mujoco_xml = _saved_robot_assets(config_json)
         dataset_partition = _optional_npz_text(data, "dataset_partition")
         sequence_key = _optional_npz_text(data, "sequence_key")
         experiment_name = _optional_npz_text(data, "experiment_name")
@@ -801,6 +833,8 @@ def load_variant_result(
         interaction_mesh=interaction_mesh,
         interaction_mesh_edges_default=interaction_mesh_edges_default,
         foot_sticking=foot_sticking,
+        robot_urdf=robot_urdf,
+        robot_mujoco_xml=robot_mujoco_xml,
     )
 
 
@@ -845,6 +879,8 @@ def variant_result_metadata(result: VariantResult) -> dict[str, object]:
         "orientation_diagnostics": result.orientation_diagnostics,
         "orientation_preview": result.orientation_preview,
         "robot_type": result.robot_type or None,
+        "robot_urdf": result.robot_urdf,
+        "robot_mujoco_xml": result.robot_mujoco_xml,
         "object_name": result.object_name or None,
         "object_urdf": result.object_urdf,
         "object_poses_demo": result.object_poses_demo,
@@ -866,16 +902,48 @@ def _resolve_asset_path(value: str | Path) -> Path:
     return package_candidate if package_candidate.exists() else path
 
 
-def _resolve_robot_urdf(config: AugmentationViserConfig, result: VariantResult) -> Path:
-    value = config.robot_urdf
+def resolve_robot_asset_paths(
+    *,
+    robot_type: str | None,
+    robot_urdf: str | Path | None = None,
+    robot_mujoco_xml: str | Path | None = None,
+    saved_robot_urdf: str | None = None,
+    saved_robot_mujoco_xml: str | None = None,
+) -> tuple[Path, Path | None]:
+    """Prefer explicit assets, then the saved model, then robot-type defaults."""
+    value = robot_urdf or saved_robot_urdf
     if value is None:
-        if not result.robot_type:
-            raise ValueError(f"{result.path} has no robot_type metadata; pass --robot-urdf explicitly.")
-        value = RobotConfig(robot_type=result.robot_type).ROBOT_URDF_FILE
-    path = _resolve_asset_path(value)
-    if not path.is_file():
-        raise FileNotFoundError(f"Robot URDF not found: {path}")
-    return path
+        if not robot_type:
+            raise ValueError("Result has no robot model metadata; pass --robot-urdf explicitly.")
+        value = RobotConfig(robot_type=robot_type).ROBOT_URDF_FILE
+    urdf_path = _resolve_asset_path(value)
+    if not urdf_path.is_file():
+        raise FileNotFoundError(f"Robot URDF not found: {urdf_path}")
+
+    xml_value = robot_mujoco_xml
+    # An explicit URDF override must not inherit an unrelated saved XML.
+    if xml_value is None and (
+        robot_urdf is None
+        or (saved_robot_urdf is not None and urdf_path.resolve() == _resolve_asset_path(saved_robot_urdf).resolve())
+    ):
+        xml_value = saved_robot_mujoco_xml
+    xml_path = _resolve_asset_path(xml_value) if xml_value else infer_mujoco_xml_path(urdf_path)
+    if xml_path is not None and not xml_path.is_file():
+        raise FileNotFoundError(f"Robot MuJoCo XML not found: {xml_path}")
+    return urdf_path, xml_path
+
+
+def _resolve_robot_assets(
+    config: AugmentationViserConfig | MultiResultViserConfig,
+    result: VariantResult,
+) -> tuple[Path, Path | None]:
+    return resolve_robot_asset_paths(
+        robot_type=result.robot_type,
+        robot_urdf=config.robot_urdf,
+        robot_mujoco_xml=config.robot_mujoco_xml,
+        saved_robot_urdf=result.robot_urdf,
+        saved_robot_mujoco_xml=result.robot_mujoco_xml,
+    )
 
 
 def _resolve_object_urdf(config: AugmentationViserConfig, result: VariantResult) -> Path:
@@ -889,15 +957,6 @@ def _resolve_object_urdf(config: AugmentationViserConfig, result: VariantResult)
     if not path.is_file():
         raise FileNotFoundError(f"Object URDF not found: {path}")
     return path
-
-
-def _resolve_robot_xml(config: AugmentationViserConfig, robot_urdf: Path) -> Path | None:
-    if config.robot_mujoco_xml is not None:
-        path = _resolve_asset_path(config.robot_mujoco_xml)
-        if not path.is_file():
-            raise FileNotFoundError(f"Robot MuJoCo XML not found: {path}")
-        return path
-    return infer_mujoco_xml_path(robot_urdf)
 
 
 def resolve_qpos_to_viser_joint_indices(

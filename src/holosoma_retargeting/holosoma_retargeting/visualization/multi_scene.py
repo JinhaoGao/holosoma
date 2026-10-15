@@ -41,8 +41,7 @@ from holosoma_retargeting.visualization.orientation import (
 from holosoma_retargeting.visualization.result_loader import (
     VariantResult,
     _resolve_object_urdf,
-    _resolve_robot_urdf,
-    _resolve_robot_xml,
+    _resolve_robot_assets,
     _rgba,
     _robot_joints_for_viser,
     interpolate_qpos,
@@ -824,8 +823,7 @@ def load_comparison_results(
     needs_layout_inference = any(result.contains_object_in_qpos is None for result in results)
     needs_robot_fk = any(result.robot_points is None for result in results)
     if needs_layout_inference or needs_robot_fk:
-        robot_urdf = _resolve_robot_urdf(config, reference)
-        robot_xml = _resolve_robot_xml(config, robot_urdf)
+        _, robot_xml = _resolve_robot_assets(config, reference)
         if robot_xml is None:
             missing_fields = []
             if needs_layout_inference:
@@ -1082,8 +1080,9 @@ def make_multi_result_player(
     """Build one shared-timeline Viser scene for all comparison results."""
 
     reference = results[0]
-    robot_urdf = _resolve_robot_urdf(config, reference)
-    robot_xml = _resolve_robot_xml(config, robot_urdf)
+    robot_urdf, robot_xml = _resolve_robot_assets(config, reference)
+    if any(_resolve_robot_assets(config, result) != (robot_urdf, robot_xml) for result in results[1:]):
+        raise ValueError("One shared robot model cannot render results generated with different robot assets.")
     driver_contains_object = bool(reference.contains_object_in_qpos)
     object_urdfs = resolve_comparison_object_urdfs(config, results)
     if config.interaction_mesh_mode not in {"source", "target", "both"}:
