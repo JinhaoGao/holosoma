@@ -15,7 +15,6 @@ from holosoma_retargeting.source_foot_geometry import source_floor_clearance
 
 M5C_BODY_PROPORTIONS_VERSION = "m5c_bone_lengths_v2"
 M5_BODY_PROPORTIONS_VERSIONS = {robot: f"{robot}_bone_lengths_v2" for robot in ("m4g", "m5c", "m5d", "m5e")}
-M5_BODY_PROPORTIONS_VERSIONS["m5fanqu"] = "m5fanqu_reverse_knee_v1"
 
 
 @dataclass(frozen=True)
@@ -128,19 +127,6 @@ def rebuild_m5_body(
                 region_scales[name] = arm_scale
     for a, b, length in segments:
         anchors[b] = anchors[a] + _unit(source_vector(a, b)) * length
-
-    if robot_type == "m5fanqu":
-        # Reflect the sagittal knee bend across the hip-to-ankle line. The
-        # supplied reverse-knee mechanism bends behind the leg, while the
-        # human knee bends in front. Both bone lengths, lateral displacement,
-        # and the ankle trajectory remain unchanged.
-        for side in ("Left", "Right"):
-            hip = anchors[side + "UpLeg"]
-            knee = anchors[side + "Leg"]
-            ankle = anchors[side + "Foot"]
-            bend_normal = _unit(np.cross(root_rotations[:, :, 1], _unit(ankle - hip)))
-            bend = np.sum((knee - hip) * bend_normal, axis=-1, keepdims=True)
-            anchors[side + "Leg"] = knee - 2.0 * bend * bend_normal
 
     if (
         motion.orientation_quaternions_wxyz is None

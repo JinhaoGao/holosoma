@@ -12,6 +12,7 @@ import pytest
 from holosoma_retargeting.body_proportions import rebuild_m5_body
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.data_utils.motion_data import HumanMotion
+from holosoma_retargeting.m5fanqu_body import scale_m5fanqu_body
 from scipy.spatial.transform import Rotation
 
 PACKAGE = Path(__file__).resolve().parents[1] / "src/holosoma_retargeting/holosoma_retargeting"
@@ -197,39 +198,52 @@ def test_sole_geometry_uses_the_same_robot_reference_frame_as_orientation_target
 
 
 @pytest.mark.parametrize("robot", ["m5fanqu"])
-def test_reverse_knee_preserves_endpoints_lengths_and_world_equivariance(model, motion, robot):
-    reference = rebuild_m5_body(motion, model, robot_type="m5c", orientation_reference_qpos=model.qpos0)
-    reverse = rebuild_m5_body(motion, model, robot_type=robot, orientation_reference_qpos=model.qpos0)
-    assert reverse.metadata["human_position_preprocessing"] == "m5fanqu_reverse_knee_v1"
-    names = motion.canonical_joint_names
-    for side in ("Left", "Right"):
-        hip, knee, ankle = [names.index(side + suffix) for suffix in ("UpLeg", "Leg", "Foot")]
-        np.testing.assert_allclose(reverse.joints[:, [hip, ankle]], reference.joints[:, [hip, ankle]], atol=1e-12)
-        for a, b in ((hip, knee), (knee, ankle)):
-            np.testing.assert_allclose(
-                np.linalg.norm(reverse.joints[:, b] - reverse.joints[:, a], axis=-1),
-                np.linalg.norm(reference.joints[:, b] - reference.joints[:, a], axis=-1),
-                atol=1e-12,
-            )
-        chord = reference.joints[:, ankle] - reference.joints[:, hip]
-        forward = np.cross(np.array([0.0, 1.0, 0.0]), chord)
-        before = np.sum((reference.joints[:, knee] - reference.joints[:, hip]) * forward, axis=-1)
-        after = np.sum((reverse.joints[:, knee] - reverse.joints[:, hip]) * forward, axis=-1)
-        assert np.all(np.abs(before) > 0.01)
-        np.testing.assert_allclose(after, -before, atol=1e-12)
-    np.testing.assert_allclose(reverse.sole_centers, reference.sole_centers, atol=1e-12)
-    rotation = Rotation.from_euler("z", 1.2)
-    translation = np.array([2.0, -3.0, 0.0])
-    quaternions = (
-        (rotation * Rotation.from_quat(motion.orientation_quaternions_wxyz.reshape(-1, 4)[:, [1, 2, 3, 0]]))
-        .as_quat()[:, [3, 0, 1, 2]]
-        .reshape(motion.orientation_quaternions_wxyz.shape)
-    )
-    rotated = replace(
+def test_segment_scaling_uses_robot_torso_arms_and_preserves_bone_directions(model, motion):
+    body = scale_m5fanqu_body(
         motion,
-        joints=motion.joints @ rotation.as_matrix().T + translation,
-        orientation_quaternions_wxyz=quaternions,
+        model,
+        scale=1.2,
+        toe_names=["LeftToeBase", "RightToeBase"],
+        leg_length_scale=1.12,
     )
-    result = rebuild_m5_body(rotated, model, robot_type=robot, orientation_reference_qpos=model.qpos0)
-    scale = reverse.metadata["root_translation_scale"]
-    np.testing.assert_allclose(result.joints, reverse.joints @ rotation.as_matrix().T + translation * scale, atol=1e-12)
+    names = motion.canonical_joint_names
+    targets = dict(
+        zip(
+            body.metadata["body_proportion_joint_names"], body.metadata["body_proportion_target_lengths_m"], strict=True
+        )
+    )
+    # Independent dimensions from the supplied robot, not human height.
+    assert targets["Spine"] == pytest.approx(0.073)
+    assert targets["Spine1"] == pytest.approx(0.302)
+    assert targets["LeftShoulder"] == pytest.approx(0.165)
+    assert targets["LeftArm"] == pytest.approx(0.055)
+    assert targets["LeftForeArm"] == pytest.approx(0.216)
+    assert targets["LeftHand"] == pytest.approx(0.165)
+    assert targets["LeftLeg"] == pytest.approx(0.50743 * 1.12)
+    assert targets["LeftFoot"] == pytest.approx(0.56333 * 1.12)
+    assert targets["Neck"] + targets["Head"] == pytest.approx(0.165)
+    for i, name in enumerate(names):
+        parent = int(motion.joint_parent_indices[i])
+        if parent < 0:
+            continue
+        before = motion.joints[:, i] - motion.joints[:, parent]
+        after = body.joints[:, i] - body.joints[:, parent]
+        np.testing.assert_allclose(np.linalg.norm(after, axis=-1), targets[name], atol=1e-12)
+        np.testing.assert_allclose(
+            after / targets[name], before / np.linalg.norm(before, axis=-1, keepdims=True), atol=1e-12
+        )
+    toes = [names.index(side + "ToeBase") for side in ("Left", "Right")]
+    np.testing.assert_allclose(
+        body.joints[:, toes, 2].min(axis=1), body.metadata["leg_adaptation_target_toe_height_m"], atol=1e-12
+    )
+    # Reconstructing a translated or turned motion must not change proportions.
+    rotation = Rotation.from_euler("z", 0.7).as_matrix()
+    translation = np.array([2.0, -1.0, 0.0])
+    moved = scale_m5fanqu_body(
+        replace(motion, joints=motion.joints @ rotation.T + translation),
+        model,
+        scale=1.2,
+        toe_names=["LeftToeBase", "RightToeBase"],
+        leg_length_scale=1.12,
+    )
+    np.testing.assert_allclose(moved.joints, body.joints @ rotation.T + translation * 1.2, atol=1e-12)

@@ -12,6 +12,7 @@ from pathlib import Path
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.config_types.retargeter import (
     ShoulderDirectionConfig,
+    SQPConfig,
 )
 
 ROBOT_PROFILE_SCHEMA_VERSION = 1
@@ -77,6 +78,7 @@ class RobotProfile:
     robot_urdf_file: str
     robot_mujoco_xml_file: str
     retargeting: RetargetingProfileDefaults
+    sqp: SQPConfig
     shoulder_direction: ShoulderDirectionConfig
     orientation_enabled: bool
     orientation_preview: bool
@@ -84,6 +86,8 @@ class RobotProfile:
     natural_pose_enabled: bool
     natural_pose: NaturalPoseProfile
     preserve_human_knees: bool
+    body_scaling_mode: str
+    leg_length_scale: float
     position_weights_by_dataset: dict[str, dict[str, float]]
 
 
@@ -375,6 +379,23 @@ def load_robot_profile(
     preserve_human_knees = _boolean(profile.pop("preserve_human_knees", False), label="preserve_human_knees")
     if preserve_human_knees and concrete_robot != "m5fanqu":
         raise ValueError("preserve_human_knees is supported only for m5fanqu")
+    scaling = _object(profile.pop("body_scaling", {}), label="body_scaling")
+    if set(scaling).difference({"mode", "leg_length_scale"}):
+        raise ValueError("Unknown body_scaling fields")
+    scaling_mode = scaling.get("mode", "uniform")
+    if scaling_mode not in {"uniform", "robot_segments"}:
+        raise ValueError("Unknown body_scaling mode")
+    if scaling and concrete_robot != "m5fanqu":
+        raise ValueError("body_scaling is specific to m5fanqu; other robots retain their own reconstruction")
+    leg_length_scale = _finite_number(
+        scaling.get("leg_length_scale", 1.0), label="body_scaling/leg_length_scale", non_negative=True, positive=True
+    )
+    if concrete_robot == "m5fanqu" and (scaling_mode != "robot_segments" or not preserve_human_knees):
+        raise ValueError("m5fanqu requires source-preserving robot_segments scaling")
+    sqp_table = _object(profile.pop("sqp", {}), label="sqp")
+    if set(sqp_table).difference(field.name for field in fields(SQPConfig)):
+        raise ValueError("Unknown sqp fields")
+    sqp = SQPConfig(**sqp_table)  # type: ignore[arg-type]
     position_weights: dict[str, dict[str, float]] = {}
     for dataset, raw_weights in _object(profile.pop("position_weights", {}), label="position_weights").items():
         if dataset not in _ORIENTATION_DATA_FORMATS:
@@ -455,6 +476,7 @@ def load_robot_profile(
         robot_urdf_file=robot_urdf_file,
         robot_mujoco_xml_file=robot_mujoco_xml_file,
         retargeting=_load_retargeting_defaults(profile["retargeting"]),
+        sqp=sqp,
         shoulder_direction=_load_shoulder_direction(
             profile["shoulder_direction"],
         ),
@@ -464,6 +486,8 @@ def load_robot_profile(
         natural_pose_enabled=natural_pose_enabled,
         natural_pose=natural_pose,
         preserve_human_knees=preserve_human_knees,
+        body_scaling_mode=str(scaling_mode),
+        leg_length_scale=leg_length_scale,
         position_weights_by_dataset=position_weights,
     )
 

@@ -7,22 +7,19 @@ from pathlib import Path
 import mujoco
 import numpy as np
 import pytest
-
+from holosoma_retargeting.config_types.data_type import MotionDataConfig
 from holosoma_retargeting.config_types.retargeting import RetargetingCommand, internal_config_from_command
 from holosoma_retargeting.retargeting_pipeline import normalize_retargeting_config
 
 
 def test_experiment_keeps_other_targets_and_removes_both_knee_objectives():
-    baseline = internal_config_from_command(
-        RetargetingCommand(task="robot_only", robot="m5fanqu", dataset="fbx_mocap", preserve_human_knees=False),
-    )
     experiment = normalize_retargeting_config(
         internal_config_from_command(
             RetargetingCommand(task="robot_only", robot="m5fanqu", dataset="fbx_mocap"),
         ),
     )
     knees = {"LeftLeg", "RightLeg"}
-    original = baseline.motion_data_config.resolved_joints_mapping
+    original = MotionDataConfig(robot_type="m5fanqu", data_format="fbx_mocap").resolved_joints_mapping
     positions = experiment.motion_data_config.resolved_joints_mapping
     orientations = experiment.motion_data_config.resolved_orientation_joints_mapping
     assert not knees.intersection(positions)
@@ -38,7 +35,9 @@ def test_experiment_keeps_other_targets_and_removes_both_knee_objectives():
     assert not experiment.retargeter.activate_foot_sticking
     assert not experiment.retargeter.foot_lock.enable
     assert experiment.preserve_human_knees
-    assert not baseline.preserve_human_knees
+    assert experiment.body_scaling_mode == "robot_segments"
+    assert experiment.leg_length_scale == 1.12
+    assert not hasattr(experiment.retargeter, "foot_tracking")
     assert knees.issubset(original)
 
 
@@ -68,3 +67,23 @@ def test_virtual_chest_anchor_follows_shoulder_midpoint_without_new_dof():
         mujoco.mj_forward(model, data)
         center = (data.body("l_arm_shoulder_pitch_link").xpos + data.body("r_arm_shoulder_pitch_link").xpos) / 2
         np.testing.assert_allclose(data.body("torso_tracking_link").xpos, center, atol=1e-12)
+
+
+@pytest.mark.parametrize("robot", ["m4g", "m5c", "m5d", "m5e"])
+def test_fanqu_defaults_do_not_change_other_robots(robot):
+    config = internal_config_from_command(RetargetingCommand(task="robot_only", robot=robot, dataset="fbx_mocap"))
+    assert not config.preserve_human_knees
+    assert config.body_scaling_mode == "uniform"
+    assert config.retargeter.sqp.first_frame_iterations == 50
+    assert config.retargeter.sqp.iterations == 10
+
+
+def test_fanqu_uses_a_larger_budget_without_extra_foot_objectives():
+    config = internal_config_from_command(RetargetingCommand(task="robot_only", robot="m5fanqu", dataset="fbx_mocap"))
+    assert config.retargeter.sqp.first_frame_iterations == 100
+    assert config.retargeter.sqp.iterations == 80
+    assert config.retargeter.position_weights == {"Spine1": 1000.0}
+    with pytest.raises(ValueError, match="knee reconstruction is removed"):
+        internal_config_from_command(
+            RetargetingCommand(task="robot_only", robot="m5fanqu", dataset="fbx_mocap", preserve_human_knees=False)
+        )

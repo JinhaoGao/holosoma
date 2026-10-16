@@ -43,6 +43,7 @@ from holosoma_retargeting.data_utils.object_assets import (
     get_omomo_object_asset,
 )
 from holosoma_retargeting.data_utils.omomo import parse_omomo_sequence_name
+from holosoma_retargeting.m5fanqu_body import M5FANQU_BODY_PROPORTIONS_VERSION, scale_m5fanqu_body
 from holosoma_retargeting.src.interaction_mesh_retargeter import (
     InteractionMeshRetargeter,  # type: ignore[import-not-found]
 )
@@ -258,6 +259,8 @@ def _normalized_job_payload(
         and normalized.task_type == "robot_only"
     ):
         solver_config["body_proportion_preprocessing"] = M5_BODY_PROPORTIONS_VERSIONS[normalized.robot]
+    if normalized.body_scaling_mode == "robot_segments":
+        solver_config["body_proportion_preprocessing"] = M5FANQU_BODY_PROPORTIONS_VERSION
     solver_config["resolved_motion_data_contract"] = {
         "demo_joints": motion_config.resolved_demo_joints,
         "joint_parent_indices": motion_config.resolved_joint_parent_indices,
@@ -672,6 +675,13 @@ def validate_config(cfg: RetargetingConfig) -> None:
         )
     data_format = cfg.data_format or DEFAULT_DATA_FORMATS[cfg.task_type]
     validate_motion_task(data_format, cfg.task_type)
+    if cfg.body_scaling_mode == "robot_segments":
+        if (cfg.robot, data_format, cfg.task_type) != ("m5fanqu", "fbx_mocap", "robot_only"):
+            raise ValueError("robot_segments scaling requires robot_only/m5fanqu/fbx_mocap")
+        if not cfg.preserve_human_knees or not np.isfinite(cfg.leg_length_scale) or cfg.leg_length_scale <= 0:
+            raise ValueError("m5fanqu scaling requires source directions and a finite positive leg length scale")
+    elif (cfg.robot, data_format, cfg.task_type) == ("m5fanqu", "fbx_mocap", "robot_only"):
+        raise ValueError("m5fanqu requires robot_segments scaling; load its maintained robot profile")
 
 
 def create_ground_points(x_range: tuple[float, float], y_range: tuple[float, float], size: int) -> np.ndarray:
@@ -1146,6 +1156,7 @@ def build_retargeter_kwargs_from_config(
         "foot_sticking_tolerance": retargeter_config.foot_sticking_tolerance,
         "self_collision": retargeter_config.self_collision,
         "step_size": retargeter_config.step_size,
+        "sqp": retargeter_config.sqp,
         "visualize": retargeter_config.visualize,
         "mesh_opacity": 1.0,
         "debug": retargeter_config.debug,
@@ -1475,7 +1486,20 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
 
     toe_names = cfg.motion_data_config.toe_names
     rebuilt_body = None
-    if (
+    fanqu_body = None
+    if cfg.body_scaling_mode == "robot_segments":
+        if (cfg.robot, data_format, task_type) != ("m5fanqu", "fbx_mocap", "robot_only"):
+            raise ValueError("robot_segments scaling requires robot_only/m5fanqu/fbx_mocap")
+        fanqu_body = scale_m5fanqu_body(
+            motion,
+            retargeter.robot_model,
+            scale=smpl_scale,
+            toe_names=toe_names,
+            leg_length_scale=cfg.leg_length_scale,
+        )
+        human_joints = fanqu_body.joints
+        visualization_human_joints = fanqu_body.visualization_joints
+    elif (
         cfg.robot in M5_BODY_PROPORTIONS_VERSIONS
         and data_format == "fbx_mocap"
         and task_type == "robot_only"
@@ -1485,7 +1509,9 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
         if cfg.retargeter.activate_foot_sticking:
             source_sticking_states = retargeter._foot_sticking_states_array(
                 extract_foot_sticking_sequence_velocity(
-                    foot_contact_source_joints, retargeter.demo_joints, toe_names,
+                    foot_contact_source_joints,
+                    retargeter.demo_joints,
+                    toe_names,
                 ),
                 len(foot_contact_source_joints),
             )
@@ -1548,10 +1574,12 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
     # Match main: detect on the preprocessed, initialized target skeleton.
     # Despite the historical function name, the threshold is displacement per frame.
     foot_sticking_sequences = extract_foot_sticking_sequence_velocity(
-        human_joints, retargeter.demo_joints, toe_names,
+        human_joints,
+        retargeter.demo_joints,
+        toe_names,
     )
 
-    result_metadata = {
+    result_metadata: dict[str, object] = {
         "foot_sticking_displacement_threshold_m": 0.01,
         "run_kind": job.run_kind,
         "variant": job.variant.name,
@@ -1581,6 +1609,10 @@ def _run_retargeting_job_unlocked(job: RetargetJob) -> RetargetJobResult:
             torso_position_human_joint="Spine1",
             torso_position_robot_link="torso_tracking_link",
         )
+    if fanqu_body is not None:
+        result_metadata.update(fanqu_body.metadata)
+        result_metadata["experiment_name"] = ""
+        result_metadata.pop("human_position_scale", None)
     if data_format == "fbx_mocap":
         with np.load(job.source_path, allow_pickle=False) as source_data:
             is_bvh = "source_container_format" in source_data and str(source_data["source_container_format"]) == "bvh"

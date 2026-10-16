@@ -26,12 +26,9 @@ from holosoma_retargeting.config_types.retargeter import (
     RootStabilityConfig,
     SelfCollisionConfig,
     ShoulderDirectionConfig,
+    SQPConfig,
 )
 from holosoma_retargeting.data_utils.hand_skeleton import build_hand_visualization_spec
-from holosoma_retargeting.models.m5.m5fanqu.kinematic_seed import (
-    HUMAN_JOINT_NAMES as REVERSE_KNEE_HUMAN_JOINT_NAMES,
-)
-from holosoma_retargeting.models.m5.m5fanqu.kinematic_seed import seed_reverse_knee_pose
 from holosoma_retargeting.shoulder_direction import (
     ShoulderSideSpec,
     direction_error_angle,
@@ -125,6 +122,7 @@ class InteractionMeshRetargeter:
         shoulder_direction: ShoulderDirectionConfig | None = None,
         natural_pose_joint_positions: dict[str, float] | None = None,
         natural_pose_weights: dict[str, float] | None = None,
+        sqp: SQPConfig | None = None,
     ):
         """This kinematic retargeter solves the diffIK problem with hard constraints in SQP style.
         During each SQP iteration, the problem is solved with the following constraints and costs:
@@ -181,6 +179,7 @@ class InteractionMeshRetargeter:
         if not np.isfinite(self.penetration_tolerance) or self.penetration_tolerance < 0:
             raise ValueError("penetration_tolerance must be finite and non-negative")
         self.step_size = step_size
+        self.sqp = sqp or SQPConfig()
         self.visualize = visualize
         self.mesh_opacity = float(mesh_opacity)
         self.debug = debug
@@ -2579,10 +2578,6 @@ class InteractionMeshRetargeter:
 
         print(f"\nStarting motion retargeting for {num_frames} frames...")
 
-        reverse_knee_indices = None
-        if result_metadata and result_metadata.get("human_position_preprocessing") == "m5fanqu_reverse_knee_v1":
-            reverse_knee_indices = [self.demo_joints.index(name) for name in REVERSE_KNEE_HUMAN_JOINT_NAMES]
-
         with tqdm(range(num_frames)) as pbar:
             for i in pbar:
                 # Get object poses and transform points
@@ -2665,24 +2660,6 @@ class InteractionMeshRetargeter:
                     w_nominal_tracking = self.w_nominal_tracking_init * np.exp(-i / self.nominal_tracking_tau)
 
                 root_stability_bootstrap = self.root_stability_enabled and i == 0
-                if reverse_knee_indices is not None:
-                    q = seed_reverse_knee_pose(
-                        self.robot_model,
-                        q,
-                        human_joint_motions[i, reverse_knee_indices],
-                        root_position=(
-                            root_stability_target_positions[i]
-                            if self.root_stability_enabled and not root_stability_bootstrap
-                            else None
-                        ),
-                        root_matrix=(
-                            root_stability_target_matrices[i]
-                            if self.root_stability_enabled
-                            and not root_stability_bootstrap
-                            and root_stability_target_matrices.shape[1:] == (3, 3)
-                            else None
-                        ),
-                    )
                 q, cost = self.iterate(
                     mapped_position_targets=human_mapped_joints_in_object,
                     q_locked=q_locked_list[i],
@@ -2695,7 +2672,7 @@ class InteractionMeshRetargeter:
                     w_nominal_tracking=w_nominal_tracking,
                     q_a_nominal=(q_nominal_list[i, self.q_a_indices] if q_nominal_list is not None else None),
                     init_t=i == 0,
-                    n_iter=50 if i == 0 else 10,
+                    n_iter=self.sqp.first_frame_iterations if i == 0 else self.sqp.iterations,
                     frame_idx=i,
                     orientation_target_matrices=orientation_target_matrices[i],
                     shoulder_direction_targets=shoulder_direction_targets[i],
@@ -3311,8 +3288,6 @@ class InteractionMeshRetargeter:
                 }
             )
         if result_metadata:
-            if reverse_knee_indices is not None:
-                save_payload["leg_initialization"] = np.asarray("bounded_reverse_knee_ik_v1")
             conflicts = sorted(set(result_metadata).intersection(save_payload))
             if conflicts:
                 raise ValueError(f"Result metadata cannot replace solver fields: {conflicts}")
@@ -4018,9 +3993,11 @@ class InteractionMeshRetargeter:
         max_iterations = int(n_iter)
         if max_iterations <= 0:
             raise ValueError("n_iter must be positive")
+        convergence = getattr(self, "sqp", SQPConfig())
         last_cost = np.inf
         stop_reason = "max_iterations"
         for iteration_idx in range(max_iterations):
+            previous_q = q_n.copy()
             q_n, cost = self.solve_single_iteration(
                 mapped_position_targets=mapped_position_targets,
                 q_locked=q_locked,
@@ -4044,8 +4021,12 @@ class InteractionMeshRetargeter:
                 raise RuntimeError(
                     f"SQP returned a non-finite local cost at frame {frame_idx}, iteration {iteration_idx}: {cost}",
                 )
-            if np.isclose(cost, last_cost):
-                stop_reason = "cost_stable"
+            cost_stable = np.isclose(cost, last_cost, rtol=convergence.cost_rtol, atol=convergence.cost_atol)
+            step_stable = (
+                convergence.step_tolerance is None or np.max(np.abs(q_n - previous_q)) <= convergence.step_tolerance
+            )
+            if cost_stable and step_stable:
+                stop_reason = "cost_stable" if convergence.step_tolerance is None else "cost_and_step_stable"
                 break
             last_cost = cost
 

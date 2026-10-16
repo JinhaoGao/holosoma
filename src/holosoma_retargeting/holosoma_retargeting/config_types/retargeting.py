@@ -15,6 +15,7 @@ from holosoma_retargeting.config_types.retargeter import (
     RetargeterConfig,
     RootStabilityConfig,
     ShoulderDirectionConfig,
+    SQPConfig,
 )
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.robot_profiles import (
@@ -125,7 +126,7 @@ class RetargetingCommand:
     """Replace an existing result for the exact same motion and configuration."""
 
     preserve_human_knees: bool | None = None
-    """M5 reverse-knee experiment: uniform source scale, no knee objectives,
+    """M5 reverse-knee robot: preserve source directions, omit knee objectives,
     and a virtual chest target with orientation tracking on the remaining links."""
 
     robot_profile: Annotated[
@@ -178,6 +179,9 @@ class RetargetingCommand:
 
     foot_sticking_tolerance: float | None = None
     """Override planted-foot XY tolerance in meters."""
+
+    sqp: SQPConfig | None = None
+    """Override the robot-profile iteration budget and stopping tolerances."""
 
     step_size: float | None = None
     """Override the SQP trust-region radius."""
@@ -290,6 +294,9 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
     preserve_human_knees = command.preserve_human_knees
     if preserve_human_knees is None:
         preserve_human_knees = profile.preserve_human_knees and dataset == "fbx_mocap"
+    fanqu_scaling = command.robot == "m5fanqu" and dataset == "fbx_mocap" and command.task == "robot_only"
+    if fanqu_scaling and not preserve_human_knees:
+        raise ValueError("m5fanqu uses source-preserving robot_segments scaling; knee reconstruction is removed")
     if preserve_human_knees:
         if (command.task, command.robot, dataset) != ("robot_only", "m5fanqu", "fbx_mocap"):
             raise ValueError("preserve_human_knees requires robot_only/m5fanqu/fbx_mocap")
@@ -327,6 +334,10 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
         output_name=command.output_name,
         overwrite_existing=command.overwrite,
         preserve_human_knees=preserve_human_knees,
+        body_scaling_mode=cast('Literal["uniform", "robot_segments"]', profile.body_scaling_mode)
+        if fanqu_scaling
+        else "uniform",
+        leg_length_scale=profile.leg_length_scale if fanqu_scaling else 1.0,
         motion_data_config=motion_config,
         robot_config=RobotConfig(
             robot_type=command.robot,
@@ -336,6 +347,7 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
             robot_mujoco_xml_file=robot_mujoco_xml_file,
         ),
         retargeter=RetargeterConfig(
+            sqp=command.sqp if command.sqp is not None else profile.sqp,
             position_weights=dict(profile.position_weights_by_dataset.get(dataset, {})),
             visualize=command.retargeter.visualize,
             debug=command.retargeter.debug,
@@ -463,7 +475,13 @@ class RetargetingConfig:
     exact artifacts resume and mismatched or invalid artifacts are rejected."""
 
     preserve_human_knees: bool = False
-    """Bypass body reconstruction for the source-preserving M5 experiment."""
+    """Retain source bone directions and omit knee objectives for m5fanqu."""
+
+    body_scaling_mode: Literal["uniform", "robot_segments"] = "uniform"
+    """Robot-specific source scaling selected from the maintained profile."""
+
+    leg_length_scale: float = 1.0
+    """M5 fanqu multiplier on default-pose vertical thigh and shin spans."""
 
     # --- Nested configs ---
     robot_config: RobotConfig = field(default_factory=lambda: RobotConfig(robot_type="g1"))
