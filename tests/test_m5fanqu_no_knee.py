@@ -74,14 +74,10 @@ def test_fanqu_defaults_do_not_change_other_robots(robot):
     config = internal_config_from_command(RetargetingCommand(task="robot_only", robot=robot, dataset="fbx_mocap"))
     assert not config.preserve_human_knees
     assert config.body_scaling_mode == "uniform"
-    assert config.retargeter.sqp.first_frame_iterations == 50
-    assert config.retargeter.sqp.iterations == 10
 
 
-def test_fanqu_uses_a_larger_budget_without_extra_foot_objectives():
+def test_fanqu_keeps_chest_target_without_extra_foot_objectives():
     config = internal_config_from_command(RetargetingCommand(task="robot_only", robot="m5fanqu", dataset="fbx_mocap"))
-    assert config.retargeter.sqp.first_frame_iterations == 100
-    assert config.retargeter.sqp.iterations == 80
     assert config.retargeter.position_weights == {"Spine1": 1000.0}
     with pytest.raises(ValueError, match="knee reconstruction is removed"):
         internal_config_from_command(

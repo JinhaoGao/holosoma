@@ -1156,7 +1156,6 @@ def build_retargeter_kwargs_from_config(
         "foot_sticking_tolerance": retargeter_config.foot_sticking_tolerance,
         "self_collision": retargeter_config.self_collision,
         "step_size": retargeter_config.step_size,
-        "sqp": retargeter_config.sqp,
         "visualize": retargeter_config.visualize,
         "mesh_opacity": 1.0,
         "debug": retargeter_config.debug,

@@ -26,7 +26,6 @@ from holosoma_retargeting.config_types.retargeter import (
     RootStabilityConfig,
     SelfCollisionConfig,
     ShoulderDirectionConfig,
-    SQPConfig,
 )
 from holosoma_retargeting.data_utils.hand_skeleton import build_hand_visualization_spec
 from holosoma_retargeting.shoulder_direction import (
@@ -122,7 +121,6 @@ class InteractionMeshRetargeter:
         shoulder_direction: ShoulderDirectionConfig | None = None,
         natural_pose_joint_positions: dict[str, float] | None = None,
         natural_pose_weights: dict[str, float] | None = None,
-        sqp: SQPConfig | None = None,
     ):
         """This kinematic retargeter solves the diffIK problem with hard constraints in SQP style.
         During each SQP iteration, the problem is solved with the following constraints and costs:
@@ -179,7 +177,6 @@ class InteractionMeshRetargeter:
         if not np.isfinite(self.penetration_tolerance) or self.penetration_tolerance < 0:
             raise ValueError("penetration_tolerance must be finite and non-negative")
         self.step_size = step_size
-        self.sqp = sqp or SQPConfig()
         self.visualize = visualize
         self.mesh_opacity = float(mesh_opacity)
         self.debug = debug
@@ -2672,7 +2669,7 @@ class InteractionMeshRetargeter:
                     w_nominal_tracking=w_nominal_tracking,
                     q_a_nominal=(q_nominal_list[i, self.q_a_indices] if q_nominal_list is not None else None),
                     init_t=i == 0,
-                    n_iter=self.sqp.first_frame_iterations if i == 0 else self.sqp.iterations,
+                    n_iter=50 if i == 0 else 10,
                     frame_idx=i,
                     orientation_target_matrices=orientation_target_matrices[i],
                     shoulder_direction_targets=shoulder_direction_targets[i],
@@ -3993,11 +3990,9 @@ class InteractionMeshRetargeter:
         max_iterations = int(n_iter)
         if max_iterations <= 0:
             raise ValueError("n_iter must be positive")
-        convergence = getattr(self, "sqp", SQPConfig())
         last_cost = np.inf
         stop_reason = "max_iterations"
         for iteration_idx in range(max_iterations):
-            previous_q = q_n.copy()
             q_n, cost = self.solve_single_iteration(
                 mapped_position_targets=mapped_position_targets,
                 q_locked=q_locked,
@@ -4021,12 +4016,8 @@ class InteractionMeshRetargeter:
                 raise RuntimeError(
                     f"SQP returned a non-finite local cost at frame {frame_idx}, iteration {iteration_idx}: {cost}",
                 )
-            cost_stable = np.isclose(cost, last_cost, rtol=convergence.cost_rtol, atol=convergence.cost_atol)
-            step_stable = (
-                convergence.step_tolerance is None or np.max(np.abs(q_n - previous_q)) <= convergence.step_tolerance
-            )
-            if cost_stable and step_stable:
-                stop_reason = "cost_stable" if convergence.step_tolerance is None else "cost_and_step_stable"
+            if np.isclose(cost, last_cost):
+                stop_reason = "cost_stable"
                 break
             last_cost = cost
 

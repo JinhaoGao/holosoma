@@ -597,7 +597,6 @@ class RetargetingEntrypointTests(unittest.TestCase):
                 "activate_obj_non_penetration",
                 "penetration_tolerance",
                 "foot_sticking_tolerance",
-                "sqp",
                 "step_size",
                 "w_nominal_tracking_init",
                 "nominal_tracking_tau",

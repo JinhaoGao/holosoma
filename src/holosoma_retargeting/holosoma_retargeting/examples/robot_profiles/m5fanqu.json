@@ -106,9 +106,5 @@
   "body_scaling": {
     "mode": "robot_segments",
     "leg_length_scale": 1.12
-  },
-  "sqp": {
-    "first_frame_iterations": 100,
-    "iterations": 80
   }
 }

@@ -15,7 +15,6 @@ from holosoma_retargeting.config_types.retargeter import (
     RetargeterConfig,
     RootStabilityConfig,
     ShoulderDirectionConfig,
-    SQPConfig,
 )
 from holosoma_retargeting.config_types.robot import RobotConfig
 from holosoma_retargeting.config_types.robot_profiles import (
@@ -179,9 +178,6 @@ class RetargetingCommand:
 
     foot_sticking_tolerance: float | None = None
     """Override planted-foot XY tolerance in meters."""
-
-    sqp: SQPConfig | None = None
-    """Override the robot-profile iteration budget and stopping tolerances."""
 
     step_size: float | None = None
     """Override the SQP trust-region radius."""
@@ -347,7 +343,6 @@ def internal_config_from_command(command: RetargetingCommand) -> RetargetingConf
             robot_mujoco_xml_file=robot_mujoco_xml_file,
         ),
         retargeter=RetargeterConfig(
-            sqp=command.sqp if command.sqp is not None else profile.sqp,
             position_weights=dict(profile.position_weights_by_dataset.get(dataset, {})),
             visualize=command.retargeter.visualize,
             debug=command.retargeter.debug,

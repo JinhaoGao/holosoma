@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import isfinite
 from typing import Literal
 
 
@@ -73,29 +72,6 @@ class RootStabilityConfig:
 
 
 @dataclass(frozen=True)
-class SQPConfig:
-    """Iteration budget and stopping tolerances, independent of solver objectives."""
-
-    first_frame_iterations: int = 50
-    iterations: int = 10
-    cost_rtol: float = 1e-5
-    cost_atol: float = 1e-8
-    step_tolerance: float | None = None
-
-    def __post_init__(self) -> None:
-        for name in ("first_frame_iterations", "iterations"):
-            value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-                raise ValueError(f"SQP {name} must be a positive integer")
-        for name in ("cost_rtol", "cost_atol", "step_tolerance"):
-            value = getattr(self, name)
-            if value is None and name == "step_tolerance":
-                continue
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value) or value < 0:
-                raise ValueError(f"SQP {name} must be finite and non-negative")
-
-
-@dataclass(frozen=True)
 class RetargeterConfig:
     """Configuration for retargeter parameters.
 
@@ -150,9 +126,6 @@ class RetargeterConfig:
 
     foot_lock: FootLockConfig = field(default_factory=FootLockConfig)
     """Configuration for explicit frame-range based foot locking."""
-
-    sqp: SQPConfig = field(default_factory=SQPConfig)
-    """Per-frame iteration budget and convergence tolerances."""
 
     step_size: float = 0.2
     """Trust region for each SQP iteration."""

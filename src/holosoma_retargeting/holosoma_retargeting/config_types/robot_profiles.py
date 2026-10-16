@@ -10,10 +10,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 
 from holosoma_retargeting.config_types.data_type import MotionDataConfig
-from holosoma_retargeting.config_types.retargeter import (
-    ShoulderDirectionConfig,
-    SQPConfig,
-)
+from holosoma_retargeting.config_types.retargeter import ShoulderDirectionConfig
 
 ROBOT_PROFILE_SCHEMA_VERSION = 1
 ORIENTATION_PROFILE_DATASETS = (
@@ -78,7 +75,6 @@ class RobotProfile:
     robot_urdf_file: str
     robot_mujoco_xml_file: str
     retargeting: RetargetingProfileDefaults
-    sqp: SQPConfig
     shoulder_direction: ShoulderDirectionConfig
     orientation_enabled: bool
     orientation_preview: bool
@@ -392,10 +388,6 @@ def load_robot_profile(
     )
     if concrete_robot == "m5fanqu" and (scaling_mode != "robot_segments" or not preserve_human_knees):
         raise ValueError("m5fanqu requires source-preserving robot_segments scaling")
-    sqp_table = _object(profile.pop("sqp", {}), label="sqp")
-    if set(sqp_table).difference(field.name for field in fields(SQPConfig)):
-        raise ValueError("Unknown sqp fields")
-    sqp = SQPConfig(**sqp_table)  # type: ignore[arg-type]
     position_weights: dict[str, dict[str, float]] = {}
     for dataset, raw_weights in _object(profile.pop("position_weights", {}), label="position_weights").items():
         if dataset not in _ORIENTATION_DATA_FORMATS:
@@ -476,7 +468,6 @@ def load_robot_profile(
         robot_urdf_file=robot_urdf_file,
         robot_mujoco_xml_file=robot_mujoco_xml_file,
         retargeting=_load_retargeting_defaults(profile["retargeting"]),
-        sqp=sqp,
         shoulder_direction=_load_shoulder_direction(
             profile["shoulder_direction"],
         ),
