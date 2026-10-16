@@ -25,13 +25,7 @@
     <collision name="smallbox_collision_000">
       <origin rpy="0 0 0" xyz="0 0 0" />
       <geometry>
-        <mesh filename="collision/smallbox_collision_000.obj" scale="1 1 1" />
-      </geometry>
-    </collision>
-    <collision name="smallbox_collision_001">
-      <origin rpy="0 0 0" xyz="0 0 0" />
-      <geometry>
-        <mesh filename="collision/smallbox_collision_001.obj" scale="1 1 1" />
+        <mesh filename="smallbox.obj" scale="1 1 1" />
       </geometry>
     </collision>
   </link>

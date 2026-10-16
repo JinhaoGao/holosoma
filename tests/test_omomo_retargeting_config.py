@@ -200,7 +200,7 @@ class OmomoRetargetingObjectSetupTests(unittest.TestCase):
                         mujoco.mj_name2id(
                             model,
                             mujoco.mjtObj.mjOBJ_GEOM,
-                            f"{object_name}_visual",
+                            object_name,
                         ),
                         0,
                     )
@@ -274,44 +274,42 @@ class ObjectNonPenetrationToggleTests(unittest.TestCase):
             )
         )
 
-    def test_candidates_exclude_robot_self_collision_without_running_mj_collision(self):
+    def test_collision_prefilter_tracks_pose_and_excludes_same_body_parts(self):
         retargeter = InteractionMeshRetargeter.__new__(InteractionMeshRetargeter)
-        retargeter.object_name = "largebox"
-        retargeter.activate_obj_non_penetration = True
-        retargeter.robot_model = SimpleNamespace(
-            ngeom=5,
-            geom_contype=np.asarray([1, 1, 1, 1, 0], dtype=np.int32),
-            geom_conaffinity=np.asarray([1, 1, 1, 1, 0], dtype=np.int32),
+        retargeter.robot_model = mujoco.MjModel.from_xml_string(
+            """<mujoco><worldbody>
+            <body pos="0 0 0"><freejoint/>
+              <geom name="hand" type="sphere" size="0.1" margin="0.003"/>
+            </body>
+            <body pos="0.19 0 0"><freejoint/>
+              <geom name="box_a" type="sphere" size="0.1" margin="0.005"/>
+              <geom name="box_b" type="sphere" size="0.1" pos="0 0.05 0"/>
+            </body></worldbody></mujoco>""",
         )
-        geom_names = (
-            "ground",
-            "left_ankle_collision",
-            "right_ankle_collision",
-            "largebox_collision_000",
-            "visual_only",
-        )
-
-        with patch(
-            "holosoma_retargeting.src.interaction_mesh_retargeter.mujoco.mj_id2name",
-            side_effect=lambda _model, _object_type, geom_id: geom_names[geom_id],
-        ), patch(
-            "holosoma_retargeting.src.interaction_mesh_retargeter.mujoco.mj_collision",
-            side_effect=AssertionError("environment candidate generation must not run mj_collision"),
-        ):
-            candidates = retargeter._environment_collision_candidates()
-
-        self.assertEqual(
-            candidates,
-            frozenset(
-                {
-                    (0, 1),
-                    (0, 2),
-                    (1, 3),
-                    (2, 3),
-                }
-            ),
-        )
+        model = retargeter.robot_model
+        retargeter.robot_data = mujoco.MjData(model)
+        data = retargeter.robot_data
+        margins = model.geom_margin.copy()
+        mujoco.mj_forward(model, data)
+        candidates = retargeter._prefilter_pairs_with_mj_collision(0.1)
+        self.assertIn((0, 1), candidates)
         self.assertNotIn((1, 2), candidates)
+        np.testing.assert_array_equal(model.geom_margin, margins)
+        data.qpos[7] = 2.0
+        mujoco.mj_forward(model, data)
+        self.assertFalse(retargeter._prefilter_pairs_with_mj_collision(0.1))
+        np.testing.assert_array_equal(model.geom_margin, margins)
+
+    def test_collision_prefilter_restores_margins_after_failure(self):
+        retargeter = InteractionMeshRetargeter.__new__(InteractionMeshRetargeter)
+        retargeter.robot_model = SimpleNamespace(ngeom=0, geom_margin=np.array([0.003]))
+        retargeter.robot_data = SimpleNamespace()
+        with patch(
+            "holosoma_retargeting.src.interaction_mesh_retargeter.mujoco.mj_collision",
+            side_effect=RuntimeError("collision failed"),
+        ), self.assertRaisesRegex(RuntimeError, "collision failed"):
+            retargeter._prefilter_pairs_with_mj_collision(0.1)
+        np.testing.assert_array_equal(retargeter.robot_model.geom_margin, [0.003])
 
 
 class ObjectPointPayloadTests(unittest.TestCase):

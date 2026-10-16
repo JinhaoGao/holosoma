@@ -25,37 +25,7 @@
     <collision name="largetable_collision_000">
       <origin rpy="0 0 0" xyz="0 0 0" />
       <geometry>
-        <mesh filename="collision/largetable_collision_000.obj" scale="1 1 1" />
-      </geometry>
-    </collision>
-    <collision name="largetable_collision_001">
-      <origin rpy="0 0 0" xyz="0 0 0" />
-      <geometry>
-        <mesh filename="collision/largetable_collision_001.obj" scale="1 1 1" />
-      </geometry>
-    </collision>
-    <collision name="largetable_collision_002">
-      <origin rpy="0 0 0" xyz="0 0 0" />
-      <geometry>
-        <mesh filename="collision/largetable_collision_002.obj" scale="1 1 1" />
-      </geometry>
-    </collision>
-    <collision name="largetable_collision_003">
-      <origin rpy="0 0 0" xyz="0 0 0" />
-      <geometry>
-        <mesh filename="collision/largetable_collision_003.obj" scale="1 1 1" />
-      </geometry>
-    </collision>
-    <collision name="largetable_collision_004">
-      <origin rpy="0 0 0" xyz="0 0 0" />
-      <geometry>
-        <mesh filename="collision/largetable_collision_004.obj" scale="1 1 1" />
-      </geometry>
-    </collision>
-    <collision name="largetable_collision_005">
-      <origin rpy="0 0 0" xyz="0 0 0" />
-      <geometry>
-        <mesh filename="collision/largetable_collision_005.obj" scale="1 1 1" />
+        <mesh filename="largetable.obj" scale="1 1 1" />
       </geometry>
     </collision>
   </link>

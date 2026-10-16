@@ -43,6 +43,12 @@ class OmomoObjectAsset:
     mesh_sha256: str
 
     @property
+    def uses_source_mesh_collision(self) -> bool:
+        """Whether MuJoCo should use the source mesh's single convex hull."""
+
+        return self.collision_mesh_paths == (self.mesh_path,)
+
+    @property
     def body_name(self) -> str:
         """MuJoCo and URDF link name."""
 
@@ -52,23 +58,23 @@ class OmomoObjectAsset:
     def mesh_name(self) -> str:
         """MuJoCo visual-mesh asset name."""
 
-        return f"{self.name}_visual_mesh"
+        return f"{self.name}_mesh" if self.uses_source_mesh_collision else f"{self.name}_visual_mesh"
 
     @property
     def visual_geom_name(self) -> str:
         """MuJoCo visual-only geom name."""
 
-        return f"{self.name}_visual"
+        return self.name if self.uses_source_mesh_collision else f"{self.name}_visual"
 
     def collision_mesh_name(self, index: int) -> str:
         """MuJoCo mesh asset name for one convex collision part."""
 
-        return f"{self.name}_collision_mesh_{index:03d}"
+        return self.mesh_name if self.uses_source_mesh_collision else f"{self.name}_collision_mesh_{index:03d}"
 
     def collision_geom_name(self, index: int) -> str:
         """MuJoCo geom name for one convex collision part."""
 
-        return f"{self.name}_collision_{index:03d}"
+        return self.name if self.uses_source_mesh_collision else f"{self.name}_collision_{index:03d}"
 
     @property
     def joint_name(self) -> str:
@@ -115,7 +121,8 @@ def get_omomo_object_asset(
         raise ValueError(f"Unknown OMOMO object {object_name!r}; supported objects: {supported}")
     root = Path(models_root).expanduser() if models_root is not None else default_models_root()
     object_dir = root / object_name
-    collision_mesh_paths = tuple(sorted((object_dir / "collision").glob(f"{object_name}_collision_*.obj")))
+    # Match main for every object: MuJoCo builds one hull from the source mesh.
+    collision_mesh_paths = (object_dir / f"{object_name}.obj",)
     return OmomoObjectAsset(
         name=object_name,
         mesh_path=object_dir / f"{object_name}.obj",
@@ -175,6 +182,9 @@ def validate_omomo_object_asset(
         raise ValueError(f"OMOMO object mesh extents are not plausible meters: {asset.name}={extents_array.tolist()}")
 
     for collision_path in asset.collision_mesh_paths:
+        if asset.uses_source_mesh_collision:
+            # The source geometry was validated above; MuJoCo builds its hull.
+            continue
         if not collision_path.is_file():
             raise FileNotFoundError(f"OMOMO collision mesh not found: {collision_path}")
         collision_mesh = trimesh.load(collision_path, force="mesh", process=False)
@@ -314,6 +324,8 @@ def create_omomo_object_scene(
         },
     )
     for index, collision_mesh_path in enumerate(asset.collision_mesh_paths):
+        if asset.uses_source_mesh_collision:
+            continue
         collision_reference = Path(os.path.relpath(collision_mesh_path.resolve(), mesh_dir)).as_posix()
         ET.SubElement(
             asset_element,
@@ -336,21 +348,29 @@ def create_omomo_object_scene(
             "diaginertia": "0.002 0.002 0.002",
         },
     )
-    ET.SubElement(
+    visual_geom = ET.SubElement(
         body,
         "geom",
         {
             "name": asset.visual_geom_name,
             "type": "mesh",
             "mesh": asset.mesh_name,
-            "contype": "0",
-            "conaffinity": "0",
+            "contype": "1" if asset.uses_source_mesh_collision else "0",
+            "conaffinity": "1" if asset.uses_source_mesh_collision else "0",
             "pos": "0 0 0",
             "quat": "1 0 0 0",
             "rgba": "0.7 0.8 0.9 0.7",
         },
     )
+    if asset.uses_source_mesh_collision:
+        visual_geom.attrib.update(
+            friction="0.9 0.5 0.5",
+            solref="0.02 1",
+            solimp="0.9 0.95 0.001",
+        )
     for index in range(len(asset.collision_mesh_paths)):
+        if asset.uses_source_mesh_collision:
+            continue
         ET.SubElement(
             body,
             "geom",

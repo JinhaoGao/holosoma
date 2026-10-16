@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Protocol
 
 import mujoco
 import numpy as np
@@ -80,12 +82,12 @@ class MultiResultViserConfig:
     """Interpolation multiplier for smooth playback."""
 
     x_offset: float = 0.6
-    """Spacing between the human reference and robot result groups."""
+    """Spacing between result groups, each with its own human reference."""
 
-    robot_mesh_opacity: float = 0.5
+    robot_mesh_opacity: float = 0.8
     """Opacity of the color-coded robot meshes."""
 
-    object_mesh_opacity: float = 0.30
+    object_mesh_opacity: float = 0.8
     """Opacity of object meshes when object poses are present."""
 
     show_robot_mesh: bool = True
@@ -95,7 +97,7 @@ class MultiResultViserConfig:
     """Show object or scene meshes for all motions."""
 
     show_human_skeleton: bool = True
-    """Show one shared source-human reference made from mapped keypoints."""
+    """Show each result's source-human reference made from mapped keypoints."""
 
     show_robot_skeleton: bool = True
     """Show mapped robot keypoints and skeletons for all motions."""
@@ -167,6 +169,13 @@ class MultiResultViserConfig:
     """Length of each solid orientation arrow head."""
 
 
+class _PointsHandle(Protocol):
+    """Mutable point geometry shared by Viser point, line and arrow handles."""
+
+    visible: bool
+    points: np.ndarray
+
+
 @dataclass(frozen=True)
 class HumanSkeletonTrajectory:
     """Source-human trajectories required by the reference layer."""
@@ -180,16 +189,16 @@ class HumanSkeletonTrajectory:
 
 @dataclass
 class HumanReferenceOverlay:
-    """Shared mapped human skeleton and target link-frame axes."""
+    """One result's mapped human skeleton and target link-frame axes."""
 
     trajectory: HumanSkeletonTrajectory
     offset: np.ndarray
-    joints_handle: object
-    bones_handle: object
+    joints_handle: _PointsHandle
+    bones_handle: _PointsHandle
     diagnostics: OrientationDiagnostics | None
     joint_indices: np.ndarray
     axis_point_indices: np.ndarray
-    target_axes: object | None
+    target_axes: _PointsHandle | None
     axis_length: float
     target_visible: bool
     loop: bool
@@ -239,8 +248,8 @@ class HumanHandsOverlay:
     keypoint_indices: np.ndarray
     edge_indices: np.ndarray
     offset: np.ndarray
-    joints_handle: object
-    bones_handle: object
+    joints_handle: _PointsHandle
+    bones_handle: _PointsHandle
     loop: bool
     enabled: bool = True
 
@@ -269,8 +278,8 @@ class RobotSkeletonOverlay:
     points: np.ndarray
     edges: tuple[tuple[int, int], ...]
     offset: np.ndarray
-    joints_handle: object
-    bones_handle: object
+    joints_handle: _PointsHandle
+    bones_handle: _PointsHandle
     loop: bool
     enabled: bool = True
 
@@ -303,7 +312,7 @@ class OrientationOverlay:
     skeleton_points: np.ndarray
     axis_point_indices: np.ndarray
     offset: np.ndarray
-    robot_axes: object
+    robot_axes: _PointsHandle
     axis_length: float
     robot_visible: bool
     loop: bool
@@ -350,13 +359,17 @@ class ComparisonScene:
     color: tuple[int, int, int]
     offset: np.ndarray
     robot: ViserUrdf
-    robot_root: object
+    robot_root: viser.FrameHandle
     object_visual: ViserUrdf | None
-    object_root: object | None
+    object_root: viser.FrameHandle | None
     contains_object: bool
     qpos_to_viser_joint_indices: np.ndarray | None
     robot_skeleton: RobotSkeletonOverlay
     orientation_overlay: OrientationOverlay | SavedOrientationAxesOverlay | None
+    group_root: viser.FrameHandle | None = None
+    human_reference: HumanReferenceOverlay | None = None
+    human_hands: HumanHandsOverlay | None = None
+    source_orientation_overlay: SavedOrientationAxesOverlay | None = None
     object_keypoints_overlay: ObjectKeypointOverlay | None = None
     point_cloud_overlay: RetargetingPointCloudOverlay | None = None
     interaction_mesh_overlay: InteractionMeshOverlay | None = None
@@ -381,9 +394,19 @@ class ComparisonScene:
             or self.object_keypoints_enabled
             or self.point_clouds_enabled
             or self.interaction_mesh_enabled
+            or (self.human_reference is not None and self.human_reference.enabled)
+            or (
+                self.human_reference is not None
+                and self.human_reference.target_axes is not None
+                and self.human_reference.target_visible
+            )
+            or (self.human_hands is not None and self.human_hands.enabled)
+            or (self.source_orientation_overlay is not None and self.source_orientation_overlay.enabled)
         )
 
     def _refresh_visibility(self) -> None:
+        if self.group_root is not None:
+            self.group_root.visible = self.motion_visible
         self.robot.show_visual = self.motion_visible and self.robot_mesh_enabled
         if self.object_visual is not None:
             self.object_visual.show_visual = self.motion_visible and self.object_mesh_enabled
@@ -489,7 +512,7 @@ def comparison_offsets(
     result_count: int,
     x_offset: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Overlay the human reference on the first robot and space only extra results."""
+    """Return the first group offset and centered offsets for all result groups."""
 
     if result_count < 1:
         raise ValueError("result_count must be positive")
@@ -1034,6 +1057,7 @@ def _make_full_robot_orientation_overlay(
 def _make_source_orientation_overlay(
     *,
     server,
+    namespace: str,
     result: VariantResult,
     offset: np.ndarray,
     config: MultiResultViserConfig,
@@ -1059,7 +1083,7 @@ def _make_source_orientation_overlay(
         return None
     return SavedOrientationAxesOverlay(
         server=server,
-        namespace="/reference_human/orientation/source",
+        namespace=f"{namespace}/orientation/source",
         names=tuple(result.human_orientation_joint_names[int(index)] for index in selected),
         positions=(result.human_joints[:, point_indices[selected]] + offset),
         quaternions_wxyz=(result.human_orientation_quaternions_wxyz[:, selected]),
@@ -1104,7 +1128,6 @@ def make_multi_result_player(
     if config.orientation_axis_head_length >= (config.orientation_axis_length * _TARGET_AXIS_LENGTH_SCALE):
         raise ValueError("orientation_axis_head_length must be shorter than the target arrows")
     orientation_diagnostics = [result.orientation_diagnostics for result in results]
-    reference_skeleton = load_human_skeleton(reference)
     robot_fk_model = None
     needs_legacy_orientation_fk = any(
         diagnostics is not None and result.robot_link_quaternions_wxyz is None
@@ -1140,53 +1163,9 @@ def make_multi_result_player(
     scenes: list[ComparisonScene] = []
     robot_dof: int | None = None
     driver_joint_order_indices: np.ndarray | None = None
-    human_offset, robot_offsets = comparison_offsets(
+    _, robot_offsets = comparison_offsets(
         len(results),
         config.x_offset,
-    )
-    reference_diagnostics = next(
-        (diagnostics for diagnostics in orientation_diagnostics if diagnostics is not None),
-        None,
-    )
-    reference_joint_indices = (
-        orientation_joint_indices(
-            reference_diagnostics,
-            config.orientation_joints,
-        )
-        if reference_diagnostics is not None
-        else np.empty((0,), dtype=np.int32)
-    )
-    reference_axis_point_indices = (
-        orientation_skeleton_point_indices(
-            reference_diagnostics,
-            reference_skeleton.joint_names,
-            reference.mapped_robot_link_names,
-        )[reference_joint_indices]
-        if reference_diagnostics is not None
-        else np.empty((0,), dtype=np.int32)
-    )
-    human_reference = _make_human_reference_overlay(
-        server=server,
-        namespace="/reference_human",
-        trajectory=reference_skeleton,
-        diagnostics=reference_diagnostics,
-        joint_indices=reference_joint_indices,
-        axis_point_indices=reference_axis_point_indices,
-        offset=human_offset,
-        config=config,
-    )
-    source_orientation_overlay = _make_source_orientation_overlay(
-        server=server,
-        result=reference,
-        offset=human_offset,
-        config=config,
-    )
-    human_hands = _make_human_hands_overlay(
-        server=server,
-        namespace="/reference_human",
-        trajectory=reference_skeleton,
-        offset=human_offset,
-        config=config,
     )
 
     for index, (label, result, diagnostics, object_urdf) in enumerate(
@@ -1201,6 +1180,47 @@ def make_multi_result_player(
         color = comparison_color(index)
         namespace = f"/groups/{index:02d}_{label}"
         offset = robot_offsets[index]
+        group_root = server.scene.add_frame(namespace, show_axes=False)
+        human_namespace = f"{namespace}/reference_human"
+        human_skeleton = load_human_skeleton(result)
+        human_joint_indices = (
+            orientation_joint_indices(diagnostics, config.orientation_joints)
+            if diagnostics is not None
+            else np.empty((0,), dtype=np.int32)
+        )
+        human_axis_point_indices = (
+            orientation_skeleton_point_indices(
+                diagnostics,
+                human_skeleton.joint_names,
+                result.mapped_robot_link_names,
+            )[human_joint_indices]
+            if diagnostics is not None
+            else np.empty((0,), dtype=np.int32)
+        )
+        human_reference = _make_human_reference_overlay(
+            server=server,
+            namespace=human_namespace,
+            trajectory=human_skeleton,
+            diagnostics=diagnostics,
+            joint_indices=human_joint_indices,
+            axis_point_indices=human_axis_point_indices,
+            offset=offset,
+            config=config,
+        )
+        source_orientation_overlay = _make_source_orientation_overlay(
+            server=server,
+            namespace=human_namespace,
+            result=result,
+            offset=offset,
+            config=config,
+        )
+        human_hands = _make_human_hands_overlay(
+            server=server,
+            namespace=human_namespace,
+            trajectory=human_skeleton,
+            offset=offset,
+            config=config,
+        )
         robot_skeleton = _make_robot_skeleton_overlay(
             server=server,
             namespace=namespace,
@@ -1373,6 +1393,10 @@ def make_multi_result_player(
                 qpos_to_viser_joint_indices=qpos_to_viser_joint_indices,
                 robot_skeleton=robot_skeleton,
                 orientation_overlay=orientation_overlay,
+                group_root=group_root,
+                human_reference=human_reference,
+                human_hands=human_hands,
+                source_orientation_overlay=source_orientation_overlay,
                 object_keypoints_overlay=object_keypoints_overlay,
                 point_cloud_overlay=point_cloud_overlay,
                 interaction_mesh_overlay=interaction_mesh_overlay,
@@ -1401,6 +1425,14 @@ def make_multi_result_player(
         *,
         update_articulation: bool,
     ) -> None:
+        if scene.human_reference is not None and (
+            scene.human_reference.enabled or scene.human_reference.target_visible
+        ):
+            scene.human_reference.update(frame_float)
+        if scene.source_orientation_overlay is not None and scene.source_orientation_overlay.enabled:
+            scene.source_orientation_overlay.draw(frame_float)
+        if scene.human_hands is not None and scene.human_hands.enabled:
+            scene.human_hands.update(frame_float)
         if scene.skeleton_enabled:
             scene.robot_skeleton.update(frame_float)
         if update_articulation:
@@ -1459,12 +1491,6 @@ def make_multi_result_player(
 
     def _render_comparison(driver_q: np.ndarray, frame_float: float) -> None:
         last_frame["value"] = float(frame_float)
-        if human_reference.enabled or human_reference.target_visible:
-            human_reference.update(frame_float)
-        if source_orientation_overlay is not None and source_orientation_overlay.enabled:
-            source_orientation_overlay.draw(frame_float)
-        if human_hands is not None and human_hands.enabled:
-            human_hands.update(frame_float)
         if foot_sticking_status_handle is not None:
             foot_sticking_status_handle.content = _foot_sticking_markdown(frame_float)
         for index, scene in enumerate(scenes):
@@ -1490,6 +1516,30 @@ def make_multi_result_player(
 
     layer_controller = LayerController()
 
+    def _set_all_scenes(update: Callable[[ComparisonScene], None]) -> None:
+        for scene in scenes:
+            update(scene)
+
+    def _set_all_human_skeletons(visible: bool) -> None:
+        for scene in scenes:
+            if scene.human_reference is not None:
+                scene.human_reference.set_enabled(visible)
+
+    def _set_all_human_hands(visible: bool) -> None:
+        for scene in scenes:
+            if scene.human_hands is not None:
+                scene.human_hands.set_enabled(visible)
+
+    def _set_all_target_orientations(visible: bool) -> None:
+        for scene in scenes:
+            if scene.human_reference is not None:
+                scene.human_reference.set_target_visible(visible)
+
+    def _set_all_source_orientations(visible: bool) -> None:
+        for scene in scenes:
+            if scene.source_orientation_overlay is not None:
+                scene.source_orientation_overlay.set_visible(visible)
+
     def _set_all_robot_skeletons(visible: bool) -> None:
         for scene in scenes:
             scene.set_skeleton_enabled(visible)
@@ -1500,20 +1550,20 @@ def make_multi_result_player(
         LayerId.ROBOT_MESH,
         available=True,
         visible=config.show_robot_mesh,
-        callback=lambda visible: [scene.set_robot_mesh_enabled(visible) for scene in scenes],
+        callback=lambda visible: _set_all_scenes(lambda scene: scene.set_robot_mesh_enabled(visible)),
     )
     layer_controller.register(
         LayerId.OBJECT_MESH,
         available=any(scene.object_visual is not None for scene in scenes),
         visible=config.show_object_mesh,
-        callback=lambda visible: [scene.set_object_mesh_enabled(visible) for scene in scenes],
+        callback=lambda visible: _set_all_scenes(lambda scene: scene.set_object_mesh_enabled(visible)),
         unavailable_reason="No input contains a resolved object or scene asset.",
     )
     layer_controller.register(
         LayerId.HUMAN_SKELETON,
         available=True,
         visible=config.show_human_skeleton,
-        callback=human_reference.set_enabled,
+        callback=_set_all_human_skeletons,
     )
     layer_controller.register(
         LayerId.ROBOT_SKELETON,
@@ -1523,30 +1573,30 @@ def make_multi_result_player(
     )
     layer_controller.register(
         LayerId.HUMAN_HANDS,
-        available=human_hands is not None,
+        available=any(scene.human_hands is not None for scene in scenes),
         visible=config.show_human_hands,
-        callback=lambda visible: human_hands.set_enabled(visible) if human_hands is not None else None,
+        callback=_set_all_human_hands,
         unavailable_reason="The source joint set has no registered finger chains.",
     )
     layer_controller.register(
         LayerId.OBJECT_KEYPOINTS,
         available=any(scene.object_keypoints_overlay is not None for scene in scenes),
         visible=config.show_object_keypoints,
-        callback=lambda visible: [scene.set_object_keypoints_enabled(visible) for scene in scenes],
+        callback=lambda visible: _set_all_scenes(lambda scene: scene.set_object_keypoints_enabled(visible)),
         unavailable_reason="No input contains saved demonstration/target object samples.",
     )
     layer_controller.register(
         LayerId.RETARGETING_POINT_CLOUDS,
         available=any(scene.point_cloud_overlay is not None for scene in scenes),
         visible=config.show_point_clouds,
-        callback=lambda visible: [scene.set_point_clouds_enabled(visible) for scene in scenes],
+        callback=lambda visible: _set_all_scenes(lambda scene: scene.set_point_clouds_enabled(visible)),
         unavailable_reason="No input contains saved retargeting point clouds.",
     )
     layer_controller.register(
         LayerId.INTERACTION_MESH,
         available=any(scene.interaction_mesh_overlay is not None for scene in scenes),
         visible=config.show_interaction_mesh,
-        callback=lambda visible: [scene.set_interaction_mesh_enabled(visible) for scene in scenes],
+        callback=lambda visible: _set_all_scenes(lambda scene: scene.set_interaction_mesh_enabled(visible)),
         unavailable_reason="No input contains saved interaction vertices and tetrahedra.",
     )
     layer_controller.register(
@@ -1562,27 +1612,25 @@ def make_multi_result_player(
     )
     layer_controller.register(
         LayerId.TARGET_ORIENTATION,
-        available=human_reference.target_axes is not None,
+        available=any(
+            scene.human_reference is not None and scene.human_reference.target_axes is not None for scene in scenes
+        ),
         visible=config.show_target_orientation_axes,
-        callback=human_reference.set_target_visible,
+        callback=_set_all_target_orientations,
         unavailable_reason="No input contains saved target orientation frames.",
     )
     layer_controller.register(
         LayerId.SOURCE_ORIENTATION,
-        available=source_orientation_overlay is not None,
+        available=any(scene.source_orientation_overlay is not None for scene in scenes),
         visible=config.show_source_orientation_axes,
-        callback=lambda visible: (
-            source_orientation_overlay.set_visible(visible) if source_orientation_overlay is not None else None
-        ),
-        unavailable_reason=(
-            "The reference result does not contain a directly observed source-human orientation subset."
-        ),
+        callback=_set_all_source_orientations,
+        unavailable_reason="No input contains a directly observed source-human orientation subset.",
     )
     layer_controller.register(
         LayerId.ROBOT_ORIENTATION,
         available=any(scene.orientation_overlay is not None for scene in scenes),
         visible=config.show_robot_orientation_axes,
-        callback=lambda visible: [scene.set_robot_orientation_enabled(visible) for scene in scenes],
+        callback=lambda visible: _set_all_scenes(lambda scene: scene.set_robot_orientation_enabled(visible)),
         unavailable_reason="No input contains saved robot orientation frames.",
     )
     for unavailable_layer, reason in (
@@ -1684,6 +1732,7 @@ def make_multi_result_player(
                         scene_ref.set_robot_orientation_enabled(layer_controller.is_visible(LayerId.ROBOT_ORIENTATION))
                         scene_ref.set_object_keypoints_enabled(layer_controller.is_visible(LayerId.OBJECT_KEYPOINTS))
                         scene_ref.set_interaction_mesh_enabled(layer_controller.is_visible(LayerId.INTERACTION_MESH))
+                        scene_ref.set_enabled(True)
 
                     @mesh_ref.on_update
                     def _(_event) -> None:
@@ -1774,7 +1823,7 @@ def make_multi_result_player(
         else:
             print("    orientation arrows: unavailable in this result")
     print(
-        "  human reference: overlaid on the first robot, "
+        "  human references: overlaid on every robot using each result's saved trajectory, "
         "charcoal mapped-keypoint skeleton + anchored target RGB link axes"
     )
     print("Open the viewer URL printed above. Close the process (Ctrl+C) to exit.")

@@ -3965,7 +3965,7 @@ class InteractionMeshRetargeter:
 
         if not hasattr(self, "_geom_names"):
             raise RuntimeError(
-                "[SelfCollision] _geom_names not initialized. Please build environment collision candidates first."
+                "[SelfCollision] _geom_names not initialized. Please run _prefilter_pairs_with_mj_collision first."
             )
 
         _first_iter = self._sc_last_vis_frame != frame_idx
@@ -4352,43 +4352,21 @@ class InteractionMeshRetargeter:
 
         return nhat_BA_W @ Jc
 
-    def _environment_collision_candidates(self):
-        """Return collision-mask-compatible ground and object geom pairs.
-
-        The candidate set depends only on the compiled model and retargeter
-        configuration, so build it once instead of running MuJoCo's complete
-        collision pipeline during every SQP iteration.  In particular, this
-        avoids generating contact manifolds for robot self-collision pairs
-        that are discarded by the environment constraints anyway.
-        """
-
-        cached_candidates = getattr(self, "_environment_collision_candidates_cache", None)
-        if cached_candidates is not None:
-            return cached_candidates
-
-        m = self.robot_model
-        ngeom = m.ngeom
-
-        self._geom_names = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g) or "" for g in range(ngeom)]
-        candidates = set()
-        contype, conaff = m.geom_contype, m.geom_conaffinity
-        for g1 in range(ngeom):
-            if contype[g1] == 0 and conaff[g1] == 0:
-                continue
-            for g2 in range(g1 + 1, ngeom):
-                if contype[g2] == 0 and conaff[g2] == 0:
-                    continue
-                masks_match = (int(contype[g1]) & int(conaff[g2])) or (int(contype[g2]) & int(conaff[g1]))
-                if not masks_match:
-                    continue
-                if self._environment_collision_pair_is_active(
-                    self._geom_names[g1],
-                    self._geom_names[g2],
-                ):
-                    candidates.add((g1, g2))
-
-        self._environment_collision_candidates_cache = frozenset(candidates)
-        return self._environment_collision_candidates_cache
+    def _prefilter_pairs_with_mj_collision(self, threshold: float):
+        """Use main's per-pose collision prefilter, including MuJoCo body filters."""
+        m, d = self.robot_model, self.robot_data
+        self._geom_names = [mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g) or "" for g in range(m.ngeom)]
+        saved_margins = m.geom_margin.copy()
+        try:
+            m.geom_margin[:] = threshold
+            mujoco.mj_collision(m, d)
+            return {
+                (min(int(contact.geom1), int(contact.geom2)), max(int(contact.geom1), int(contact.geom2)))
+                for contact in d.contact
+                if contact.geom1 >= 0 and contact.geom2 >= 0
+            }
+        finally:
+            m.geom_margin[:] = saved_margins
 
     def _update_jacobians_and_phis_from_q(self, q: np.ndarray):
         self.robot_data.qpos[:] = q
@@ -4398,14 +4376,17 @@ class InteractionMeshRetargeter:
         m, d = self.robot_model, self.robot_data
         threshold = float(self.collision_detection_threshold)
 
-        # Candidate topology is static; precise distances are evaluated below.
-        candidates = self._environment_collision_candidates()
+        candidates = self._prefilter_pairs_with_mj_collision(threshold)
 
         Js, phis = {}, {}
         fromto = np.zeros(6, dtype=float)
 
         # Compute precise distances only for relevant environment pairs.
         for g1, g2 in candidates:
+            if not self._environment_collision_pair_is_active(self._geom_names[g1], self._geom_names[g2]):
+                continue
+            if any(m.geom_contype[g] == 0 and m.geom_conaffinity[g] == 0 for g in (g1, g2)):
+                continue
             fromto[:] = 0.0
             dist = mujoco.mj_geomDistance(m, d, g1, g2, threshold, fromto)
             if dist <= threshold:
