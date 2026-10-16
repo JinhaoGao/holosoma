@@ -1,278 +1,284 @@
-# Holosoma 人体到机器人重定向
+# Holosoma 动作重定向
 
-当前生产设计包含三个重定向入口。`examples/robot_retarget.py` 对一个明确指定的动作执行普通重定向，`examples/parallel_robot_retarget.py` 对一个明确指定的 object-interaction 或 climbing 动作执行 identity 与增强变体。第二个入口名称中的 `parallel` 是历史名称，不表示遍历数据集；两个入口都不会自动扫描并重定向全部动作。`paired_retargeting/robot_refine.py` 读取两份同步的 robot-only 结果，在保留两条 nominal 轨迹的同时执行跨 actor 联合 refinement；双人部分的配置、求解、结果、场景和可视化均集中在 `paired_retargeting/`，完整契约见 [paired_retargeting/README.md](paired_retargeting/README.md)。
+中文 | [English](README.md)
 
-对于来自同一个多 actor FBX 的结果，联合 refinement 会恢复转换阶段保存的 `source_xy_origin_m` 相对偏移，将恢复后的相对 root 位置和跨 actor Interaction Mesh 一起纳入优化。联合结果使用项目现有的 Viser 播放控件和图层系统显示两个机器人、源人体骨架、优化后的机器人映射骨架以及 Interaction Mesh，不使用 MuJoCo viewer，也不会为了排版给任一 actor 添加额外显示偏移。播放器还会从两份单机器人结果追溯到 actor 级 FBX 转换数据，并提供独立的 `Original FBX skeletons` 图层；该图层不进行任何尺度变换，只通过一个共同平移恢复原始 actor XY 和共享地面，因此保留 FBX 的原始人体尺寸、两人间距和高度差，两幅骨架统一显示为黑色。现有 `Human skeleton` 图层继续保留各 actor 经过机器人尺度预处理后的参考骨架。
+<!-- 维护约定：保持本文档稳定，仅在仓库维护者明确确认后修改，并同步更新中英文。 -->
 
-命令默认从本目录执行：
+将人体动作重定向到人形机器人，支持纯机器人动作、物体交互和攀爬任务。
+
+支持的数据入口为 OMOMO（`OMOMO_new`）、LAFAN（`lafan`）、AMASS SMPL-X（`amass`）、GVHMR（`gvhmr`）、FBX（`fbx_mocap`）、Noetix BVH（`noetix_mocap`）、攀爬动捕（`climbing`）和 Noetix 攀爬 CSV（`noetix_csv_climb`）。输入文件与转换步骤见下方“数据准备”。
+
+通过 `--robot` 选择机器人：G1（`g1`，29 自由度）、E1（`e1_23dof` / `e1_24dof`）、E2（`e2`，23 自由度），以及 M4G / M5C / M5D / M5E / M5 反屈（`m4g` / `m5c` / `m5d` / `m5e` / `m5fanqu`，17 自由度）。`e1` 是 `e1_23dof` 的兼容名称。这些机器人支持 `robot_only`；物体交互和攀爬目前仅支持 G1。
+
+先完成[重定向环境安装](../../../README.md#setup)并激活对应环境，再从以下目录执行命令。示例中的 `/path/to/...` 和动作名需要替换为自己的路径与文件。
 
 ```bash
 cd src/holosoma_retargeting/holosoma_retargeting
 ```
 
-## 最简用法
+转换工具会生成以米为单位的世界坐标人体关节位置 `(T, J, 3)`，并保存对应格式所需的信息。原始数据请使用匹配的转换工具；仅数组形状相同的任意 NPZ 不能直接作为输入。
 
-对 LAFAN 的一个动作重定向到 E2：
+## 单动作重定向
 
-```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot e2 \
-  --dataset lafan \
-  --motion walk2_subject3
-```
-
-对 GVHMR 的一个动作重定向到 G1：
+将仓库自带的 OMOMO 示例重定向到 G1：
 
 ```bash
 python examples/robot_retarget.py \
-  --task robot_only \
-  --robot g1 \
-  --dataset gvhmr \
-  --motion tennis
+  --task robot_only --robot g1 \
+  --dataset OMOMO_new --motion sub3_largebox_003
 ```
 
-对 OMOMO 的一个 object-interaction 动作执行 G1 增强重定向：
+修改 `--robot` 即可选择其他支持的机器人。`--motion` 填写不含扩展名的文件名，有子目录时填写相对数据根目录的路径，名称含空格时加引号。结果保存到 `demo_results/<robot>/<task>/<dataset>/<motion>.npz`。
+
+生成单个 G1 物体交互结果时，将任务改为 `object_interaction`；该任务只接受 `OMOMO_new`。攀爬任务接受 `climbing` 或 `noetix_csv_climb`，示例见“数据准备”。
+
+### 可选参数
+
+在主命令后追加 `--data-path /path/to/dataset` 可指定数据根目录，`--save-dir /path/to/results` 可指定结果根目录，`--output-name custom.npz` 只修改最终文件名。已有结果会被复用，需要重新生成时追加 `--overwrite`。
+
+实时 Viser 可视化默认开启。无界面运行时追加 `--retargeter.no-visualize`；需要诊断图层时追加 `--retargeter.debug`，求解结束后按 Enter 退出。
+
+机器人默认参数读取自 [robot_profiles](examples/robot_profiles/)，显式命令行参数优先于对应 JSON。使用 `--robot-profile /path/to/robot.json` 可选择另一份配置。
+
+动作调节方面，`--foot-sticking False` 关闭足底平面接触约束，`--orientation-tracking True` 启用源朝向跟踪，`--shoulder-direction-tracking True` 跟踪上臂方向。源朝向跟踪需要朝向数据，旧版仅含位置的 NPY 不支持此项。
+
+使用 `--natural-pose-tracking True` 可启用配置中的自然姿态参考；`--root-position-weight 数值` 和 `--root-orientation-weight 数值` 分别设置跟踪源根位置、根朝向的非负权重。
+
+完整参数见 `python examples/robot_retarget.py --help`。这些公共参数同样适用于下方的增强重定向命令。
+
+### 双角色联合优化
+
+先分别通过 `robot_only` 生成两个角色的结果。两份结果需要帧数、帧率、源格式和坐标约定一致，并保留人体参考数据；FBX 角色需要来自同一个 FBX 文件。随后执行联合优化：
+
+```bash
+python -m holosoma_retargeting.paired_retargeting.robot_refine \
+  --actor-a.name actor_a --actor-a.result-path /path/to/actor_a.npz \
+  --actor-b.name actor_b --actor-b.result-path /path/to/actor_b.npz \
+  --output-path demo_results/paired_refined.npz
+```
+
+可选参数：`--visualize` 在优化后打开结果；`--contacts-path /path/to/contacts.json` 指定接触关系。接触与碰撞配置详见[双角色说明](paired_retargeting/README.md)。
+
+## 增强重定向
+
+生成一个 G1 动作及其增强变体。此命令处理指定动作，不遍历整个数据集。
 
 ```bash
 python examples/parallel_robot_retarget.py \
-  --task object_interaction \
-  --robot g1 \
-  --dataset OMOMO_new \
-  --motion sub3_largebox_003
+  --task object_interaction --robot g1 \
+  --dataset OMOMO_new --motion sub3_largebox_003
 ```
 
-对已有 climbing 动作执行 G1 增强重定向：
+物体交互会生成原始轨迹及平移、旋转变体。攀爬可使用 `--task climbing --dataset climbing --motion mocap_climb_seq_0`，也可选择已准备好的 `noetix_csv_climb` 动作，增强变体会缩放地形高度。原始轨迹会自动首先生成。
+
+结果保存到 `demo_results_parallel/<robot>/<task>/<dataset>/<motion>.npz`，增强文件在同目录下命名为 `<motion>_<variant>.npz`。可追加上方公共参数；增强入口仅支持 G1 物体交互和攀爬任务。
+
+## 数据准备
+
+已有对应格式的转换后数据时，可跳过转换步骤。数据转换命令可以处理目录，重定向命令则选择其中一个动作。
+
+### OMOMO
+
+使用官方指南中的 [InterMimic 处理版 OMOMO](https://drive.google.com/file/d/141YoPOd2DlJ4jhU2cpZO5VU5GzV_lm5j/view)，将 `.pt` 文件解压到 `demo_data/OMOMO_new/`。原始 OMOMO 发布数据的格式不同。这里不需要额外的人体动作转换，使用上方单动作或增强示例中的 `--dataset OMOMO_new` 即可。
+
+### LAFAN
+
+下载并解压 [LAFAN1](https://github.com/ubisoft/ubisoft-laforge-animation-dataset/blob/master/lafan1/lafan1.zip)。转换器读取输入目录直属的 BVH 文件。若缺少 `data_utils/lafan1/`，先安装一次 BVH 读取工具：
 
 ```bash
-python examples/parallel_robot_retarget.py \
-  --task climbing \
-  --robot g1 \
-  --dataset climbing \
-  --motion mocap_climb_seq_0
+git clone https://github.com/ubisoft/ubisoft-laforge-animation-dataset.git data_utils/lafan_source
+cp -r data_utils/lafan_source/lafan1 data_utils/lafan1
 ```
 
-命令只要求选择任务、机器人、数据集和一个动作。求解时的 Viser
-可视化默认开启；`--retargeter.debug` 会增加人体/机器人映射关键点、
-手骨架和 object 点云等诊断图层，并在完成后等待 Enter；
-`--retargeter.no-visualize` 用于无界面或批处理环境。数据不在仓库默认
-目录时增加 `--data-path /path/to/dataset`；需要覆盖结果根时增加
-`--save-dir /path/to/results`；需要只修改最终文件名时增加
-`--output-name custom.npz`，该参数只接受文件名并保留
-`<robot>/<task>/<dataset>` 目录层级；只有确定要替换同一路径中的旧结果时才使用
-`--overwrite`。已有结果被直接续用时不会重新进入实时求解，可增加
-`--overwrite` 重跑，或使用结果可视化脚本。全数据遍历仍不属于公开参数。
+将 BVH 转换为带关节名称的 NPZ，再选择一个动作重定向：
 
-接触感知的足底平面硬约束默认开启。它会区分全脚掌、脚跟、脚尖、旋转
-支点、主动滑步和摆动相；旋转相只锁定实际支点，主动滑步会跟随逐帧映射
-到目标世界坐标的人体足底轨迹。高台接触还必须匹配攀爬场景中明确的朝上
-支撑面，单纯静止的悬空脚不会被锁定。`--foot-sticking True` 显式保持开启，
-`--foot-sticking False` 会在本次单任务或增强任务重定向中完全关闭所有
-足底平面约束，但不会关闭地面非穿透或关节限位。例如：
+```bash
+python -m holosoma_retargeting.data_utils.extract_global_positions \
+  --input-dir /path/to/lafan --output-dir demo_data/lafan
+
+python examples/robot_retarget.py \
+  --task robot_only --robot e2 --dataset lafan --motion walk2_subject3
+```
+
+可选参数：转换时追加 `--overwrite` 可替换旧输出。需要源朝向时，请从 BVH 重新转换旧版仅含位置的 NPY 数据。
+
+### AMASS SMPL-X
+
+从 [AMASS](https://amass.is.tue.mpg.de/) 下载 SMPL-X 动作，从 [SMPL-X](https://smpl-x.is.tue.mpg.de/) 下载 neutral 模型并放到 `models/smplx/SMPLX_NEUTRAL.npz`。原始动作目录形如 `/path/to/amass/<数据集>/<受试者>/*_stageii.npz`。
+
+```bash
+python -m holosoma_retargeting.data_utils.prep_amass_smplx_for_rt \
+  --amass-root-folder /path/to/amass \
+  --output-folder demo_data/amass_smplx_processed
+
+python examples/robot_retarget.py \
+  --task robot_only --robot g1 --dataset amass \
+  --motion HumanEva_S3_Jog_1_stageii
+```
+
+转换器递归搜索，并用下划线连接源文件的相对路径：`HumanEva/S3/Jog_1_stageii.npz` 会生成 `HumanEva_S3_Jog_1_stageii.npz`。转换命令的可选参数为 `--model-root-folder /path/to/models`、`--subdataset-folder HumanEva` 或 `--fps 30`，目标帧率不能高于源帧率。
+
+### GVHMR
+
+准备包含世界坐标 `smpl_params_global` 的 GVHMR `hmr4d_results.pt`，以及上文使用的 SMPL-X neutral 模型。先转换单个预测结果，再执行重定向：
+
+```bash
+python -m holosoma_retargeting.data_utils.convert_gvhmr \
+  --input-file /path/to/hmr4d_results.pt --output-file demo_data/gvhmr/tennis.npz
+
+python examples/robot_retarget.py \
+  --task robot_only --robot g1 --dataset gvhmr --motion tennis
+```
+
+可选参数：`--model-path /path/to/models` 指定 SMPL-X 模型。预测帧率不是 30 时，通过 `--fps` 指定实际帧率；该选项记录时间信息，不对预测结果重采样。
+
+### FBX 动捕
+
+从当前目录安装 FBX 额外依赖，再转换当前支持的 Hips 根节点 FBX 骨架：
+
+```bash
+python -m pip install -e "..[fbx]"
+python -m holosoma_retargeting.data_utils.convert_fbx \
+  /path/to/fbx demo_data/fbx_mocap
+```
+
+每个角色会单独输出为 `<文件名>__<角色名>.npz`。使用转换器打印的实际输出名称，例如 `Take_38_003_R__nv.npz`：
 
 ```bash
 python examples/robot_retarget.py \
-  --task robot_only \
-  --robot e2 \
-  --dataset lafan \
-  --motion walk2_subject3 \
-  --foot-sticking False
+  --task robot_only --robot e1_24dof --dataset fbx_mocap \
+  --motion Take_38_003_R__nv
 ```
 
-## 数据与机器人矩阵
+可选参数：转换时通过 `--target-fps 30` 设置采样帧率。使用 M5 反屈时，将 `--robot e1_24dof` 替换为 `--robot m5fanqu`，其 FBX 配置会自动保留源膝部方向并按机器人骨段缩放。双角色联合优化需要两个角色保持相同的采样时间轴。支持的骨架与坐标约定见 [FBX 详细说明](../../../docs/fbx-mocap-retargeting.md)。
 
-| 数据集 preset | 内部格式 | 原始关键点朝向 | `robot_only` |
-| --- | --- | --- | --- |
-| `climbing` | `mocap` | 否，仓库旧 climbing 源只有位置 NPY | G1、E1、E2 |
-| `fbx_mocap` | `fbx_mocap` | 是，FBX 局部旋转曲线直接 FK | G1、E1、E2 |
-| `gvhmr` | `gvhmr` | 是，SMPL-X 直接旋转 FK | G1、E1、E2 |
-| `lafan` | `lafan` | 是，BVH rotation channel FK | G1、E1、E2 |
-| `noetix_csv_climb` | `mocap` | 是，标准转换 NPZ 中的 bone rotation FK | G1、E1、E2 |
-| `noetix_mocap` | `noetix_mocap` | 是，BVH rotation channel FK | G1、E1、E2 |
-| `OMOMO_new` | `omomo` | 是，InterMimic 全局朝向 tensor | G1、E1、E2 |
+### Noetix BVH
 
-`object_interaction` 只接受 `OMOMO_new`，并且只支持 G1。`climbing` 只接受 `climbing` 和 `noetix_csv_climb`，并且只支持 G1。增强入口只接受这两类任务，因此 E1/E2 以及 `robot_only` 必须使用普通单动作入口。
+对于当前支持的 Noetix BVH 导出格式，使用专用转换器。它需要上方 LAFAN 小节安装的同一套 BVH 读取工具，输出会保留子目录结构。
 
-## 每个机器人一份统一配置
+```bash
+python -m holosoma_retargeting.data_utils.convert_noetix_bvh \
+  --input-dir /path/to/noetix_bvh --output-dir demo_data/noetix_mocap
 
-每个具体机器人现在只维护 `examples/robot_profiles` 中的一份 JSON，即
-`g1.json`、`e1_23dof.json`、`e1_24dof.json` 或 `e2.json`；兼容名称
-`--robot e1` 会读取 E1 23DoF 的表。表内统一保存机器人身高、自由度、URDF、
-根节点与 Interaction Mesh 权重、求解器和足底接触默认值、肩部方向参数、
-各数据集的朝向权重，以及自然姿态参考角和权重。原先拆开的 `nature_weights`
-与 `orientation_weights` 目录不再使用。
+python examples/robot_retarget.py \
+  --task robot_only --robot m5c --dataset noetix_mocap --motion walk
+```
 
-程序每次都会先读取机器人表。命令行显式给出的值优先于 JSON，未给出的值
-则继承 JSON。例如下面的命令只把根位置权重覆盖为 `1.0`，其余参数仍取
-E1 23DoF 表中的默认值：
+这里的 `walk` 假设转换生成了 `demo_data/noetix_mocap/walk.npz`；子目录中的文件使用 `folder/walk`。可选参数：转换时设置 `--target-fps 30`，重定向时通过 `--robot` 选择其他支持的机器人。
+
+### 攀爬动捕
+
+仓库示例位于 `demo_data/climb/<动作名>/`。人体关节位置 NPY、场景 XML、URDF 和网格文件需要完整保留在对应目录中。单动作示例：
 
 ```bash
 python examples/robot_retarget.py \
-  --task robot_only \
-  --robot e1_23dof \
-  --dataset noetix_mocap \
-  --motion sequence/name \
-  --root-position-weight 1.0
+  --task climbing --robot g1 --dataset climbing --motion mocap_climb_seq_0
 ```
 
-`--robot-profile FILE_OR_DIR` 可临时加载另一份完整表，而不必修改仓库内默认
-文件。`--robot-height`、`--robot-dof` 和 `--robot-urdf-file` 可以直接覆盖
-机器人参数；`--foot-sticking False` 这类显式布尔值同样会覆盖表内开关。
+可选用法：将脚本替换为 `examples/parallel_robot_retarget.py` 可生成地形高度增强变体。将该人体动作重定向到其他机器人时，使用 `--task robot_only` 并选择对应 `--robot`。旧版 NPY 只包含位置；机器人配置已开启朝向跟踪时（包括 M4G 和 M5 系列），需追加 `--orientation-tracking False`。
 
-## 直接跟踪上臂方向
+### Noetix 攀爬 CSV
 
-当机器人表中的 `shoulder_direction.enable` 为 `true`，或者命令行传入
-`--shoulder-direction-tracking True` 时，求解器会关闭 Arm、ForeArm、Hand
-的通用完整 SO(3) 目标，并直接在逐帧 SQP 中跟踪躯干局部坐标系下的上臂
-单位方向。当前实现不再构造候选、不再评分候选、不再选择 pitch/roll/yaw
-解分支，也不存在离线关节参考路径或分支参考项。上臂方向没有约束到的冗余
-自由度由原有 Interaction Mesh、关节限位、可选自然姿态项和逐帧平滑项共同
-决定。方向残差权重可用 `--shoulder-direction-weight` 临时覆盖。
-
-G1 的 Hand 朝向只作用于三个腕关节，E1 的 Hand 朝向只投影到单个
-elbow-yaw 轴，E2 不设置腕部朝向任务。开启朝向表时，下肢和躯干朝向仍正常
-生效。结果会保存目标/实际上臂方向、方向误差、实际肩部关节角和方向雅可比
-奇异值，可用下面的命令绘图：
+这里的输入是包含骨骼数据和攀爬场景信息的 Noetix 人体动捕 CSV，与重定向后导出的机器人关节 CSV 不同。先转换为完整的动作与场景目录：
 
 ```bash
-python -m holosoma_retargeting.visualization.shoulder_direction result.npz
+python -m holosoma_retargeting.data_utils.convert_noetix_csv \
+  /path/to/actor_170/climb.csv \
+  --output-root demo_data/noetix_csv_climb --task-name climb
+
+python examples/robot_retarget.py \
+  --task climbing --robot g1 --dataset noetix_csv_climb --motion climb
 ```
 
-这里的 `Arm`、`ForeArm`、`Hand` 完整 SO(3) 误差仍会保存用于诊断，但在
-shoulder-direction 模式下不会作为通用 SO(3) 损失再次进入求解器。新结果会
-额外保存每一项的 `orientation_objective_modes` 和
-`orientation_effective_so3_weights`；`orientation_frame_costs` 也只统计实际
-启用的通用 SO(3) 行，而不会再把仅供观察的手臂误差计入成本。
+请将生成的 NPZ/NPY 与场景资产一起保留在 `demo_data/noetix_csv_climb/climb/`。转换时可追加 `--human-height 1.70` 指定以米为单位的人体身高，`--target-fps 30` 降采样，或 `--scene-template-dir /path/to/template` 选择场景模板。默认模板为仓库自带的 `demo_data/climb/mocap_climb_seq_0`。需要增强时使用 parallel 重定向脚本；只重定向人体动作时使用 `--task robot_only`。
 
-单结果播放器可以把两种量放在同一场景中查看。橙色箭头是人体原始上下臂
-骨段，洋红色箭头是把人体方向转换到机器人躯干局部系后再放回机器人世界系
-得到的目标，青色箭头是机器人实际骨段。上臂洋红/青色箭头对应求解器的真实
-方向目标；前臂箭头只用于几何诊断，因为当前没有单独的前臂方向损失。GUI 的
-`Arm objective debug` 面板会逐帧显示上臂方向误差、前臂诊断误差、三个 link
-的完整 SO(3) 误差及其是否参与优化。E2 可以直接运行：
+## 结果可视化
+
+### 单动作
 
 ```bash
 python viser_player.py \
-  --input-path demo_results/e2/robot_only/noetix_mocap/parkour/front_handspring_001_Skeleton.npz \
-  --show-human-skeleton True \
-  --show-robot-skeleton True \
-  --show-arm-direction-comparison \
-  --show-source-orientation-axes \
-  --show-target-orientation-axes \
-  --show-robot-orientation-axes \
-  --orientation-joints LeftArm RightArm LeftForeArm RightForeArm LeftHand RightHand
+  --input-path demo_results/g1/robot_only/OMOMO_new/sub3_largebox_003.npz
 ```
 
-## 朝向、根稳定性与自然姿态
-
-仓库内四张表保持原来的默认行为：朝向跟踪、肩部方向跟踪、自然姿态正则和
-两个根稳定权重默认关闭，foot-sticking 默认开启。若希望长期改变某台机器人
-的行为，只需修改它的一张 JSON。单次运行中，`--orientation-tracking True`
-会启用当前数据集的逐关键点朝向表，`--orientation-weights WEIGHT` 会用一个
-非负数覆盖全部映射权重；`--natural-pose-tracking True` 会启用表内逐关节
-自然姿态权重，`--nature-weights WEIGHT` 则为全部 actuated joint 使用同一
-权重。
-
-根节点稳定仍是软目标。位置目标跟踪首帧对齐后的源人体 root 位移，朝向目标
-优先使用源数据的直接 root 朝向，否则使用人体躯干坐标系；首帧求解结果用于
-建立后续相对目标。根节点与网格权重可按下面方式联合调节：
+生成的纯机器人 NPZ 动作使用同一命令，无人体参考时会隐藏人体图层。若缺少机器人信息，追加 `--robot-type` 或 `--robot-urdf` 指定模型。播放机器人 CSV 时同样需要指定模型：
 
 ```bash
-python examples/robot_retarget.py \
-  --task robot_only \
-  --robot e1_23dof \
-  --dataset noetix_mocap \
-  --motion sequence/name \
-  --orientation-tracking True \
-  --shoulder-direction-tracking True \
-  --root-position-weight 200 \
-  --root-orientation-weight 50 \
-  --interaction-mesh-weight 10 \
-  --arm-interaction-mesh-weight-scale 0.5
+python viser_player.py --input-path /path/to/motion.csv --robot-type e2
 ```
 
-自然姿态目标仍为 `sum_i w_i (q_i - q_i_natural)^2`。非零权重关节会在首帧
-前从固定参考角初始化，后续帧继续使用上一帧解。
+CSV 每行依次为以米为单位的根位置 `xyz`、根四元数 `xyzw` 和按 URDF 文件顺序排列的关节值，不含表头与索引；旋转关节角使用弧度。特定型号使用 `--robot-urdf /path/to/robot.urdf`，模型必须与 CSV 导出时一致。CSV 默认以 30 FPS 播放，其他帧率通过 `--fps` 指定。
 
-## 增强变体
+### 多动作
 
-object-interaction 的增强族包含 `identity`、三个 object translation 变体 `trans_0` 至 `trans_2`，以及两个带平移的正负 45 度旋转变体 `rot_0`、`rot_1`。climbing 的增强族包含 `identity` 和 Z 方向尺度 `z_scale_0p8`、`z_scale_0p9`、`z_scale_1p1`、`z_scale_1p2`。identity 首先生成，后续变体复用其 nominal 轨迹。
-
-## 结果目录
-
-普通结果只写入：
-
-```text
-demo_results/<robot>/<task>/<dataset>/<motion>.npz
-```
-
-传入 `--output-name custom.npz` 后，只会把末尾的 `<motion>.npz` 替换为
-`custom.npz`。
-
-增强结果只写入：
-
-```text
-demo_results_parallel/<robot>/<task>/<dataset>/<motion>.npz
-demo_results_parallel/<robot>/<task>/<dataset>/<motion>_<variant>.npz
-```
-
-增强入口使用自定义名称时，identity 写为 `custom.npz`，各增强变体写为
-`custom_<variant>.npz`。
-
-默认结果根已经按 `g1`、`e1`、`e2` 分层。仓库不再维护 ablation、orientation、search、comparison 或全数据 rebuild 结果树。
-
-## 紧凑结果
-
-结果只保留求解和后续可视化真正需要的数据。主要内容包括 float64 `qpos`、FPS 与 cost；位置或朝向重定向实际使用的人体关键点和机器人 link 点；紧凑骨骼连接关系；映射 link 的逐帧位置与 wxyz 朝向；求解器实际使用的源人体朝向；人体、机器人、地形和 object 的有效点云；source/target Interaction Mesh；以及 object 位姿和关键点。这些数据默认保存，不需要额外命令行开关。
-
-未参与位置或朝向重定向的完整人体骨架节点会被裁掉，未参与位置或朝向映射的完整机器人 link 也会被裁掉。这样既保留可解释性，也避免把全模型轨迹重复写入每个结果。
-
-结果写入采用与 `main` 接近的直接 NPZ 保存方式，不再维护 schema、源文件 hash、配置 hash、外部资产 manifest、文件锁、临时制品发布或跨字段严格校验。
-
-## 可视化
-
-单结果查看：
+将使用同一机器人模型的多个 NPZ 结果放在共享时间轴上对比：
 
 ```bash
-python viser_player.py \
-  --input-path demo_results/e2/robot_only/lafan/walk2_subject3.npz
+python multi_viser_player.py \
+  --input-paths /path/to/motion_a.npz /path/to/motion_b.npz
 ```
 
-可视化脚本默认加载结果中所有可用的辅助数据。Interaction Mesh、人体/机器人骨架、人体/机器人/地形/object 点云、object keypoints 与三维朝向轴都在 Viser 的 Layers 面板中独立开关，不需要在启动命令中逐项列出。若某项源数据不存在，对应图层会显示为不可用，而不会生成虚假数据。
-
-增强族也可以同步查看：
+查看完整增强族时，将 `--input-paths` 替换为 `--family`：
 
 ```bash
 python multi_viser_player.py \
   --family demo_results_parallel/g1/object_interaction/OMOMO_new/sub3_largebox_003.npz
 ```
 
-单个结果转换为无表头、无索引的纯数值 CSV。每帧依次保存根节点 `xyz`、
-根节点四元数 `xyzw`，以及按 URDF 顺序排列的机器人关节角：
+### 双角色
+
+```bash
+python paired_retargeting/viser_player.py --input-path demo_results/paired_refined.npz
+```
+
+三个播放器均可追加 `--port 8081` 指定端口、`--fps 30` 覆盖播放帧率、`--no-playing` 暂停启动、`--loop` 循环播放，或 `--dry-run` 仅检查输入而不启动服务。未指定帧率时读取结果中的 FPS；多动作结果帧率不一致时，需要显式指定 `--fps`。浏览器 Playback 控件用于跳转帧，Layers 面板用于选择图层。单动作入口没有 `--start-frame` 参数。
+
+### 导出机器人动作 CSV
+
+使用与结果匹配的 URDF 导出单个 NPZ。CSV 仅包含机器人轨迹，不保存人体参考、物体位姿和 FPS：
 
 ```bash
 python -m holosoma_retargeting.data_utils.npz_to_csv \
-  demo_results/e2/robot_only/lafan/walk2_subject3.npz \
-  models/e2/e2_23dof.urdf
+  demo_results/g1/robot_only/OMOMO_new/sub3_largebox_003.npz models/g1/g1_29dof.urdf
 ```
 
-批量转换并保持输入目录的相对结构：
+默认在 NPZ 旁生成同名 CSV，可追加 `--output-path /path/to/motion.csv` 修改位置。批量转换使用同一机器人模型的结果目录：
 
 ```bash
 python -m holosoma_retargeting.data_utils.batch_npz_to_csv \
-  demo_results/e2/robot_only/lafan \
-  models/e2/e2_23dof.urdf \
-  demo_results_csv/e2/robot_only/lafan
+  demo_results/g1/robot_only/OMOMO_new models/g1/g1_29dof.urdf \
+  demo_results_csv/g1/robot_only/OMOMO_new
 ```
 
-## 验证
+## 定量评估
 
-生产相关测试可以从仓库根执行：
+对保留人体参考和求解信息的重定向 NPZ 结果执行评估：
 
 ```bash
-PYTHONPATH=src/holosoma_retargeting \
-  /home/jinhaogao/miniconda3/envs/robot_retargeter/bin/python \
-  -m pytest --noconftest -q tests/test_*.py
+python evaluation/eval_retargeting.py \
+  --res-dir demo_results/g1/robot_only/OMOMO_new \
+  --data-type robot_only --robot g1 --data-format omomo
 ```
 
-更严格的接口、矩阵、制品和提交门禁见仓库根目录的 `docs/retargeting-production-contract.md`。新增人体格式的要求见 `ADD_MOTION_FORMAT_README_zh.md`。
+物体交互使用对应结果目录及 `--data-type robot_object --data-format omomo`；攀爬使用 `--data-type robot_terrain --data-format mocap`。可追加 `--max-workers 4` 并行评估多个结果。这里的 `--data-format` 是内部格式名，因此 OMOMO 使用 `omomo`，重定向命令的 preset 则为 `OMOMO_new`。
+
+## 准备全身跟踪策略的训练数据
+
+将重定向 NPZ 转换为训练所需的刚体位姿与速度。下面的 G1 示例会打开 MuJoCo，需要图形环境；macOS 使用 `mjpython` 替代 `python`。
+
+```bash
+python data_conversion/convert_data_format_mj.py \
+  --input-file demo_results/g1/robot_only/OMOMO_new/sub3_largebox_003.npz \
+  --output-name converted_res/g1/sub3_largebox_003.npz \
+  --robot g1 --data-format omomo --once
+```
+
+可选参数：`--output-fps 50` 设置训练采样帧率。转换含动态物体的结果时，选择相应输入文件，并追加 `--has-dynamic-object --object-name largebox`。`--use-omniretarget-data` 仅用于外部 OmniRetarget 的 qpos 排列。该转换工具内置的关节表为 `g1`、`e1` 和 `e2`；其他型号需要通过 `--joint-names` 提供关节表，并核对输入关节顺序与机器人资产是否一致。
+
+## 自定义人体动作格式
+
+数据加载与关节映射的接入要求见[新增人体动作格式](ADD_MOTION_FORMAT_README_zh.md)。
+
+## 自定义机器人
+
+模型准备与关节映射见[新增机器人](ADD_ROBOT_TYPE_README.md)，长期生效的重定向参数见[机器人配置](examples/robot_profiles/README.md)。
