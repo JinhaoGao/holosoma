@@ -248,6 +248,8 @@ def orientation_skeleton_point_indices(
     diagnostics: OrientationDiagnostics,
     mapped_joint_names: tuple[str, ...],
     mapped_robot_link_names: tuple[str, ...],
+    *,
+    allow_missing: bool = False,
 ) -> np.ndarray:
     """Match every diagnostic frame to its displayed mapped keypoint."""
 
@@ -277,9 +279,10 @@ def orientation_skeleton_point_indices(
             )
         if index is None:
             unresolved.append((human_name, robot_link_name))
+            indices.append(-1)
         else:
             indices.append(index)
-    if unresolved:
+    if unresolved and not allow_missing:
         raise ValueError(f"Orientation frames cannot be matched to displayed skeleton keypoints: {unresolved}")
     return np.asarray(indices, dtype=np.int32)
 

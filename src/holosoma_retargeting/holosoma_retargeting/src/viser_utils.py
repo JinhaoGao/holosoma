@@ -126,7 +126,8 @@ def create_motion_control_sliders(
     viser_object: ViserUrdf | None = None,
     object_base_frame: viser.FrameHandle | None = None,
     contains_object_in_qpos: bool = True,
-    initial_fps: int = 30,
+    initial_fps: float = 30.0,
+    initial_playing: bool = False,
     initial_interp_mult: int = 2,
     loop: bool = True,
     qpos_to_viser_joint_indices: Sequence[int] | np.ndarray | None = None,
@@ -162,6 +163,8 @@ def create_motion_control_sliders(
     Returns:
         (controls, initial_values) — currently returns the [frame_slider] and [0.0]
     """
+    if not np.isfinite(initial_fps) or initial_fps <= 0:
+        raise ValueError("Playback FPS must be positive and finite")
     qpos = motion_sequence
     n_frames = int(qpos.shape[0])
     if n_frames == 0:
@@ -188,7 +191,9 @@ def create_motion_control_sliders(
         play_btn = server.gui.add_button("Play / Pause")
         prev_frame_btn = server.gui.add_button("Previous Frame")
         next_frame_btn = server.gui.add_button("Next Frame")
-        fps_in = server.gui.add_number("FPS", initial_value=int(initial_fps), min=1, max=240, step=1)
+        fps_in = server.gui.add_number(
+            "FPS", initial_value=float(initial_fps), min=0.001, max=max(240.0, initial_fps), step=0.001
+        )
     with server.gui.add_folder("Smoothing"):
         interp_mult_in = server.gui.add_number(
             "Visual FPS multiplier", initial_value=int(initial_interp_mult), min=1, max=8, step=1
@@ -260,7 +265,7 @@ def create_motion_control_sliders(
         return joints
 
     # ---------------- state ----------------
-    playing = {"flag": False}
+    playing = {"flag": bool(initial_playing)}
     tick = {"next": time.perf_counter()}  # absolute time for next draw
     prev: dict[str, np.ndarray | None] = {"robot_q": None, "obj_q": None}  # for continuity
     nonlocal_f = {"f": float(frame_slider.value)}  # fractional frame cursor
@@ -388,7 +393,7 @@ def create_motion_control_sliders(
         while True:
             if playing["flag"]:
                 now = time.perf_counter()
-                fps_val = max(1, int(fps_in.value))
+                fps_val = max(0.001, float(fps_in.value))
                 mult = max(1, int(interp_mult_in.value))
                 dt = 1.0 / (fps_val * mult)
 
@@ -417,16 +422,17 @@ def create_motion_control_sliders(
                         finally:
                             updating_programmatically["flag"] = False
 
+                    if not loop and f >= n_frames - 1:
+                        playing["flag"] = False
                     tick["next"] = now + dt
                 else:
                     time.sleep(min(0.002, max(0.0, tick["next"] - now)))
             else:
                 time.sleep(0.02)
 
-    threading.Thread(target=_player_loop, daemon=True).start()
-
-    # initial draw
+    # Draw before the worker starts so autoplay cannot race the initial frame.
     _apply_discrete_frame(0)
+    threading.Thread(target=_player_loop, daemon=True).start()
 
     # keep consistent with your previous return convention
     return [frame_slider], [0.0]

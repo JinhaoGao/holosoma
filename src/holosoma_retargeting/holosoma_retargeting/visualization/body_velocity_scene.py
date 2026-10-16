@@ -30,6 +30,8 @@ class Config:
     robot_urdf: str
 
     # Visualization settings
+    port: int = 8080
+    dry_run: bool = False
     grid_width: float = 2.0
     grid_height: float = 2.0
     show_meshes: bool = True
@@ -125,7 +127,11 @@ def main(cfg: Config) -> None:
     print(f"  using fps: {fps}")
 
     # -------------------- Setup viser -------------------------
-    server = viser.ViserServer()
+    if not np.isfinite(fps) or fps <= 0:
+        raise ValueError("Playback FPS must be positive and finite")
+    if cfg.dry_run:
+        return
+    server = viser.ViserServer(port=cfg.port)
     tabs = add_visualization_tabs(server.gui, include_motions=False)
     server.scene.add_grid(
         "/grid",

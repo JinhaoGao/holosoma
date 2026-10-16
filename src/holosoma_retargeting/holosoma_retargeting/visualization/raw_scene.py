@@ -72,6 +72,7 @@ class Config:
     port: int = 8080
     """Viser web-server port."""
 
+    fps: float | None = None
     start_frame: int = 0
     """Initial frame index."""
 
@@ -580,9 +581,9 @@ def make_viewer(cfg: Config, scene: RawScene) -> viser.ViserServer:
         fps_handle = server.gui.add_slider(
             "FPS",
             min=1.0,
-            max=max(120.0, scene.motion.fps),
+            max=max(120.0, scene.motion.fps, cfg.fps or 0.0),
             step=1.0,
-            initial_value=scene.motion.fps,
+            initial_value=cfg.fps if cfg.fps is not None else scene.motion.fps,
         )
         loop_handle = server.gui.add_checkbox("Loop", initial_value=cfg.loop)
 

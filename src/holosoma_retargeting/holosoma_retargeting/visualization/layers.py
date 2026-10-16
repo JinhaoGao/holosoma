@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import partial
 from typing import Callable, Iterable
 
 from viser import GuiCheckboxHandle, GuiTabHandle
@@ -238,7 +239,7 @@ class LayerController:
         if self.is_available(layer_id):
             self.set_visible(layer_id, not self.is_visible(layer_id))
 
-    def add_gui(self, gui, *, layer_ids: Iterable[LayerId] | None = None) -> None:
+    def add_gui(self, gui, *, layer_ids: Iterable[LayerId] | None = None, hide_unavailable: bool = False) -> None:
         """Populate the current Viser container with canonical layer controls."""
 
         selected = set(layer_ids) if layer_ids is not None else set(self._states)
@@ -246,7 +247,10 @@ class LayerController:
             specs = [
                 spec
                 for spec in LAYER_SPECS
-                if spec.group == group and spec.layer_id in selected and spec.layer_id in self._states
+                if spec.group == group
+                and spec.layer_id in selected
+                and spec.layer_id in self._states
+                and (not hide_unavailable or self._states[spec.layer_id].available)
             ]
             if not specs:
                 continue
@@ -289,7 +293,7 @@ class LayerController:
                 server,
                 f"Display: Toggle {spec.label}",
                 hotkey=spec.hotkey,
-                callback=lambda layer_id_ref=layer_id: self.toggle(layer_id_ref),
+                callback=partial(self.toggle, layer_id),
             )
 
 

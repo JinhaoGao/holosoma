@@ -49,8 +49,10 @@ from holosoma_retargeting.visualization.result_loader import (
     interpolate_qpos,
     load_variant_result,
     resolve_qpos_to_viser_joint_indices,
+    robot_link_poses,
     split_result_family,
 )
+from holosoma_retargeting.visualization.validation import validate_playback_options, validate_robot_motion
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,15 @@ class MultiResultViserConfig:
 
     qpos_npzs: tuple[Path, ...]
     """Result NPZ paths in display order."""
+
+    port: int = 8080
+    """Viser web-server port."""
+
+    playing: bool = True
+    """Start playback immediately."""
+
+    dry_run: bool = False
+    """Validate the inputs without starting Viser."""
 
     labels: tuple[str, ...] = ()
     """Optional unique display labels. Strict results default to saved variants."""
@@ -203,6 +214,7 @@ class HumanReferenceOverlay:
     target_visible: bool
     loop: bool
     enabled: bool = True
+    axis_points: np.ndarray | None = None
 
     def set_enabled(self, enabled: bool) -> None:
         self.enabled = bool(enabled)
@@ -224,10 +236,15 @@ class HumanReferenceOverlay:
             + self.offset
         )
         self.joints_handle.points = points.astype(np.float32)
-        edge_indices = np.asarray(self.trajectory.edges, dtype=np.int32)
+        edge_indices = np.asarray(self.trajectory.edges, dtype=np.int32).reshape(-1, 2)
         self.bones_handle.points = points[edge_indices].astype(np.float32)
         if self.diagnostics is not None and self.target_axes is not None:
-            origins = points[self.axis_point_indices]
+            axis_points = (
+                interpolate_human_points(self.axis_points, frame_float, loop=self.loop) + self.offset
+                if self.axis_points is not None
+                else points
+            )
+            origins = axis_points[self.axis_point_indices]
             target_quaternions = interpolate_orientation_quaternions(
                 self.diagnostics.target_quaternions_wxyz[:, self.joint_indices],
                 frame_float,
@@ -298,7 +315,7 @@ class RobotSkeletonOverlay:
             + self.offset
         )
         self.joints_handle.points = points.astype(np.float32)
-        edge_indices = np.asarray(self.edges, dtype=np.int32)
+        edge_indices = np.asarray(self.edges, dtype=np.int32).reshape(-1, 2)
         self.bones_handle.points = points[edge_indices].astype(np.float32)
 
 
@@ -364,7 +381,7 @@ class ComparisonScene:
     object_root: viser.FrameHandle | None
     contains_object: bool
     qpos_to_viser_joint_indices: np.ndarray | None
-    robot_skeleton: RobotSkeletonOverlay
+    robot_skeleton: RobotSkeletonOverlay | None
     orientation_overlay: OrientationOverlay | SavedOrientationAxesOverlay | None
     group_root: viser.FrameHandle | None = None
     human_reference: HumanReferenceOverlay | None = None
@@ -410,7 +427,8 @@ class ComparisonScene:
         self.robot.show_visual = self.motion_visible and self.robot_mesh_enabled
         if self.object_visual is not None:
             self.object_visual.show_visual = self.motion_visible and self.object_mesh_enabled
-        self.robot_skeleton.set_enabled(self.motion_visible and self.skeleton_enabled)
+        if self.robot_skeleton is not None:
+            self.robot_skeleton.set_enabled(self.motion_visible and self.skeleton_enabled)
         if self.orientation_overlay is not None:
             self.orientation_overlay.set_enabled(self.motion_visible and self.orientation_enabled)
         if self.object_keypoints_overlay is not None:
@@ -439,7 +457,8 @@ class ComparisonScene:
         """Toggle mapped robot keypoints, bones, and their attached axes."""
 
         self.skeleton_enabled = bool(enabled)
-        self.robot_skeleton.set_enabled(self.motion_visible and self.skeleton_enabled)
+        if self.robot_skeleton is not None:
+            self.robot_skeleton.set_enabled(self.motion_visible and self.skeleton_enabled)
         if self.orientation_overlay is not None:
             self.orientation_enabled = self.skeleton_enabled
             self.orientation_overlay.set_enabled(self.motion_visible and self.orientation_enabled)
@@ -629,6 +648,7 @@ def _make_human_reference_overlay(
     axis_point_indices: np.ndarray,
     offset: np.ndarray,
     config: MultiResultViserConfig,
+    axis_points: np.ndarray | None = None,
 ) -> HumanReferenceOverlay:
     points = trajectory.points[0] + offset
     point_colors = np.tile(
@@ -645,14 +665,14 @@ def _make_human_reference_overlay(
     )
     bones_handle = server.scene.add_line_segments(
         f"{namespace}/human/skeleton",
-        points=points[np.asarray(trajectory.edges, dtype=np.int32)],
+        points=points[np.asarray(trajectory.edges, dtype=np.int32).reshape(-1, 2)],
         colors=_HUMAN_SKELETON_COLOR,
         line_width=config.human_skeleton_line_width,
         visible=config.show_human_skeleton,
     )
     target_axes = None
-    if diagnostics is not None:
-        origins = trajectory.points[0, axis_point_indices] + offset
+    if diagnostics is not None and joint_indices.size:
+        origins = (trajectory.points if axis_points is None else axis_points)[0, axis_point_indices] + offset
         target_axes = server.scene.add_arrows(
             f"{namespace}/orientation/target_axes",
             points=orientation_axis_segments(
@@ -668,6 +688,7 @@ def _make_human_reference_overlay(
         )
     return HumanReferenceOverlay(
         trajectory=trajectory,
+        axis_points=axis_points,
         offset=offset,
         joints_handle=joints_handle,
         bones_handle=bones_handle,
@@ -736,7 +757,7 @@ def _make_robot_skeleton_overlay(
     color: tuple[int, int, int],
     offset: np.ndarray,
     config: MultiResultViserConfig,
-) -> RobotSkeletonOverlay:
+) -> RobotSkeletonOverlay | None:
     if (
         result.robot_link_positions is not None
         and result.robot_link_parent_indices is not None
@@ -748,8 +769,8 @@ def _make_robot_skeleton_overlay(
             (int(parent), index) for index, parent in enumerate(result.robot_link_parent_indices) if parent >= 0
         )
     else:
-        if result.robot_points is None:
-            raise ValueError(f"{result.path} has neither full nor mapped robot skeleton positions")
+        if result.robot_points is None or result.robot_points.shape[1] == 0:
+            return None
         trajectory = result.robot_points
         display_names = result.mapped_robot_link_names
         edges = visualization_skeleton_edges(result.mapped_joint_names)
@@ -764,7 +785,7 @@ def _make_robot_skeleton_overlay(
     )
     bones_handle = server.scene.add_line_segments(
         f"{namespace}/skeleton/links",
-        points=points[np.asarray(edges, dtype=np.int32)],
+        points=points[np.asarray(edges, dtype=np.int32).reshape(-1, 2)],
         colors=skeleton_color,
         line_width=config.human_skeleton_line_width,
     )
@@ -844,7 +865,10 @@ def load_comparison_results(
             f"One shared robot model cannot render multiple robot types: {sorted(robot_types)}",
         )
     needs_layout_inference = any(result.contains_object_in_qpos is None for result in results)
-    needs_robot_fk = any(result.robot_points is None for result in results)
+    needs_robot_fk = any(
+        result.robot_points is None and result.robot_link_positions is None and bool(result.mapped_robot_link_names)
+        for result in results
+    )
     if needs_layout_inference or needs_robot_fk:
         _, robot_xml = _resolve_robot_assets(config, reference)
         if robot_xml is None:
@@ -874,7 +898,7 @@ def load_comparison_results(
                         f"robot nq={robot_model.nq} with or without a 7-DoF object pose"
                     )
             robot_points = result.robot_points
-            if robot_points is None:
+            if robot_points is None and result.robot_link_positions is None:
                 if result.qpos.shape[1] < robot_model.nq:
                     raise ValueError(
                         f"{result.path} qpos width {result.qpos.shape[1]} is smaller than robot nq={robot_model.nq}"
@@ -1032,6 +1056,14 @@ def _make_full_robot_orientation_overlay(
             strict=True,
         )
     )
+    if result.orientation_diagnostics is not None:
+        aliases.update(
+            zip(
+                result.orientation_diagnostics.human_joint_names,
+                result.orientation_diagnostics.robot_link_names,
+                strict=True,
+            )
+        )
     selected = _requested_saved_orientation_indices(
         result.robot_link_names,
         config.orientation_joints,
@@ -1103,12 +1135,30 @@ def make_multi_result_player(
 ):
     """Build one shared-timeline Viser scene for all comparison results."""
 
+    validate_playback_options(config.port, config.fps, config.visual_fps_multiplier)
     reference = results[0]
     robot_urdf, robot_xml = _resolve_robot_assets(config, reference)
     if any(_resolve_robot_assets(config, result) != (robot_urdf, robot_xml) for result in results[1:]):
         raise ValueError("One shared robot model cannot render results generated with different robot assets.")
     driver_contains_object = bool(reference.contains_object_in_qpos)
     object_urdfs = resolve_comparison_object_urdfs(config, results)
+    if config.dry_run:
+        for result in results:
+            validate_robot_motion(
+                result.path,
+                result.qpos,
+                result.robot_actuated_joint_names,
+                robot_urdf,
+                robot_xml,
+                contains_object=result.contains_object_in_qpos,
+            )
+            if result.human_joints is not None:
+                load_human_skeleton(result)
+        for object_urdf in set(object_urdfs):
+            if object_urdf is not None:
+                yourdfpy.URDF.load(str(object_urdf), load_meshes=True, build_scene_graph=True)
+        print(f"[multi_viser_player] Validated {len(results)} results; fps={config.fps or reference.fps}")
+        return None
     if config.interaction_mesh_mode not in {"source", "target", "both"}:
         raise ValueError("interaction_mesh_mode must be one of source, target, or both")
     if config.interaction_mesh_edges not in {"cross", "all"}:
@@ -1144,7 +1194,7 @@ def make_multi_result_player(
             )
         robot_fk_model = mujoco.MjModel.from_xml_path(str(robot_xml))
 
-    server = viser.ViserServer()
+    server = viser.ViserServer(port=config.port)
     tabs = add_visualization_tabs(server.gui, include_motions=True)
     server.scene.add_grid(
         "/grid",
@@ -1182,7 +1232,7 @@ def make_multi_result_player(
         offset = robot_offsets[index]
         group_root = server.scene.add_frame(namespace, show_axes=False)
         human_namespace = f"{namespace}/reference_human"
-        human_skeleton = load_human_skeleton(result)
+        human_skeleton = load_human_skeleton(result) if result.human_joints is not None else None
         human_joint_indices = (
             orientation_joint_indices(diagnostics, config.orientation_joints)
             if diagnostics is not None
@@ -1191,21 +1241,31 @@ def make_multi_result_player(
         human_axis_point_indices = (
             orientation_skeleton_point_indices(
                 diagnostics,
-                human_skeleton.joint_names,
-                result.mapped_robot_link_names,
+                human_skeleton.full_joint_names,
+                tuple("" for _ in human_skeleton.full_joint_names),
+                allow_missing=True,
             )[human_joint_indices]
-            if diagnostics is not None
+            if diagnostics is not None and human_skeleton is not None
             else np.empty((0,), dtype=np.int32)
         )
-        human_reference = _make_human_reference_overlay(
-            server=server,
-            namespace=human_namespace,
-            trajectory=human_skeleton,
-            diagnostics=diagnostics,
-            joint_indices=human_joint_indices,
-            axis_point_indices=human_axis_point_indices,
-            offset=offset,
-            config=config,
+        if human_skeleton is not None and diagnostics is not None:
+            available = human_axis_point_indices >= 0
+            human_joint_indices = human_joint_indices[available]
+            human_axis_point_indices = human_axis_point_indices[available]
+        human_reference = (
+            _make_human_reference_overlay(
+                server=server,
+                namespace=human_namespace,
+                trajectory=human_skeleton,
+                diagnostics=diagnostics,
+                joint_indices=human_joint_indices,
+                axis_point_indices=human_axis_point_indices,
+                axis_points=human_skeleton.full_points,
+                offset=offset,
+                config=config,
+            )
+            if human_skeleton is not None
+            else None
         )
         source_orientation_overlay = _make_source_orientation_overlay(
             server=server,
@@ -1214,12 +1274,16 @@ def make_multi_result_player(
             offset=offset,
             config=config,
         )
-        human_hands = _make_human_hands_overlay(
-            server=server,
-            namespace=human_namespace,
-            trajectory=human_skeleton,
-            offset=offset,
-            config=config,
+        human_hands = (
+            _make_human_hands_overlay(
+                server=server,
+                namespace=human_namespace,
+                trajectory=human_skeleton,
+                offset=offset,
+                config=config,
+            )
+            if human_skeleton is not None
+            else None
         )
         robot_skeleton = _make_robot_skeleton_overlay(
             server=server,
@@ -1289,20 +1353,18 @@ def make_multi_result_player(
                 diagnostics,
                 config.orientation_joints,
             )
-            axis_point_indices = orientation_skeleton_point_indices(
-                diagnostics,
-                result.mapped_joint_names,
-                result.mapped_robot_link_names,
-            )[joint_indices]
-            orientation_overlay = _make_orientation_overlay(
+
+            link_names = tuple(diagnostics.robot_link_names[int(i)] for i in joint_indices)
+            positions, quaternions = robot_link_poses(result, robot_xml, link_names)
+            orientation_overlay = _make_full_robot_orientation_overlay(
                 server=server,
                 namespace=namespace,
-                diagnostics=diagnostics,
-                joint_indices=joint_indices,
-                model=robot_fk_model,
-                initial_q=result.qpos[0],
-                skeleton_points=result.robot_points,
-                axis_point_indices=axis_point_indices,
+                result=replace(
+                    result,
+                    robot_link_positions=positions,
+                    robot_link_quaternions_wxyz=quaternions,
+                    robot_link_names=link_names,
+                ),
                 offset=offset,
                 config=config,
             )
@@ -1409,7 +1471,8 @@ def make_multi_result_player(
             )
         )
         robot.show_visual = bool(config.show_robot_mesh)
-        robot_skeleton.set_enabled(config.show_robot_skeleton)
+        if robot_skeleton is not None:
+            robot_skeleton.set_enabled(config.show_robot_skeleton)
         if object_visual is not None:
             object_visual.show_visual = bool(config.show_object_mesh)
         if orientation_overlay is not None:
@@ -1433,7 +1496,7 @@ def make_multi_result_player(
             scene.source_orientation_overlay.draw(frame_float)
         if scene.human_hands is not None and scene.human_hands.enabled:
             scene.human_hands.update(frame_float)
-        if scene.skeleton_enabled:
+        if scene.skeleton_enabled and scene.robot_skeleton is not None:
             scene.robot_skeleton.update(frame_float)
         if update_articulation:
             scene.robot.update_cfg(
@@ -1561,13 +1624,13 @@ def make_multi_result_player(
     )
     layer_controller.register(
         LayerId.HUMAN_SKELETON,
-        available=True,
+        available=any(scene.human_reference is not None for scene in scenes),
         visible=config.show_human_skeleton,
         callback=_set_all_human_skeletons,
     )
     layer_controller.register(
         LayerId.ROBOT_SKELETON,
-        available=True,
+        available=any(scene.robot_skeleton is not None for scene in scenes),
         visible=config.show_robot_skeleton,
         callback=_set_all_robot_skeletons,
     )
@@ -1647,7 +1710,7 @@ def make_multi_result_player(
         )
 
     with tabs.layers:
-        layer_controller.add_gui(server.gui)
+        layer_controller.add_gui(server.gui, hide_unavailable=all(scene.human_reference is None for scene in scenes))
         if layer_controller.is_available(LayerId.INTERACTION_MESH):
             with server.gui.add_folder("Interaction mesh settings", expand_by_default=False):
                 interaction_mode = server.gui.add_dropdown(
@@ -1791,7 +1854,8 @@ def make_multi_result_player(
             viser_object=driver.object_visual,
             object_base_frame=driver.object_root,
             contains_object_in_qpos=driver_contains_object,
-            initial_fps=round(config.fps or reference.fps),
+            initial_fps=config.fps if config.fps is not None else reference.fps,
+            initial_playing=config.playing,
             initial_interp_mult=config.visual_fps_multiplier,
             loop=config.loop,
             qpos_to_viser_joint_indices=driver_joint_order_indices,

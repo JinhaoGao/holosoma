@@ -49,6 +49,7 @@ from holosoma_retargeting.visualization.arm_direction import (
     build_arm_direction_scene_data,
     load_optional_arm_direction_diagnostics,
 )
+from holosoma_retargeting.visualization.csv_motion import load_csv_motion
 from holosoma_retargeting.visualization.joint_angles import (
     add_joint_angle_gui,
     build_joint_angle_diagnostics,
@@ -73,6 +74,7 @@ from holosoma_retargeting.visualization.result_loader import (
     resolve_robot_asset_paths,
     variant_result_metadata,
 )
+from holosoma_retargeting.visualization.validation import validate_playback_options, validate_robot_motion
 
 
 def load_npz(npz_path: str):
@@ -175,7 +177,7 @@ def _build_qpos_to_viser_joint_indices(
         Path(config.robot_mujoco_xml) if config.robot_mujoco_xml else infer_mujoco_xml_path(config.robot_urdf)
     )
     indices = resolve_qpos_to_viser_joint_indices(
-        result_path=config.qpos_npz,
+        result_path=config.qpos_npz or config.input_path or "<motion>",
         saved_joint_names=saved_joint_names,
         viser_joint_names=tuple(viser_joint_names),
         fallback_mujoco_xml=fallback_xml,
@@ -1343,6 +1345,8 @@ def _build_arm_direction_overlay(
 
     if config.qpos_npz is None:
         return None
+    if human_joints is None:
+        return None
     diagnostics = load_optional_arm_direction_diagnostics(
         config.qpos_npz,
         expected_frames=num_frames,
@@ -1880,7 +1884,7 @@ def make_player(
 
     We'll infer R from the robot URDF's actuated joints in ViserUrdf.
     """
-    server = viser.ViserServer()
+    server = viser.ViserServer(port=config.port)
     tabs = add_visualization_tabs(server.gui, include_motions=False)
 
     # Root frames
@@ -1961,7 +1965,7 @@ def make_player(
     contains_object_in_qpos = bool(contains_object_in_qpos) and vo is not None
 
     # Use fps from config if not provided, otherwise use the one from npz file
-    actual_fps = fps if fps is not None else config.fps
+    actual_fps = config.fps if config.fps is not None else (fps if fps is not None else 30.0)
 
     # Set initial visibility. Legacy flags remain aliases for the canonical layers.
     show_robot_mesh = config.show_meshes if config.show_robot_mesh is None else config.show_robot_mesh
@@ -2163,7 +2167,7 @@ def make_player(
         )
 
     with tabs.layers:
-        layer_controller.add_gui(server.gui)
+        layer_controller.add_gui(server.gui, hide_unavailable=human_joints is None)
         if orientation_overlay.source_available or orientation_overlay.robot_available:
             with server.gui.add_folder("Orientation debug settings", expand_by_default=True):
                 orientation_scope = server.gui.add_dropdown(
@@ -2317,6 +2321,7 @@ def make_player(
             object_base_frame=object_root if contains_object_in_qpos else None,
             contains_object_in_qpos=contains_object_in_qpos,
             initial_fps=actual_fps,
+            initial_playing=config.playing,
             initial_interp_mult=config.visual_fps_multiplier,
             loop=config.loop,
             qpos_to_viser_joint_indices=qpos_to_viser_joint_indices,
@@ -2342,6 +2347,8 @@ def resolve_input_kind(path: str | Path, requested_kind: str = "auto") -> str:
     input_path = Path(path).expanduser()
     if input_path.is_dir() or input_path.suffix.lower() in {".pt", ".npy"}:
         return "raw"
+    if input_path.suffix.lower() == ".csv":
+        return "result"
     if input_path.suffix.lower() != ".npz":
         raise ValueError(f"Cannot infer visualization input kind from {input_path}; pass --input-kind explicitly.")
     with np.load(input_path, allow_pickle=False) as data:
@@ -2360,6 +2367,8 @@ def resolve_input_kind(path: str | Path, requested_kind: str = "auto") -> str:
 
 def main(cfg: ViserConfig) -> None:
     """Run the unified single-motion viewer for any supported input adapter."""
+
+    validate_playback_options(cfg.port, cfg.fps, cfg.visual_fps_multiplier)
 
     if cfg.input_path is not None and cfg.qpos_npz is not None:
         raise ValueError(
@@ -2387,7 +2396,8 @@ def main(cfg: ViserConfig) -> None:
                 mesh_path=Path(cfg.source_mesh) if cfg.source_mesh else None,
                 object_name=cfg.object_name,
                 port=cfg.port,
-                start_frame=cfg.start_frame,
+                start_frame=0,
+                fps=cfg.fps,
                 playing=cfg.playing,
                 loop=cfg.loop,
                 point_size=cfg.skeleton_point_radius * 1.5,
@@ -2415,6 +2425,9 @@ def main(cfg: ViserConfig) -> None:
         body_velocity_main(
             BodyVelocityConfig(
                 npz_path=str(input_path),
+                port=cfg.port,
+                dry_run=cfg.dry_run,
+                fps_override=cfg.fps,
                 robot_urdf=str(robot_urdf),
                 grid_width=cfg.grid_width,
                 grid_height=cfg.grid_height,
@@ -2429,8 +2442,30 @@ def main(cfg: ViserConfig) -> None:
         return
 
     cfg = replace(cfg, qpos_npz=str(input_path))
-    qpos, fps, human_joints, npz_metadata, interaction_mesh = load_npz(str(input_path))
+    if Path(input_path).suffix.lower() == ".csv":
+        qpos, fps, human_joints, npz_metadata, interaction_mesh = load_csv_motion(cfg)
+    else:
+        qpos, fps, human_joints, npz_metadata, interaction_mesh = load_npz(str(input_path))
     cfg = _resolve_runtime_config(cfg, npz_metadata)
+    if cfg.dry_run:
+        if cfg.robot_urdf is None:
+            raise ValueError("Robot URDF must be resolved before validation")
+        saved_names = npz_metadata.get("robot_actuated_joint_names")
+        names = tuple(str(name) for name in saved_names) if isinstance(saved_names, (tuple, list)) else ()
+        contains_object = npz_metadata.get("contains_object_in_qpos")
+        validate_robot_motion(
+            input_path,
+            qpos,
+            names,
+            Path(cfg.robot_urdf),
+            Path(cfg.robot_mujoco_xml) if cfg.robot_mujoco_xml else None,
+            contains_object=bool(contains_object) if contains_object is not None else None,
+        )
+        print(
+            f"[viser_player] Validated {input_path}: frames={len(qpos)}, "
+            f"fps={cfg.fps or fps}, human={human_joints is not None}"
+        )
+        return
     make_player(
         config=cfg,
         qpos=qpos,

@@ -53,25 +53,22 @@ class ViserConfig:
     """Optional raw-human object category override."""
 
     port: int = 8080
-    """Viser web-server port for raw-human inputs."""
-
-    start_frame: int = 0
-    """Initial frame for raw-human inputs."""
+    """Viser web-server port for every input adapter."""
 
     playing: bool = True
-    """Start raw-human or converted playback immediately."""
+    """Start playback immediately."""
 
     velocity_scale: float = 0.1
     """Length scale for converted rigid-body velocity vectors."""
 
     dry_run: bool = False
-    """Validate and summarize a raw-human input without starting Viser."""
+    """Validate and summarize the input without starting Viser."""
 
     object_urdf: str | None = None
     """Path to object URDF file (optional)."""
 
-    fps: int = 30
-    """Frames per second for playback."""
+    fps: float | None = None
+    """Playback rate override. Otherwise use the saved FPS, or 30 for CSV."""
 
     assume_object_in_qpos: bool | None = None
     """Whether qpos includes object pose. If unset, resolved from result metadata."""

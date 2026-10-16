@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import mujoco
 import numpy as np
 
 from holosoma_retargeting.config_types.robot import RobotConfig
@@ -902,6 +903,26 @@ def _resolve_asset_path(value: str | Path) -> Path:
     return package_candidate if package_candidate.exists() else path
 
 
+def _resolve_legacy_robot_asset(value: str | Path) -> Path:
+    """Resolve known moved models while keeping unknown saved variants explicit."""
+    text = Path(value).as_posix()
+    e2_assets = "../../holosoma/holosoma/data/robots/e2"
+    aliases = {
+        "models/noetix_e2/urdf/E2_V1.0_0805_02.urdf": f"{e2_assets}/urdf/E2_V1.0_0805_02.urdf",
+        "models/noetix_e2/mjcf/e2.xml": f"{e2_assets}/mjcf/e2.xml",
+        "models/m5c/m5c_17dof.urdf": "models/m5/m5c/m5c_17dof.urdf",
+        "models/m5c/m5c_17dof.xml": "models/m5/m5c/m5c_17dof.xml",
+    }
+    for dof in (23, 24):
+        for extension in ("urdf", "xml"):
+            name = f"e1_{dof}dof.{extension}"
+            aliases[f"noetix_e1_v2/models/{name}"] = f"models/e1/noetix_e1_v2/{name}"
+    for old, new in aliases.items():
+        if text == old or text.endswith("/" + old):
+            return _resolve_asset_path(new)
+    return _resolve_asset_path(value)
+
+
 def resolve_robot_asset_paths(
     *,
     robot_type: str | None,
@@ -917,6 +938,8 @@ def resolve_robot_asset_paths(
             raise ValueError("Result has no robot model metadata; pass --robot-urdf explicitly.")
         value = RobotConfig(robot_type=robot_type).ROBOT_URDF_FILE
     urdf_path = _resolve_asset_path(value)
+    if not urdf_path.is_file() and robot_urdf is None:
+        urdf_path = _resolve_legacy_robot_asset(value)
     if not urdf_path.is_file():
         raise FileNotFoundError(f"Robot URDF not found: {urdf_path}")
 
@@ -928,6 +951,8 @@ def resolve_robot_asset_paths(
     ):
         xml_value = saved_robot_mujoco_xml
     xml_path = _resolve_asset_path(xml_value) if xml_value else infer_mujoco_xml_path(urdf_path)
+    if xml_path is not None and not xml_path.is_file() and robot_mujoco_xml is None and xml_value:
+        xml_path = _resolve_legacy_robot_asset(xml_value)
     if xml_path is not None and not xml_path.is_file():
         raise FileNotFoundError(f"Robot MuJoCo XML not found: {xml_path}")
     return urdf_path, xml_path
@@ -946,7 +971,7 @@ def _resolve_robot_assets(
     )
 
 
-def _resolve_object_urdf(config: AugmentationViserConfig, result: VariantResult) -> Path:
+def _resolve_object_urdf(config: AugmentationViserConfig | MultiResultViserConfig, result: VariantResult) -> Path:
     value = config.object_urdf or result.object_urdf
     if value:
         path = _resolve_asset_path(value)
@@ -1001,6 +1026,37 @@ def resolve_qpos_to_viser_joint_indices(
         source_joint_names,
         viser_joint_names,
     )
+
+
+def robot_link_poses(
+    result: VariantResult,
+    xml: Path | None,
+    link_names: tuple[str, ...],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Recover actual link poses without depending on position-matching targets."""
+
+    if xml is None:
+        raise ValueError("A MuJoCo XML is required to recover robot link poses")
+    model = mujoco.MjModel.from_xml_path(str(xml))
+    data = mujoco.MjData(model)
+    model_names = tuple(actuated_joint_names_from_mujoco_xml(xml))
+    indices = (
+        build_joint_order_indices(result.robot_actuated_joint_names, model_names)
+        if result.robot_actuated_joint_names
+        else np.arange(len(model_names))
+    )
+    body_ids = np.asarray([mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name) for name in link_names])
+    if np.any(body_ids < 0):
+        raise ValueError(f"Robot orientation links are absent from {xml}: {link_names}")
+    positions = np.empty((len(result.qpos), len(link_names), 3), dtype=np.float32)
+    quaternions = np.empty((len(result.qpos), len(link_names), 4), dtype=np.float32)
+    for i, q in enumerate(result.qpos):
+        data.qpos[:7] = q[:7]
+        data.qpos[7:] = q[7 : 7 + len(model_names)][indices]
+        mujoco.mj_forward(model, data)
+        positions[i] = data.xpos[body_ids]
+        quaternions[i] = data.xquat[body_ids]
+    return positions, quaternions
 
 
 def _rgba(color: tuple[int, int, int], opacity: float) -> tuple[float, float, float, float]:

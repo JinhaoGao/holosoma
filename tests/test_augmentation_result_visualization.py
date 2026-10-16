@@ -75,9 +75,9 @@ class AugmentationResultVisualizationTests(unittest.TestCase):
         explicit = resolve_multi_config(MultiViserConfig(qpos_npzs=(Path("a.npz"), Path("b.npz"))))
         self.assertEqual(explicit.qpos_npzs, (Path("a.npz"), Path("b.npz")))
 
-        with self.assertRaisesRegex(ValueError, "either --qpos-npzs or --family"):
+        with self.assertRaisesRegex(ValueError, "either --input-paths.*or --family"):
             resolve_multi_config(MultiViserConfig())
-        with self.assertRaisesRegex(ValueError, "either --qpos-npzs or --family"):
+        with self.assertRaisesRegex(ValueError, "either --input-paths.*or --family"):
             resolve_multi_config(
                 MultiViserConfig(
                     qpos_npzs=(Path("a.npz"),),

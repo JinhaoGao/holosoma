@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-# ruff: noqa: CPY001
+# ruff: noqa: CPY001, E402
 """Public Viser entry point for one saved paired refinement result."""
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import tyro
+
+package_root = Path(__file__).resolve().parents[2]
+if str(package_root) not in sys.path:
+    sys.path.insert(0, str(package_root))
 
 from holosoma_retargeting.paired_retargeting.visualization import (
     PairedViserConfig,

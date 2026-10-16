@@ -22,6 +22,8 @@ from holosoma_retargeting.visualization.layers import (
     LayerId,
     add_visualization_tabs,
 )
+from holosoma_retargeting.visualization.result_loader import resolve_robot_asset_paths
+from holosoma_retargeting.visualization.validation import validate_playback_options, validate_robot_motion
 
 _ACTOR_COLORS = ((0, 114, 178), (213, 94, 0))
 _ORIGINAL_HUMAN_COLORS = ((0, 0, 0), (0, 0, 0))
@@ -31,7 +33,10 @@ _ORIGINAL_HUMAN_COLORS = ((0, 0, 0), (0, 0, 0))
 class PairedViserConfig:
     """Configuration for one saved paired-result Viser scene."""
 
-    qpos_npz: Path
+    qpos_npz: Path | None = None
+    input_path: Path | None = None
+    playing: bool = True
+    dry_run: bool = False
     port: int = 8080
     fps: float | None = None
     loop: bool = False
@@ -54,7 +59,7 @@ class PairedViserConfig:
     def __post_init__(self) -> None:
         if self.port <= 0:
             raise ValueError("Viser port must be positive")
-        if self.fps is not None and self.fps <= 0.0:
+        if self.fps is not None and (not np.isfinite(self.fps) or self.fps <= 0.0):
             raise ValueError("Viser fps must be positive")
         if self.visual_fps_multiplier < 1:
             raise ValueError("visual_fps_multiplier must be positive")
@@ -502,8 +507,8 @@ def _mapped_skeleton_edges(actor: PairedVisualizationActor) -> np.ndarray:
 class _SkeletonOverlay:
     points: np.ndarray
     edges: np.ndarray
-    joints_handle: object
-    bones_handle: object
+    joints_handle: viser.PointCloudHandle
+    bones_handle: viser.LineSegmentsHandle
     loop: bool
 
     def set_visible(self, visible: bool) -> None:
@@ -556,7 +561,7 @@ class _InteractionOverlay:
 class _ActorViserScene:
     actor: PairedVisualizationActor
     robot: ViserUrdf
-    robot_root: object
+    robot_root: viser.FrameHandle
     joint_order_indices: np.ndarray
     human_skeleton: _SkeletonOverlay
     robot_skeleton: _SkeletonOverlay
@@ -638,7 +643,11 @@ def _make_actor_scene(
         namespace=f"{namespace}/human",
         points=human_points,
         edges=human_edges,
-        color=tuple(round(0.55 * channel + 0.45 * 255) for channel in color),
+        color=(
+            round(0.55 * color[0] + 0.45 * 255),
+            round(0.55 * color[1] + 0.45 * 255),
+            round(0.55 * color[2] + 0.45 * 255),
+        ),
         config=config,
         visible=config.show_human_skeleton,
     )
@@ -708,31 +717,47 @@ def _configure_layers(
     content: _PairedSceneContent,
     config: PairedViserConfig,
 ) -> None:
+    def set_robot_mesh(visible: bool) -> None:
+        for scene in content.actors:
+            scene.robot.show_visual = visible
+
+    def set_human_skeletons(visible: bool) -> None:
+        for scene in content.actors:
+            scene.human_skeleton.set_visible(visible)
+
+    def set_original_skeletons(visible: bool) -> None:
+        for skeleton in content.original_skeletons:
+            skeleton.set_visible(visible)
+
+    def set_robot_skeletons(visible: bool) -> None:
+        for scene in content.actors:
+            scene.robot_skeleton.set_visible(visible)
+
     layer_controller = LayerController()
     layer_controller.register(
         LayerId.ROBOT_MESH,
         available=True,
         visible=config.show_robot_mesh,
-        callback=lambda visible: [setattr(scene.robot, "show_visual", bool(visible)) for scene in content.actors],
+        callback=set_robot_mesh,
     )
     layer_controller.register(
         LayerId.HUMAN_SKELETON,
         available=True,
         visible=config.show_human_skeleton,
-        callback=lambda visible: [scene.human_skeleton.set_visible(visible) for scene in content.actors],
+        callback=set_human_skeletons,
     )
     layer_controller.register(
         LayerId.ORIGINAL_HUMAN_SKELETON,
         available=content.original_reference is not None,
         visible=config.show_original_human_skeleton,
-        callback=lambda visible: [skeleton.set_visible(visible) for skeleton in content.original_skeletons],
+        callback=set_original_skeletons,
         unavailable_reason=content.original_unavailable_reason,
     )
     layer_controller.register(
         LayerId.ROBOT_SKELETON,
         available=True,
         visible=config.show_robot_skeleton,
-        callback=lambda visible: [scene.robot_skeleton.set_visible(visible) for scene in content.actors],
+        callback=set_robot_skeletons,
     )
     layer_controller.register(
         LayerId.INTERACTION_MESH,
@@ -788,7 +813,22 @@ def _populate_pair_tabs(
 
 def make_paired_result_player(config: PairedViserConfig):
     """Build a synchronized shared-world Viser scene for a paired result."""
-    result = load_paired_visualization_result(config.qpos_npz)
+    if config.input_path is not None and config.qpos_npz is not None:
+        raise ValueError("Pass either --input-path or --qpos-npz, not both.")
+    path = config.input_path or config.qpos_npz
+    if path is None:
+        raise ValueError("Paired visualization requires --input-path (or --qpos-npz).")
+    result = load_paired_visualization_result(path)
+
+    validate_playback_options(config.port, config.fps, config.visual_fps_multiplier)
+    if config.dry_run:
+        for actor in (result.actor_a, result.actor_b):
+            urdf, xml = resolve_robot_asset_paths(robot_type=actor.robot_type)
+            validate_robot_motion(path, actor.qpos, actor.robot_actuated_joint_names, urdf, xml, contains_object=False)
+        print(
+            f"[paired_viser_player] Validated {path}: frames={len(result.actor_a.qpos)}, fps={config.fps or result.fps}"
+        )
+        return None
     original_reference, original_unavailable_reason = _optional_original_reference(result, config)
     server = viser.ViserServer(port=config.port)
     tabs = add_visualization_tabs(server.gui, include_motions=True)
@@ -838,7 +878,8 @@ def make_paired_result_player(config: PairedViserConfig):
             motion_sequence=result.actor_a.qpos,
             robot_dof=len(driver.actor.robot_actuated_joint_names),
             contains_object_in_qpos=False,
-            initial_fps=round(config.fps or result.fps),
+            initial_fps=config.fps if config.fps is not None else result.fps,
+            initial_playing=config.playing,
             initial_interp_mult=config.visual_fps_multiplier,
             loop=config.loop,
             qpos_to_viser_joint_indices=driver.joint_order_indices,
@@ -855,5 +896,7 @@ def make_paired_result_player(config: PairedViserConfig):
 def run_paired_result_player(config: PairedViserConfig) -> None:
     """Build the paired Viser scene and keep its server alive."""
     make_paired_result_player(config)
+    if config.dry_run:
+        return
     while True:
         time.sleep(1.0)
