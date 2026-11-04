@@ -69,7 +69,7 @@
     }
   },
   "natural_pose": {
-    "enable": true,
+    "enable": false,
     "joint_names": [
       "l_leg_hip_yaw_joint",
       "l_leg_hip_roll_joint",
